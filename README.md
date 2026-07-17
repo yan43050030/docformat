@@ -12,11 +12,13 @@
 
 - 跨平台：Windows 7+ 与 **麒麟 / 统信 UOS 等国产系统**（含飞腾/鲲鹏 ARM，PyQt5 走系统源安装，信创内网可部署）
 - 四种模式：智能一键处理 / 格式诊断 / 标点修复 / **AI 粘贴生成**（粘贴 AI 写的 Markdown 直接产出规范公文）
-- 自定义排版模板：可视化编辑全部参数，修改即保存，支持 JSON 导入导出
-- Qt 原生文件拖拽（支持整个文件夹拖入）
+- **排版前后对比预览**：左右分栏 + 段落类型标注，确认后才执行排版
+- 自定义排版模板：可视化编辑全部参数（含密级/标题**识别规则正则**），修改即保存，支持 JSON 导入导出
+- 密级标识（左上角定密，如"秘密★1年"）自动识别与排版
+- Qt 原生文件拖拽（支持整个文件夹拖入）；高分屏 125%/150% 缩放清晰渲染
 - Word/WPS 文件：`.docx` 直接处理；`.doc`/`.wps` 在 Windows 走 WPS/Word COM 转换，在 Linux 走 LibreOffice 转换链
 - Windows 可打包为单文件 `DocFormatPro.exe`（见 `packaging/build_windows.bat`）
-- 自动化测试：`smoke_test.py`（引擎 6 项）、`gui_test.py`（界面 9 项）、`layout_check.py`（布局）
+- 自动化测试：`smoke_test.py`（引擎 6 项）、`gui_test.py`（界面 11 项）、`layout_check.py`（布局）
 
 使用方法见 [docformat-qt/README.md](docformat-qt/README.md)。
 

@@ -200,12 +200,17 @@ class HomePage(QWidget):
         self.process_btn.setProperty("primary", "true")
         self.process_btn.setCursor(Qt.PointingHandCursor)
         self.process_btn.clicked.connect(self.start_process)
+        self.preview_btn = QPushButton("预览对比")
+        self.preview_btn.setCursor(Qt.PointingHandCursor)
+        self.preview_btn.setEnabled(False)
+        self.preview_btn.clicked.connect(self.open_preview)
         self.cancel_btn = QPushButton("取消")
         self.cancel_btn.setVisible(False)
         self.cancel_btn.clicked.connect(self.cancel_process)
         self.status_label = QLabel("")
         self.status_label.setProperty("muted", "true")
         ar.addWidget(self.process_btn)
+        ar.addWidget(self.preview_btn)
         ar.addWidget(self.cancel_btn)
         ar.addSpacing(10)
         ar.addWidget(self.status_label)
@@ -304,8 +309,19 @@ class HomePage(QWidget):
     def _update_action_state(self):
         if self.current_mode() == MODE_AI_PASTE:
             self.process_btn.setEnabled(True)
+            self.preview_btn.setEnabled(False)
         else:
             self.process_btn.setEnabled(bool(self.files))
+            self.preview_btn.setEnabled(bool(self.files))
+
+    def open_preview(self):
+        if not self.files:
+            return
+        from app.preview_dialog import PreviewDialog
+        preset = self.mgr.get(self.mgr.active_key)
+        dlg = PreviewDialog(self.files, preset, self)
+        if dlg.exec_() == PreviewDialog.Accepted:
+            self.start_process()
 
     # ---------- 处理 ----------
     def start_process(self):

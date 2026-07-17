@@ -7,6 +7,15 @@ from PyQt5.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
                              QVBoxLayout, QWidget)
 
 from app.widgets.collapsible import CollapsibleSection
+from scripts.formatter import DEFAULT_DETECT_RULES
+
+RULE_FIELDS = [
+    ('security', '密级标识', '整行匹配才识别，仅检查文档前 3 个非空段落'),
+    ('heading1', '一级标题', '默认识别「一、二、…」'),
+    ('heading2', '二级标题', '默认识别「（一）（二）…」'),
+    ('heading3', '三级标题', '默认识别「1. 2. …」（自动排除日期/版本号）'),
+    ('heading4', '四级标题', '默认识别「（1）（2）…」'),
+]
 
 ELEMENTS = [
     ('security', '密级标识（左上角定密）'), ('title', '标题'), ('recipient', '主送机关'),
@@ -119,9 +128,59 @@ class PresetsPage(QWidget):
 
         self._build_page_section()
         self._build_element_sections()
+        self._build_rules_section()
         self._build_table_section()
         self._build_advanced_section()
         self.editor_lay.addStretch(1)
+
+    def _build_rules_section(self):
+        import re as _re
+        sec = CollapsibleSection("识别规则（正则表达式，进阶）")
+        g = QGridLayout()
+        g.setHorizontalSpacing(10)
+        g.setVerticalSpacing(6)
+        self._rule_edits = {}
+
+        from PyQt5.QtWidgets import QLineEdit
+        for row, (key, label, tip) in enumerate(RULE_FIELDS):
+            lab = QLabel(label)
+            lab.setToolTip(tip)
+            edit = QLineEdit()
+            edit.setPlaceholderText(DEFAULT_DETECT_RULES[key])
+            edit.setToolTip(tip)
+
+            def _validate(text, e=edit):
+                try:
+                    if text.strip():
+                        _re.compile(text)
+                    e.setStyleSheet("")
+                    return True
+                except _re.error:
+                    e.setStyleSheet("border: 1px solid #C62828;")
+                    return False
+
+            def _on_edited(text, k=key, e=edit):
+                if _validate(text):
+                    self._save_from_widgets()
+
+            edit.textChanged.connect(_on_edited)
+            reset_btn = QPushButton("重置")
+            reset_btn.setProperty("flat", "true")
+            reset_btn.setCursor(Qt.PointingHandCursor)
+            reset_btn.clicked.connect(lambda _=False, e=edit: e.setText(''))
+            g.addWidget(lab, row, 0)
+            g.addWidget(edit, row, 1)
+            g.addWidget(reset_btn, row, 2)
+            self._rule_edits[key] = edit
+
+        hint = QLabel("留空使用默认规则。示例：法律条文可将一级标题改为 ^第[一二三四五六七八九十百]+条")
+        hint.setProperty("muted", "true")
+        hint.setWordWrap(True)
+        g.addWidget(hint, len(RULE_FIELDS), 0, 1, 3)
+        g.setColumnStretch(1, 1)
+        sec.set_body_layout(g)
+        self._sections.append(sec)
+        self.editor_lay.addWidget(sec)
 
     def _build_page_section(self):
         sec = CollapsibleSection("页面与页码", expanded=True)
@@ -338,6 +397,11 @@ class PresetsPage(QWidget):
         self.adv_bold_serial.setChecked(bool(p.get('bold_serial', True)))
         self.adv_deep_clean.setChecked(bool(p.get('deep_clean', False)))
 
+        rules = p.get('detect_rules', {}) or {}
+        for key, edit in self._rule_edits.items():
+            edit.setText(rules.get(key, ''))
+            edit.setStyleSheet("")
+
         self._loading = False
         for sec in self._sections:
             sec.set_editable(not is_builtin)
@@ -387,6 +451,16 @@ class PresetsPage(QWidget):
         p['first_line_bold'] = self.adv_first_bold.isChecked()
         p['bold_serial'] = self.adv_bold_serial.isChecked()
         p['deep_clean'] = self.adv_deep_clean.isChecked()
+
+        rules = {}
+        for key, edit in self._rule_edits.items():
+            val = edit.text().strip()
+            if val:
+                rules[key] = val
+        if rules:
+            p['detect_rules'] = rules
+        else:
+            p.pop('detect_rules', None)
 
         self.mgr.update(self.current_key, p)
         self.presetsChanged.emit()

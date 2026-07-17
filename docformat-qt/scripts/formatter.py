@@ -804,7 +804,30 @@ def _build_text_context(doc):
     return all_texts, all_texts_idx_map
 
 
-def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=None, prev_para_type=None):
+# 段落类型识别规则（可被预设的 detect_rules 覆盖，正则字符串）
+DEFAULT_DETECT_RULES = {
+    'security': r'^(绝密|机密|秘密)\s*[★\*]?\s*([一二三四五六七八九十0-9]+\s*(年|个月|月))?\s*$',
+    'heading1': r'^[一二三四五六七八九十]+、',
+    'heading2': r'^（[一二三四五六七八九十]+）|^\([一二三四五六七八九十]+\)',
+    'heading3': r'^\d+\.\s*[^\d.\s]',
+    'heading4': r'^（\d+）|^\(\d+\)',
+}
+
+
+def _compile_rules(overrides):
+    """合并用户自定义识别规则，非法正则自动回退默认值"""
+    rules = {}
+    overrides = overrides or {}
+    for key, default in DEFAULT_DETECT_RULES.items():
+        pattern = overrides.get(key) or default
+        try:
+            rules[key] = re.compile(pattern)
+        except re.error:
+            rules[key] = re.compile(default)
+    return rules
+
+
+def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=None, prev_para_type=None, rules=None):
     """
     检测段落类型
     返回: 'title', 'recipient', 'heading1', 'heading2', 'heading3', 'heading4', 
@@ -821,12 +844,12 @@ def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=N
     if not text:
         return 'empty'
 
+    _rules = rules if isinstance(rules, dict) and all(hasattr(v, 'match') for v in rules.values()) else _compile_rules(rules)
+
     # ===== 密级标识检测（GB/T 9704：版心左上角，如"秘密★1年""机密★3年"）=====
-    # 仅识别整行只有密级(+保密期限)的段落，且必须位于文档前部，避免正文误判
-    early_pos = index < 5 or (all_texts_index is not None and all_texts_index < 3)
-    if early_pos and re.match(
-            r'^(绝密|机密|秘密)\s*[★\*]?\s*([一二三四五六七八九十0-9]+\s*(年|个月|月))?\s*$',
-            text):
+    # 仅识别文档最前部（前 3 个非空段落）中整行只有密级(+保密期限)的段落
+    early_pos = (all_texts_index if all_texts_index is not None else index) < 3
+    if early_pos and _rules['security'].match(text):
         return 'security'
 
     closing_patterns = [
@@ -883,25 +906,20 @@ def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=N
             return 'attachment'
     
     # ===== 一级标题："一、" "二、" 等 =====
-    if re.match(r'^[一二三四五六七八九十]+、', text):
+    if _rules['heading1'].match(text):
         return 'heading1'
-    
+
     # ===== 二级标题："（一）" "（二）" 等 =====
-    if re.match(r'^（[一二三四五六七八九十]+）', text):
+    if _rules['heading2'].match(text):
         return 'heading2'
-    if re.match(r'^\([一二三四五六七八九十]+\)', text):
-        return 'heading2'
-    
+
     # ===== 三级标题："1." "2." 等 =====
-    # v1.7.2：约束 . 后面不能再是数字，避免误匹配 "2026.04.20" 这种点分日期
-    # 或 "1.2.3" 这种版本号
-    if re.match(r'^\d+\.\s*[^\d.\s]', text) and len(text) < 60:
+    # 约束 . 后面不能再是数字，避免误匹配 "2026.04.20" 点分日期或 "1.2.3" 版本号
+    if _rules['heading3'].match(text) and len(text) < 60:
         return 'heading3'
-    
+
     # ===== 四级标题："（1）" "（2）" 等 =====
-    if re.match(r'^（\d+）', text) and len(text) < 60:
-        return 'heading4'
-    if re.match(r'^\(\d+\)', text) and len(text) < 60:
+    if _rules['heading4'].match(text) and len(text) < 60:
         return 'heading4'
     
     # ===== 主送机关：XXX： 或 XXX: =====
@@ -1071,7 +1089,7 @@ def _find_paragraph_index(doc, target_para):
     return None
 
 
-def _ensure_structural_blank_lines(doc, line_spacing_pt=28):
+def _ensure_structural_blank_lines(doc, line_spacing_pt=28, rules=None):
     """
     Ensure the standard visible blank lines:
     - after the title block before recipient/body
@@ -1091,7 +1109,8 @@ def _ensure_structural_blank_lines(doc, line_spacing_pt=28):
             para.paragraph_format.alignment,
             all_texts,
             all_texts_index=all_texts_idx_map.get(i),
-            prev_para_type=prev_para_type
+            prev_para_type=prev_para_type,
+            rules=rules
         )
         entries.append((para, para_type, prev_para_type))
         prev_para_type = para_type
@@ -1776,7 +1795,8 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
     # 标准公文版式保留两处可见空行：标题后、落款前。
     # v1.7.2: 清理 styles.xml 里的 Autospacing 属性，避免内置样式覆盖直接属性
     _strip_autospacing_from_styles(doc)
-    structural_blank_ids = _ensure_structural_blank_lines(doc, body_line_spacing)
+    _active_rules = _compile_rules(preset.get('detect_rules'))
+    structural_blank_ids = _ensure_structural_blank_lines(doc, body_line_spacing, rules=_active_rules)
     total_paras = len(doc.paragraphs)
     all_texts, all_texts_idx_map = _build_text_context(doc)
     
@@ -1805,7 +1825,8 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
             para.paragraph_format.alignment,
             all_texts,
             all_texts_index=all_texts_idx_map.get(i),
-            prev_para_type=prev_para_type
+            prev_para_type=prev_para_type,
+            rules=_active_rules
         )
         
         if para_type == 'date':
@@ -1839,7 +1860,7 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
 
     # 格式化后再复查一次。部分文档的标题依赖原始对齐或字体较难在第一次
     # 识别时命中，完成标题格式化后再补齐结构空行更稳。
-    structural_blank_ids.update(_ensure_structural_blank_lines(doc, body_line_spacing))
+    structural_blank_ids.update(_ensure_structural_blank_lines(doc, body_line_spacing, rules=_active_rules))
     _format_empty_paragraphs(doc, structural_blank_ids, body_line_spacing)
     
     # 4. 处理表格

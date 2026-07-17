@@ -5,6 +5,8 @@ cd /d "%~dp0\.."
 python -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --name DocFormatPro ^
     --collect-data docx ^
+    --icon assets/icon.ico ^
+    --add-data "assets;assets" ^
     --hidden-import scripts.formatter ^
     --hidden-import scripts.punctuation ^
     --hidden-import scripts.analyzer ^

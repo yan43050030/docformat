@@ -147,4 +147,30 @@ assert 'DocFormat Pro 已启动' in win.log_page.view.toPlainText()
 assert '已完成' in win.log_page.view.toPlainText(), '处理日志缺失'
 print('[9] 日志页记录处理过程 ✓')
 
+# ---------- 8. 排版预览对比 ----------
+from app.preview_dialog import PreviewDialog, render_after_html, _read_paragraphs
+preset_official = win.mgr.get('official')
+paras, _doc = _read_paragraphs(SAMPLE)
+after_html = render_after_html(paras, preset_official)
+assert '密级' in after_html and '方正小标宋简体' in after_html, '预览 HTML 缺少类型标注/字体样式'
+assert '一级标题' in after_html, '预览未标注一级标题'
+dlg = PreviewDialog([SAMPLE], preset_official)
+app.processEvents()
+assert '关于开展' in dlg.view_before.toPlainText(), '预览左侧原文为空'
+assert '密级' in dlg.view_after.toPlainText(), '预览右侧无类型标注'
+dlg.reject()
+print('[10] 排版前后对比预览 ✓')
+
+# ---------- 9. 自定义识别规则持久化 ----------
+key2 = win.mgr.create('规则测试模板')
+pp.reload()
+pp._rule_edits['heading1'].setText(r'^第[一二三四五六七八九十百]+条')
+app.processEvents()
+mgr3 = PresetManager()
+assert mgr3.user[key2].get('detect_rules', {}).get('heading1') == r'^第[一二三四五六七八九十百]+条', '识别规则未持久化'
+from scripts.formatter import detect_para_type as _dpt
+assert _dpt('第三条 内容', 3, 10, None, [], 3, rules=mgr3.user[key2]['detect_rules']) == 'heading1'
+win.mgr.delete(key2)
+print('[11] 自定义识别规则编辑/持久化/生效 ✓')
+
 print('\nGUI 自动化测试全部通过 ✓')
