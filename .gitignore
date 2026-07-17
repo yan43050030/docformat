@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# 测试与验证产物
+_smoke/
+_shots/
+
+# Node / 前端
+node_modules/
+docformat-pro/dist/
+
+# Rust / Tauri
+docformat-pro/src-tauri/target/
+
+# 本地工具与配置
+.claude/
+.omc/
+*.log
+
+# 系统
+.DS_Store
+Thumbs.db

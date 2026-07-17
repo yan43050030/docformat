@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DocFormat Pro
+Name[zh_CN]=DocFormat Pro 公文排版
+Comment=公文格式自动排版工具 (GB/T 9704-2012)
+Exec=python3 @APP_DIR@/main.py
+Path=@APP_DIR@
+Terminal=false
+Categories=Office;WordProcessor;
+StartupNotify=true
