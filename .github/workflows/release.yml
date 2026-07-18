@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '发布版本号（如 v1.1.0），将作为 Release 标签'
+        required: true
+        default: 'v1.1.0'
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: docformat-qt
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Run engine smoke tests
+        working-directory: docformat-qt
+        run: python smoke_test.py
+
+      - name: Build DocFormatPro.exe
+        working-directory: docformat-qt
+        run: >
+          python -m PyInstaller --noconfirm --clean --onefile --windowed
+          --name DocFormatPro
+          --collect-data docx
+          --icon assets/icon.ico
+          --add-data "assets;assets"
+          --hidden-import scripts.formatter
+          --hidden-import scripts.punctuation
+          --hidden-import scripts.analyzer
+          --hidden-import scripts.converter
+          --hidden-import win32com.client
+          --hidden-import pythoncom
+          main.py
+
+      - name: Rename artifact with version
+        shell: pwsh
+        run: |
+          $ver = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}' }
+          Copy-Item docformat-qt/dist/DocFormatPro.exe "DocFormatPro-$ver-windows.exe"
+          echo "RELEASE_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DocFormatPro-windows
+          path: DocFormatPro-*-windows.exe
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_VERSION }}
+          name: DocFormat Pro ${{ env.RELEASE_VERSION }}
+          files: DocFormatPro-*-windows.exe
+          body: |
+            Windows 独立版（免 Python 环境，双击运行）。
+
+            主要更新见提交历史。麒麟/统信 UOS 用户请按 README 使用系统源部署：
+            `bash packaging/install_kylin.sh`
