@@ -37,11 +37,32 @@ def output_path_for(input_path, suffix):
     return base
 
 
+TEXT_EXTS = ('.txt', '.md', '.markdown')
+
+
+def read_text_file(path):
+    """读取文本文件，自动尝试常见中文编码"""
+    with open(path, 'rb') as f:
+        data = f.read()
+    for enc in ('utf-8-sig', 'utf-8', 'gb18030'):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode('utf-8', errors='replace')
+
+
 def ensure_docx(path, log, session=None):
     """非 docx 输入先转换为临时 docx，返回 (工作路径, 待清理的临时目录或 None)"""
     ext = os.path.splitext(path)[1].lower()
     if ext == '.docx':
         return path, None
+    if ext in TEXT_EXTS:
+        log('info', '检测到文本/Markdown 文件，正在生成 docx...')
+        tmp_dir = tempfile.mkdtemp(prefix='docformat_')
+        tmp = os.path.join(tmp_dir, os.path.splitext(os.path.basename(path))[0] + '.docx')
+        generate_docx_from_text(read_text_file(path), tmp)
+        return tmp, tmp_dir
     log('info', '检测到 {} 格式，正在转换为 docx...'.format(ext))
     if sys.platform == 'win32':
         tmp_dir = tempfile.mkdtemp(prefix='docformat_')

@@ -208,13 +208,13 @@ def _process_spaces_text(text, mode):
     if mode == 'keep_all' or not text:
         return text
     if mode == 'remove_all':
-        # 删除所有半角空格和全角空格
-        return text.replace('　', '').replace(' ', '')
+        # 删除所有半角空格、全角空格和制表符
+        return text.replace('　', '').replace('\t', '').replace(' ', '')
     if mode == 'keep_en_words':
         # 默认策略：删除中文相关的多余空格，但保留英文/数字单词之间的空格
-        # （New York、GB/T 9704 类内容不能被压掉）；全角空格一律删除，
-        # 首行缩进应由段落格式控制而不是全角空格。
-        text = text.replace('　', '')
+        # （New York、GB/T 9704 类内容不能被压掉）；全角空格与制表符一律
+        # 处理掉——首行缩进应由段落格式控制，而不是靠空格/Tab 顶出来。
+        text = text.replace('　', '').replace('\t', ' ')
         text = re.sub(r'(?<=[A-Za-z0-9]) +(?=[A-Za-z0-9])', '\x05', text)
         text = text.replace(' ', '')
         return text.replace('\x05', ' ')

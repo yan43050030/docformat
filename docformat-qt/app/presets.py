@@ -40,7 +40,8 @@ class PresetManager(object):
     """key 规则：内置用引擎键（official/academic/legal），用户模板用 user_<ts>"""
 
     def __init__(self):
-        self.user = {}       # key -> preset dict
+        self.user = {}            # key -> preset dict
+        self.builtin_names = {}   # 内置预设的自定义显示名（参数仍只读）
         self.active_key = 'official_gbk'   # 默认使用图解标准版
         self.load()
 
@@ -52,6 +53,7 @@ class PresetManager(object):
                 with open(str(p), 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 self.user = data.get('user', {}) or {}
+                self.builtin_names = data.get('builtin_names', {}) or {}
                 last = data.get('last_used') or {}
                 key = last.get('key')
                 if key and (key in self.user or key in BUILTIN_PRESETS):
@@ -62,6 +64,7 @@ class PresetManager(object):
     def save(self):
         data = {
             'user': self.user,
+            'builtin_names': self.builtin_names,
             'last_used': {'key': self.active_key},
         }
         p = templates_path()
@@ -76,7 +79,8 @@ class PresetManager(object):
         items = []
         for k in BUILTIN_ORDER:
             if k in BUILTIN_PRESETS:
-                items.append((k, BUILTIN_PRESETS[k].get('name', k), True))
+                name = self.builtin_names.get(k) or BUILTIN_PRESETS[k].get('name', k)
+                items.append((k, name, True))
         for k in sorted(self.user.keys()):
             items.append((k, self.user[k].get('name', k), False))
         return items
@@ -86,7 +90,10 @@ class PresetManager(object):
 
     def get(self, key):
         if key in BUILTIN_PRESETS:
-            return copy.deepcopy(BUILTIN_PRESETS[key])
+            preset = copy.deepcopy(BUILTIN_PRESETS[key])
+            if self.builtin_names.get(key):
+                preset['name'] = self.builtin_names[key]
+            return preset
         preset = copy.deepcopy(self.user.get(key, BUILTIN_PRESETS['official']))
         # 旧版本用户模板缺少后加入的元素节点时，用公文默认值补齐
         for el_key in ('security', 'docnum'):
@@ -136,6 +143,14 @@ class PresetManager(object):
     def rename(self, key, name):
         if key in self.user:
             self.user[key]['name'] = name
+            self.save()
+        elif key in BUILTIN_PRESETS:
+            # 内置预设：名称可自定义（存到用户配置），参数保持只读；
+            # 改回原名或清空即恢复默认名称
+            if not name or name == BUILTIN_PRESETS[key].get('name'):
+                self.builtin_names.pop(key, None)
+            else:
+                self.builtin_names[key] = name
             self.save()
 
     # ---------- 导入导出 ----------

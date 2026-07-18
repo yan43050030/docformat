@@ -33,8 +33,18 @@ ALIGN_CSS = {'left': 'left', 'center': 'center', 'right': 'right', 'justify': 'j
 
 
 def _read_paragraphs(path):
-    """返回 (段落列表[(text, alignment)], 表格数, 总段数)，非 docx 返回 None"""
-    if not path.lower().endswith('.docx'):
+    """返回 (段落列表[(text, alignment)], 表格数, 总段数)。
+
+    支持 .docx 与 .txt/.md（按 AI 粘贴规则清洗后预览）；
+    .doc/.wps 返回 None，由对话框先做格式转换再调用。
+    """
+    lower = path.lower()
+    if lower.endswith(('.txt', '.md', '.markdown')):
+        from app.worker import clean_markdown, read_text_file
+        lines = clean_markdown(read_text_file(path))
+        paras = [(t, None) for t in lines[:MAX_PARAS]]
+        return paras, 0, len(lines)
+    if not lower.endswith('.docx'):
         return None
     from docx import Document
     doc = Document(path)
@@ -157,6 +167,8 @@ class PreviewDialog(QDialog):
         # path -> {非空段序号: 类型}
         self._overrides = {}
         self._current_paras = None
+        self._converted = {}    # .doc/.wps 预览转换缓存: 原路径 -> 临时 docx
+        self._tmp_dirs = []     # 对话框关闭时清理
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 12, 14, 12)
@@ -279,6 +291,39 @@ class PreviewDialog(QDialog):
         bar.setValue(pos)
         self.reset_btn.setEnabled(bool(ovr))
 
+    def _convert_for_preview(self, path):
+        """.doc/.wps → 临时 docx（结果缓存，对话框关闭时清理）"""
+        import os as _os
+        import sys as _sys
+        if path in self._converted:
+            return self._converted[path]
+        from PyQt5.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            if _sys.platform == 'win32':
+                from scripts import converter
+                import tempfile as _tempfile
+                tmp_dir = _tempfile.mkdtemp(prefix='docformat_pv_')
+                tmp = _os.path.join(
+                    tmp_dir, _os.path.splitext(_os.path.basename(path))[0] + '.docx')
+                converter.convert_to_docx(path, tmp)
+            else:
+                from app import converter_linux
+                tmp = converter_linux.convert_to_docx(path)
+                tmp_dir = _os.path.dirname(tmp)
+            self._tmp_dirs.append(tmp_dir)
+            self._converted[path] = tmp
+            return tmp
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def done(self, r):
+        import shutil as _shutil
+        for d in self._tmp_dirs:
+            _shutil.rmtree(d, ignore_errors=True)
+        self._tmp_dirs = []
+        super(PreviewDialog, self).done(r)
+
     def _load_current(self):
         path = self._current_path()
         if not path:
@@ -286,16 +331,14 @@ class PreviewDialog(QDialog):
         self._current_paras = None
         try:
             result = _read_paragraphs(path)
+            if result is None:
+                # .doc/.wps：先转换为临时 docx 再预览
+                result = _read_paragraphs(self._convert_for_preview(path))
         except Exception as e:
-            msg = _html_shell('<p>读取失败: {}</p>'.format(_esc(str(e))))
-            self.view_before.setHtml(msg)
-            self.view_after.setHtml(msg)
-            self.notice.setVisible(False)
-            return
-        if result is None:
             msg = _html_shell(
-                '<p>该文件为 .doc/.wps 格式，预览暂仅支持 .docx。</p>'
-                '<p>点击「开始排版」时会自动转换并处理，不影响最终效果。</p>')
+                '<p>预览失败: {}</p>'
+                '<p>不影响实际处理，点击「开始排版」仍会正常转换并排版该文件。</p>'.format(
+                    _esc(str(e))))
             self.view_before.setHtml(msg)
             self.view_after.setHtml(msg)
             self.notice.setVisible(False)

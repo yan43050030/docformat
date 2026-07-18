@@ -40,6 +40,7 @@ class HomePage(QWidget):
         self.worker = None
         self._outputs = []          # 本轮成功输出的文件
         self._type_overrides = {}   # 预览中手动指定的段落类型 {路径: {序号: 类型}}
+        self.font_check_enabled = True   # 处理前检查排版字体是否安装（测试时可关闭）
         self._build()
         self.reload_presets()
 
@@ -284,7 +285,7 @@ class HomePage(QWidget):
 
     # ---------- 文件 ----------
     def pick_files(self):
-        flt = "文档 (*.docx *.doc *.wps);;所有文件 (*.*)"
+        flt = "文档 (*.docx *.doc *.wps *.txt *.md);;所有文件 (*.*)"
         paths, _ = QFileDialog.getOpenFileNames(self, "选择文件", "", flt)
         if paths:
             self.add_files(paths)
@@ -341,12 +342,48 @@ class HomePage(QWidget):
             finally:
                 self._type_overrides = {}
 
+    # ---------- 字体检查 ----------
+    def _missing_fonts(self):
+        """用 Qt 字体库检查当前预设需要的中文字体是否已安装（三平台通用）"""
+        from PyQt5.QtGui import QFontDatabase
+        preset = self.mgr.get(self.mgr.active_key)
+        needed = set()
+        for key, fmt in preset.items():
+            if isinstance(fmt, dict) and fmt.get('font_cn'):
+                needed.add(fmt['font_cn'])
+        if preset.get('page_number_font'):
+            needed.add(preset['page_number_font'])
+        try:
+            installed = set(QFontDatabase().families())
+        except Exception:
+            return []
+        return sorted(f for f in needed if f not in installed)
+
+    def _confirm_fonts(self):
+        """缺字体时提示用户；返回 False 表示用户选择取消处理"""
+        if not self.font_check_enabled:
+            return True
+        missing = self._missing_fonts()
+        if not missing:
+            return True
+        self.logMessage.emit('warning', '本机未安装排版所需字体：' + '、'.join(missing))
+        ret = QMessageBox.question(
+            self, "缺少排版字体",
+            "本机未安装当前预设需要的以下字体：\n\n    {}\n\n"
+            "仍可继续处理（字体名会正确写入文档），但在本机用 Word/WPS 打开时"
+            "会显示为替代字体；在装有这些字体的电脑上打开则显示正常。\n\n"
+            "是否继续处理？".format('\n    '.join(missing)),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        return ret == QMessageBox.Yes
+
     # ---------- 处理 ----------
     def start_process(self):
         if self.worker is not None and self.worker.isRunning():
             return
         mode = self.current_mode()
         preset_name, custom = self.mgr.engine_args(self.mgr.active_key)
+        if mode in (MODE_FULL, MODE_AI_PASTE) and not self._confirm_fonts():
+            return
 
         if mode == MODE_AI_PASTE:
             text = self.paste_edit.toPlainText().strip()
