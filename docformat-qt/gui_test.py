@@ -213,11 +213,29 @@ assert isinstance(missing, list) and '方正仿宋_GBK' in missing, \
 home.font_check_enabled = False
 print('[11c] 排版字体缺失检测 ✓')
 
+# ---------- 9d. 自定义规则预填 ----------
+key3 = win.mgr.create('预填测试模板')
+pp.reload()
+cb = pp._rule_combos['heading2']
+cb.setCurrentIndex(cb.findData('__custom__'))
+app.processEvents()
+from scripts.formatter import DEFAULT_DETECT_RULES as _DDR
+assert pp._rule_edits['heading2'].text() == _DDR['heading2'], \
+    '选自定义应预填当前规则: {}'.format(pp._rule_edits['heading2'].text())
+win.mgr.delete(key3)
+print('[11d] 自定义规则预填默认值 ✓')
+
 # ---------- 10. 文件列表状态标记 ----------
 home.file_list.set_files([SAMPLE])
 home.file_list.set_status(SAMPLE, 'ok', 'out.docx')
 lbl = home.file_list._status_labels[os.path.normpath(SAMPLE)]
 assert '完成' in lbl.text(), '文件状态标记未生效'
-print('[12] 逐文件状态标记 ✓')
+assert lbl.property('statusLevel') == 'ok', '状态样式属性未设置'
+print('[12] 逐文件状态标记 + 主题着色属性 ✓')
+
+# ---------- 11. 版本号显示 ----------
+from app.main_window import VERSION
+assert 'v' + VERSION in win.windowTitle(), '窗口标题未含版本号: {}'.format(win.windowTitle())
+print('[13] 窗口标题显示版本号 v{} ✓'.format(VERSION))
 
 print('\nGUI 自动化测试全部通过 ✓')

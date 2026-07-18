@@ -161,6 +161,16 @@ QLabel[badgeAccent="true"] {{
     padding: 3px 10px; font-size: 11px;
 }}
 
+/* ---- 文件列表状态与移除按钮 ---- */
+QLabel[statusLevel="processing"] {{ color: {warning}; font-weight: 600; background: transparent; }}
+QLabel[statusLevel="ok"] {{ color: {success}; font-weight: 600; background: transparent; }}
+QLabel[statusLevel="fail"] {{ color: {error}; font-weight: 600; background: transparent; }}
+QPushButton[removeBtn="true"] {{
+    border: none; background: transparent; color: {ink_muted};
+    font-size: 14px; padding: 2px 6px; border-radius: 6px;
+}}
+QPushButton[removeBtn="true"]:hover {{ color: {error}; background: {bg_dark}; }}
+
 /* ---- 状态栏 ---- */
 QFrame#StatusBar {{ background: {sidebar}; border-top: 1px solid {border}; }}
 

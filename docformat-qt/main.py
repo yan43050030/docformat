@@ -32,6 +32,9 @@ def main():
             Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QCoreApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    # 去掉对话框标题栏无用的 "?" 帮助按钮（Qt 5.10+；旧版 Qt 无此属性则跳过）
+    if hasattr(Qt, 'AA_DisableWindowContextHelpButton'):
+        QCoreApplication.setAttribute(Qt.AA_DisableWindowContextHelpButton, True)
 
     app = QApplication(sys.argv)
     app.setApplicationName("DocFormat Pro")

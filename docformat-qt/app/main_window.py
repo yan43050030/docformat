@@ -12,14 +12,14 @@ from app.pages.presets_page import PresetsPage
 from app.pages.theme_page import ThemePage
 from app.pages.log_page import LogPage
 
-VERSION = '1.1.0'
+VERSION = '1.2.0'
 NAV_ITEMS = [('处理', 0), ('预设方案', 1), ('主题', 2), ('日志', 3)]
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super(MainWindow, self).__init__()
-        self.setWindowTitle("DocFormat Pro — 公文格式自动排版工具")
+        self.setWindowTitle("DocFormat Pro v{} — 公文格式自动排版工具".format(VERSION))
         self.resize(1120, 780)
         self.setMinimumSize(900, 620)
 
