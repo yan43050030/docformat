@@ -68,7 +68,70 @@ jobs:
           name: DocFormat Pro ${{ env.RELEASE_VERSION }}
           files: DocFormatPro-*-windows.exe
           body: |
-            Windows 独立版（免 Python 环境，双击运行）。
+            | 平台 | 文件 |
+            |---|---|
+            | Windows | `DocFormatPro-*-windows.exe`（免 Python 环境，双击运行） |
+            | 麒麟/UOS x86_64 | `DocFormatPro-*-linux-x86_64.tar.gz` |
+            | 麒麟/UOS 飞腾/鲲鹏 ARM | `DocFormatPro-*-linux-arm64.tar.gz` |
 
-            主要更新见提交历史。麒麟/统信 UOS 用户请按 README 使用系统源部署：
-            `bash packaging/install_kylin.sh`
+            Linux 包使用：`tar xzf 包名 && ./DocFormatPro`（在 Debian 10 / glibc 2.28
+            环境构建，兼容麒麟 V10、统信 UOS 20 及更新系统）。若二进制在你的系统上
+            无法运行，仍可用系统源部署：`bash packaging/install_kylin.sh`。
+
+  build-linux:
+    # 在 Debian 10 (glibc 2.28) 容器内构建，保证麒麟 V10 / UOS 20 可运行；
+    # ARM 版用 GitHub 的 arm64 构建机（飞腾/鲲鹏可用）
+    needs: build-windows
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build in Debian 10 container (glibc 2.28)
+        run: |
+          docker run --rm -v "$PWD":/work -w /work/docformat-qt debian:10 bash -euc '
+            echo "deb http://archive.debian.org/debian buster main" > /etc/apt/sources.list
+            apt-get -o Acquire::Check-Valid-Until=false update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              python3-pip python3-setuptools python3-wheel python3-pyqt5 binutils
+            pip3 install --no-cache-dir python-docx "pyinstaller==5.13.2"
+            python3 smoke_test.py
+            python3 -m PyInstaller --noconfirm --clean --onefile --windowed \
+              --name DocFormatPro \
+              --collect-data docx \
+              --add-data "assets:assets" \
+              --hidden-import scripts.formatter \
+              --hidden-import scripts.punctuation \
+              --hidden-import scripts.analyzer \
+              main.py
+          '
+
+      - name: Package tar.gz
+        run: |
+          ver='${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}'
+          mkdir -p pkg/DocFormatPro
+          sudo cp docformat-qt/dist/DocFormatPro pkg/DocFormatPro/
+          cp docformat-qt/packaging/docformat.desktop pkg/DocFormatPro/ || true
+          cp docformat-qt/assets/icon.png pkg/DocFormatPro/ || true
+          sudo chmod +x pkg/DocFormatPro/DocFormatPro
+          tar -czf "DocFormatPro-$ver-linux-${{ matrix.arch }}.tar.gz" -C pkg DocFormatPro
+          echo "RELEASE_VERSION=$ver" >> "$GITHUB_ENV"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DocFormatPro-linux-${{ matrix.arch }}
+          path: DocFormatPro-*-linux-*.tar.gz
+
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_VERSION }}
+          files: DocFormatPro-*-linux-*.tar.gz
