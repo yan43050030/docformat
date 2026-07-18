@@ -2,11 +2,13 @@
 """首页：文件选择/拖拽 + 处理模式 + 预设 + 开始处理"""
 import os
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QFrame,
-                             QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-                             QPlainTextEdit, QProgressBar, QPushButton,
-                             QRadioButton, QScrollArea, QVBoxLayout, QWidget)
+from PyQt5.QtCore import Qt, QUrl, pyqtSignal
+from PyQt5.QtGui import QDesktopServices
+from PyQt5.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog,
+                             QFrame, QHBoxLayout, QLabel, QLineEdit,
+                             QMessageBox, QPlainTextEdit, QProgressBar,
+                             QPushButton, QRadioButton, QScrollArea,
+                             QVBoxLayout, QWidget)
 
 from app.widgets.drop_zone import DropZone, ALLOWED_EXTS
 from app.widgets.file_list import FileList
@@ -36,6 +38,8 @@ class HomePage(QWidget):
         self.mgr = preset_mgr
         self.files = []
         self.worker = None
+        self._outputs = []          # 本轮成功输出的文件
+        self._type_overrides = {}   # 预览中手动指定的段落类型 {路径: {序号: 类型}}
         self._build()
         self.reload_presets()
 
@@ -167,6 +171,9 @@ class HomePage(QWidget):
         suffix_row.addStretch(1)
         right_col.addLayout(suffix_row)
 
+        self.revision_check = QCheckBox("以修订模式输出（改动在 Word 审阅中可见、可接受/拒绝）")
+        right_col.addWidget(self.revision_check)
+
         # 徽章分两行竖排，避免横向溢出遮挡
         self.badge_page = QLabel()
         self.badge_page.setProperty("badge", "true")
@@ -207,11 +214,16 @@ class HomePage(QWidget):
         self.cancel_btn = QPushButton("取消")
         self.cancel_btn.setVisible(False)
         self.cancel_btn.clicked.connect(self.cancel_process)
+        self.open_out_btn = QPushButton("打开输出位置")
+        self.open_out_btn.setVisible(False)
+        self.open_out_btn.setCursor(Qt.PointingHandCursor)
+        self.open_out_btn.clicked.connect(self.open_output_location)
         self.status_label = QLabel("")
         self.status_label.setProperty("muted", "true")
         ar.addWidget(self.process_btn)
         ar.addWidget(self.preview_btn)
         ar.addWidget(self.cancel_btn)
+        ar.addWidget(self.open_out_btn)
         ar.addSpacing(10)
         ar.addWidget(self.status_label)
         ar.addStretch(1)
@@ -307,12 +319,14 @@ class HomePage(QWidget):
         self._update_action_state()
 
     def _update_action_state(self):
-        if self.current_mode() == MODE_AI_PASTE:
+        mode = self.current_mode()
+        if mode == MODE_AI_PASTE:
             self.process_btn.setEnabled(True)
             self.preview_btn.setEnabled(False)
         else:
             self.process_btn.setEnabled(bool(self.files))
-            self.preview_btn.setEnabled(bool(self.files))
+            # 预览展示的是排版模拟效果，只对"智能一键处理"模式有意义
+            self.preview_btn.setEnabled(bool(self.files) and mode == MODE_FULL)
 
     def open_preview(self):
         if not self.files:
@@ -321,7 +335,11 @@ class HomePage(QWidget):
         preset = self.mgr.get(self.mgr.active_key)
         dlg = PreviewDialog(self.files, preset, self)
         if dlg.exec_() == PreviewDialog.Accepted:
-            self.start_process()
+            self._type_overrides = dlg.get_overrides()
+            try:
+                self.start_process()
+            finally:
+                self._type_overrides = {}
 
     # ---------- 处理 ----------
     def start_process(self):
@@ -348,13 +366,40 @@ class HomePage(QWidget):
         if not self.files:
             return
         suffix = self.suffix_edit.text().strip() or '_processed'
-        self.worker = ProcessWorker(self.files, mode, preset_name, custom, suffix, self)
+        self._outputs = []
+        self.open_out_btn.setVisible(False)
+        self.file_list.reset_statuses()
+        self.worker = ProcessWorker(
+            self.files, mode, preset_name, custom, suffix,
+            revision_mode=self.revision_check.isChecked(),
+            type_overrides=self._type_overrides,
+            parent=self)
         self.worker.logMessage.connect(self.logMessage)
         self.worker.progressChanged.connect(self.progress.setValue)
         self.worker.diagnoseReady.connect(self._show_diagnose)
+        self.worker.fileStarted.connect(self._on_file_started)
+        self.worker.fileFinished.connect(self._on_file_finished)
+        self.worker.fileFailed.connect(self._on_file_failed)
         self.worker.allFinished.connect(self._on_all_done)
         self._set_busy(True)
         self.worker.start()
+
+    def _on_file_started(self, path):
+        self.file_list.set_status(path, 'processing')
+
+    def _on_file_finished(self, path, output):
+        self.file_list.set_status(path, 'ok', output or '')
+        if output:
+            self._outputs.append(output)
+
+    def _on_file_failed(self, path, error):
+        self.file_list.set_status(path, 'fail', error)
+
+    def open_output_location(self):
+        if not self._outputs:
+            return
+        target = os.path.dirname(self._outputs[-1]) or '.'
+        QDesktopServices.openUrl(QUrl.fromLocalFile(target))
 
     def cancel_process(self):
         if self.worker is not None and isinstance(self.worker, ProcessWorker):
@@ -377,6 +422,7 @@ class HomePage(QWidget):
     def _on_all_done(self, ok, fail):
         self._set_busy(False)
         self.status_label.setText("完成：成功 {} 个，失败 {} 个".format(ok, fail))
+        self.open_out_btn.setVisible(bool(self._outputs))
         self.logMessage.emit('info', '全部处理完成：成功 {}，失败 {}'.format(ok, fail))
         self.worker = None
         self._update_action_state()
@@ -386,16 +432,22 @@ class HomePage(QWidget):
         self.worker = None
         if success:
             self.status_label.setText("已生成: {}".format(os.path.basename(payload)))
+            self._outputs = [payload]
+            self.open_out_btn.setVisible(True)
             QMessageBox.information(self, "生成成功", "公文已生成：\n{}".format(payload))
         else:
             QMessageBox.warning(self, "生成失败", payload)
         self._update_action_state()
 
     def _show_diagnose(self, report):
-        box = QMessageBox(self)
-        box.setWindowTitle("格式诊断报告")
-        box.setIcon(QMessageBox.Information)
-        box.setText("诊断完成，详情如下（日志页可回看）：")
-        box.setDetailedText(report)
-        box.exec_()
         self.logMessage.emit('info', '诊断报告：\n' + report)
+        from app.report_dialog import ReportDialog
+        dlg = ReportDialog(report, self)
+        if dlg.exec_() == ReportDialog.Accepted:
+            # 一键转入智能修复：切换模式并立即处理同一批文件
+            for b in self.mode_group.buttons():
+                if b.property('modeId') == MODE_FULL:
+                    b.setChecked(True)
+                    self._on_mode_changed(b)
+                    break
+            self.start_process()

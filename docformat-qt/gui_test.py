@@ -148,18 +148,29 @@ assert '已完成' in win.log_page.view.toPlainText(), '处理日志缺失'
 print('[9] 日志页记录处理过程 ✓')
 
 # ---------- 8. 排版预览对比 ----------
-from app.preview_dialog import PreviewDialog, render_after_html, _read_paragraphs
+from app.preview_dialog import (PreviewDialog, render_after_html,
+                                _read_paragraphs, compute_types)
 preset_official = win.mgr.get('official')
-paras, _doc = _read_paragraphs(SAMPLE)
+paras, _tables, _total = _read_paragraphs(SAMPLE)
 after_html = render_after_html(paras, preset_official)
 assert '密级' in after_html and '方正小标宋简体' in after_html, '预览 HTML 缺少类型标注/字体样式'
 assert '一级标题' in after_html, '预览未标注一级标题'
+assert '发文字号' in after_html, '预览未标注发文字号'
 dlg = PreviewDialog([SAMPLE], preset_official)
 app.processEvents()
 assert '关于开展' in dlg.view_before.toPlainText(), '预览左侧原文为空'
 assert '密级' in dlg.view_after.toPlainText(), '预览右侧无类型标注'
+assert '表格' in dlg.notice.text(), '预览应提示文档含表格'
 dlg.reject()
-print('[10] 排版前后对比预览 ✓')
+
+# 手动类型调整：把"一、总体要求"(非空段序号5)覆盖为正文，重算类型应生效
+types_auto = dict((ai, t) for ai, t in compute_types(paras, preset_official) if ai is not None)
+assert types_auto[5] == 'heading1'
+types_ovr = dict((ai, t) for ai, t in compute_types(paras, preset_official, {5: 'body'}) if ai is not None)
+assert types_ovr[5] == 'body', '预览手动类型覆盖未生效'
+html_ovr = render_after_html(paras, preset_official, {5: 'body'})
+assert 'tagx' in html_ovr, '手动调整段落应有高亮标签'
+print('[10] 排版前后对比预览 + 手动类型调整 ✓')
 
 # ---------- 9. 自定义识别规则持久化 ----------
 key2 = win.mgr.create('规则测试模板')
@@ -170,7 +181,24 @@ mgr3 = PresetManager()
 assert mgr3.user[key2].get('detect_rules', {}).get('heading1') == r'^第[一二三四五六七八九十百]+条', '识别规则未持久化'
 from scripts.formatter import detect_para_type as _dpt
 assert _dpt('第三条 内容', 3, 10, None, [], 3, rules=mgr3.user[key2]['detect_rules']) == 'heading1'
+# 方案下拉：选择"法律条文"应把 heading1 规则写入模板
+pp._rule_combos['heading1'].setCurrentIndex(1)   # 法律条文：第一条
+app.processEvents()
+mgr4 = PresetManager()
+assert mgr4.user[key2].get('detect_rules', {}).get('heading1', '').startswith('^第'), \
+    '规则方案下拉未持久化: {}'.format(mgr4.user[key2].get('detect_rules'))
+# 规则实时测试器
+pp.rule_test_edit.setText('第十三条 本条例自公布之日起施行')
+app.processEvents()
+assert '一级标题' in pp.rule_test_result.text(), '规则测试器未识别: {}'.format(pp.rule_test_result.text())
 win.mgr.delete(key2)
-print('[11] 自定义识别规则编辑/持久化/生效 ✓')
+print('[11] 自定义识别规则编辑/持久化/生效 + 方案下拉 + 实时测试 ✓')
+
+# ---------- 10. 文件列表状态标记 ----------
+home.file_list.set_files([SAMPLE])
+home.file_list.set_status(SAMPLE, 'ok', 'out.docx')
+lbl = home.file_list._status_labels[os.path.normpath(SAMPLE)]
+assert '完成' in lbl.text(), '文件状态标记未生效'
+print('[12] 逐文件状态标记 ✓')
 
 print('\nGUI 自动化测试全部通过 ✓')

@@ -1,44 +1,62 @@
 # -*- coding: utf-8 -*-
-"""排版前后对比预览：左侧原文，右侧按当前预设模拟排版效果，确认后才真正处理"""
+"""排版前后对比预览：左侧原文，右侧按当前预设模拟排版效果，确认后才真正处理。
+
+右侧每段前的类型标签可以点击，手动指定该段的段落类型（如把误识别的
+正文改成一级标题）；手动调整会在实际排版时生效。
+"""
 import os
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (QComboBox, QDialog, QHBoxLayout, QLabel,
+from PyQt5.QtCore import Qt, QUrl
+from PyQt5.QtGui import QCursor
+from PyQt5.QtWidgets import (QComboBox, QDialog, QHBoxLayout, QLabel, QMenu,
                              QPushButton, QSplitter, QTextBrowser, QVBoxLayout,
                              QWidget)
 
 from scripts.formatter import (_build_text_context, _compile_rules,
                                detect_para_type)
+from scripts.punctuation import fix_text
 
 TYPE_LABELS = {
-    'security': '密级', 'title': '标题', 'recipient': '主送机关',
+    'security': '密级', 'docnum': '发文字号', 'title': '标题',
+    'recipient': '主送机关',
     'heading1': '一级标题', 'heading2': '二级标题', 'heading3': '三级标题',
     'heading4': '四级标题', 'body': '正文', 'signature': '署名',
     'date': '日期', 'attachment': '附件', 'closing': '结尾', 'empty': '',
 }
+# 手动指定类型菜单里展示的顺序
+TYPE_MENU_ORDER = ['title', 'docnum', 'security', 'recipient',
+                   'heading1', 'heading2', 'heading3', 'heading4',
+                   'body', 'attachment', 'closing', 'signature', 'date']
 MAX_PARAS = 500
 
 ALIGN_CSS = {'left': 'left', 'center': 'center', 'right': 'right', 'justify': 'justify'}
 
 
 def _read_paragraphs(path):
-    """返回 [(text, alignment)]，非 docx 返回 None"""
+    """返回 (段落列表[(text, alignment)], 表格数, 总段数)，非 docx 返回 None"""
     if not path.lower().endswith('.docx'):
         return None
     from docx import Document
     doc = Document(path)
+    total = len(doc.paragraphs)
     paras = []
     for p in doc.paragraphs[:MAX_PARAS]:
         align = p.paragraph_format.alignment
         paras.append((p.text, align))
-    return paras, doc
+    return paras, len(doc.tables), total
 
 
 def _html_shell(body, base_size=12):
     return ('<html><head><style>'
             'body {{ font-family: "SimSun", serif; font-size: {}pt; margin: 14px; }}'
             'p {{ margin: 0 0 4px 0; white-space: pre-wrap; }}'
-            '.tag {{ font-size: 8pt; color: #999; background: #F0EDE6; '
+            'a.tag {{ font-size: 8pt; color: #666; background: #F0EDE6; '
+            'border: 1px solid #D8D2C4; border-radius: 3px; padding: 0 4px; '
+            'margin-right: 4px; text-decoration: none; }}'
+            'a.tagx {{ font-size: 8pt; color: #FFFFFF; background: #C0392B; '
+            'border: 1px solid #A93226; border-radius: 3px; padding: 0 4px; '
+            'margin-right: 4px; text-decoration: none; }}'
+            '.tag0 {{ font-size: 8pt; color: #999; background: #F0EDE6; '
             'border-radius: 3px; padding: 0 4px; margin-right: 4px; }}'
             '</style></head><body>{}</body></html>').format(base_size, body)
 
@@ -55,7 +73,12 @@ def render_before_html(paras):
     return _html_shell(''.join(parts))
 
 
-def render_after_html(paras, preset):
+def compute_types(paras, preset, overrides=None):
+    """返回 [(非空段序号 or None, 段落类型 or None)]，与 paras 一一对应。
+
+    overrides: {非空段序号: 类型}，手动指定优先，且会作为上下文影响后续段落识别。
+    """
+    overrides = overrides or {}
     rules = _compile_rules(preset.get('detect_rules'))
     texts = [t for t, _ in paras]
     all_texts = [t.strip() for t in texts if t.strip()]
@@ -66,17 +89,36 @@ def render_after_html(paras, preset):
             idx_map[i] = n
             n += 1
 
-    parts = []
+    result = []
     prev_type = None
     total = len(paras)
     for i, (text, align) in enumerate(paras):
         if not text.strip():
+            result.append((None, None))
+            continue
+        ai = idx_map[i]
+        if ai in overrides:
+            ptype = overrides[ai]
+        else:
+            ptype = detect_para_type(
+                text.strip(), i, total, align, all_texts,
+                all_texts_index=ai, prev_para_type=prev_type, rules=rules)
+        prev_type = ptype
+        result.append((ai, ptype))
+    return result
+
+
+def render_after_html(paras, preset, overrides=None):
+    overrides = overrides or {}
+    types = compute_types(paras, preset, overrides)
+
+    parts = []
+    for (text, _align), (ai, ptype) in zip(paras, types):
+        if ptype is None:
             parts.append('<p>&nbsp;</p>')
             continue
-        ptype = detect_para_type(
-            text.strip(), i, total, align, all_texts,
-            all_texts_index=idx_map.get(i), prev_para_type=prev_type, rules=rules)
-        prev_type = ptype
+        # 右侧展示标点修复后的效果，与实际输出一致
+        display = fix_text(text.strip())
         fmt = preset.get(ptype if ptype in preset else 'body', preset.get('body', {}))
 
         style = [
@@ -94,8 +136,10 @@ def render_after_html(paras, preset):
             style.append('font-weight:bold')
 
         tag = TYPE_LABELS.get(ptype, ptype)
-        parts.append('<p style="{}"><span class="tag">{}</span>{}</p>'.format(
-            '; '.join(style), tag, _esc(text)))
+        cls = 'tagx' if ai in overrides else 'tag'
+        parts.append(
+            '<p style="{}"><a class="{}" href="para:{}" title="点击修改此段类型">{}</a>{}</p>'.format(
+                '; '.join(style), cls, ai, tag, _esc(display)))
     return _html_shell(''.join(parts))
 
 
@@ -110,6 +154,9 @@ class PreviewDialog(QDialog):
         self.resize(1080, 720)
         self.files = files
         self.preset = preset
+        # path -> {非空段序号: 类型}
+        self._overrides = {}
+        self._current_paras = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 12, 14, 12)
@@ -127,6 +174,17 @@ class PreviewDialog(QDialog):
         top.addWidget(tip)
         root.addLayout(top)
 
+        self.notice = QLabel("")
+        self.notice.setProperty("muted", "true")
+        self.notice.setWordWrap(True)
+        self.notice.setVisible(False)
+        root.addWidget(self.notice)
+
+        hint = QLabel("提示：点击右侧段落前的类型标签，可手动指定该段是标题/正文/附件等（红色标签=已手动指定）")
+        hint.setProperty("muted", "true")
+        hint.setWordWrap(True)
+        root.addWidget(hint)
+
         header = QHBoxLayout()
         lab_l = QLabel("排版前（原文）")
         lab_l.setProperty("sectionTitle", "true")
@@ -139,12 +197,18 @@ class PreviewDialog(QDialog):
         split = QSplitter(Qt.Horizontal)
         self.view_before = QTextBrowser()
         self.view_after = QTextBrowser()
+        self.view_after.setOpenLinks(False)
+        self.view_after.anchorClicked.connect(self._on_tag_clicked)
         split.addWidget(self.view_before)
         split.addWidget(self.view_after)
         split.setSizes([500, 500])
         root.addWidget(split, 1)
 
         btns = QHBoxLayout()
+        self.reset_btn = QPushButton("清除本文件的手动调整")
+        self.reset_btn.clicked.connect(self._clear_overrides)
+        self.reset_btn.setEnabled(False)
+        btns.addWidget(self.reset_btn)
         btns.addStretch(1)
         cancel = QPushButton("关闭")
         cancel.clicked.connect(self.reject)
@@ -158,16 +222,75 @@ class PreviewDialog(QDialog):
 
         self._load_current()
 
+    # ---------- 手动类型调整 ----------
+    def get_overrides(self):
+        """返回 {文件路径: {非空段序号: 类型}}（仅含有调整的文件）"""
+        return {p: dict(m) for p, m in self._overrides.items() if m}
+
+    def _current_path(self):
+        return self.file_combo.currentData()
+
+    def _on_tag_clicked(self, url):
+        s = url.toString() if isinstance(url, QUrl) else str(url)
+        if not s.startswith('para:'):
+            return
+        try:
+            ai = int(s.split(':', 1)[1])
+        except ValueError:
+            return
+        path = self._current_path()
+        cur = self._overrides.get(path, {}).get(ai)
+
+        menu = QMenu(self)
+        menu.addSection("此段落类型")
+        for t in TYPE_MENU_ORDER:
+            act = menu.addAction(TYPE_LABELS[t] + (' ✓' if cur == t else ''))
+            act.setData(t)
+        menu.addSeparator()
+        auto = menu.addAction("恢复自动识别")
+        auto.setData('__auto__')
+
+        chosen = menu.exec_(QCursor.pos())
+        if chosen is None:
+            return
+        val = chosen.data()
+        m = self._overrides.setdefault(path, {})
+        if val == '__auto__':
+            m.pop(ai, None)
+        else:
+            m[ai] = val
+        self._render_after()
+
+    def _clear_overrides(self):
+        path = self._current_path()
+        if path in self._overrides:
+            self._overrides[path] = {}
+        self._render_after()
+
+    # ---------- 渲染 ----------
+    def _render_after(self):
+        if self._current_paras is None:
+            return
+        path = self._current_path()
+        ovr = self._overrides.get(path, {})
+        bar = self.view_after.verticalScrollBar()
+        pos = bar.value()
+        self.view_after.setHtml(render_after_html(self._current_paras, self.preset, ovr))
+        bar.setValue(pos)
+        self.reset_btn.setEnabled(bool(ovr))
+
     def _load_current(self):
-        path = self.file_combo.currentData()
+        path = self._current_path()
         if not path:
             return
+        self._current_paras = None
         try:
             result = _read_paragraphs(path)
         except Exception as e:
             msg = _html_shell('<p>读取失败: {}</p>'.format(_esc(str(e))))
             self.view_before.setHtml(msg)
             self.view_after.setHtml(msg)
+            self.notice.setVisible(False)
             return
         if result is None:
             msg = _html_shell(
@@ -175,7 +298,18 @@ class PreviewDialog(QDialog):
                 '<p>点击「开始排版」时会自动转换并处理，不影响最终效果。</p>')
             self.view_before.setHtml(msg)
             self.view_after.setHtml(msg)
+            self.notice.setVisible(False)
             return
-        paras, _doc = result
+        paras, table_count, total_paras = result
+        self._current_paras = paras
+
+        notes = []
+        if table_count:
+            notes.append('文档含 {} 个表格，预览不显示表格（实际处理时会规范表格格式）'.format(table_count))
+        if total_paras > MAX_PARAS:
+            notes.append('文档共 {} 段，仅预览前 {} 段'.format(total_paras, MAX_PARAS))
+        self.notice.setText('；'.join(notes))
+        self.notice.setVisible(bool(notes))
+
         self.view_before.setHtml(render_before_html(paras))
-        self.view_after.setHtml(render_after_html(paras, self.preset))
+        self._render_after()

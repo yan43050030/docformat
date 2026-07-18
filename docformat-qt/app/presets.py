@@ -89,7 +89,7 @@ class PresetManager(object):
             return copy.deepcopy(BUILTIN_PRESETS[key])
         preset = copy.deepcopy(self.user.get(key, BUILTIN_PRESETS['official']))
         # 旧版本用户模板缺少后加入的元素节点时，用公文默认值补齐
-        for el_key in ('security',):
+        for el_key in ('security', 'docnum'):
             if el_key not in preset and el_key in BUILTIN_PRESETS['official']:
                 preset[el_key] = copy.deepcopy(BUILTIN_PRESETS['official'][el_key])
         return preset

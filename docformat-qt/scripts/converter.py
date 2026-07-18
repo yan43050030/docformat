@@ -106,43 +106,89 @@ def detect_office_app(prefer_wps=False):
     return available[0]
 
 
+class OfficeSession(object):
+    """复用单个 COM 应用实例做批量转换。
+
+    旧实现每转换一个文件都要"检测（启动+退出）→ 再启动 → 转换 → 退出"，
+    一批 20 个 .doc 文件意味着 40+ 次 WPS/Word 启停。本类在批处理开始时
+    创建一个实例，整批复用，结束时统一退出。
+
+    用法：
+        with OfficeSession() as sess:
+            for f in files:
+                sess.convert(f, out)
+    注意：必须在使用它的线程内进入/退出（COM 单元模型要求）。
+    """
+
+    _CANDIDATES = [
+        ('Kwps.Application', 'WPS'),
+        ('wps.Application', 'WPS'),
+        ('Word.Application', 'Microsoft Word'),
+    ]
+
+    def __init__(self):
+        self.app = None
+        self.app_name = None
+        self._com_inited = False
+
+    def __enter__(self):
+        _ensure_windows()
+        try:
+            import pythoncom
+        except ModuleNotFoundError as e:
+            raise RuntimeError("缺少 pywin32（pythoncom）。请重新下载最新版 EXE 或安装 pywin32 后再试。") from e
+        pythoncom.CoInitialize()
+        self._com_inited = True
+        for prog_id, name in self._CANDIDATES:
+            try:
+                self.app = _create_app(prog_id)
+                self.app_name = name
+                break
+            except Exception:
+                continue
+        if self.app is None:
+            self.__exit__(None, None, None)
+            raise RuntimeError("未检测到 WPS 或 Microsoft Office，无法转换 .doc/.wps 文件")
+        return self
+
+    def convert(self, input_path, output_path=None):
+        """把 .doc/.wps 转换为 .docx，返回输出路径"""
+        input_path = Path(input_path).resolve()
+        if not input_path.exists():
+            raise FileNotFoundError(f"文件不存在: {input_path}")
+        if output_path is None:
+            fd, temp_path = tempfile.mkstemp(suffix='.docx')
+            os.close(fd)
+            output_path = temp_path
+        output_path = Path(output_path).resolve()
+
+        doc = None
+        try:
+            doc = self.app.Documents.Open(str(input_path))
+            doc.SaveAs2(str(output_path), FileFormat=16)
+            return str(output_path)
+        finally:
+            _safe_close(doc)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        _safe_quit(self.app)
+        self.app = None
+        if self._com_inited:
+            try:
+                import pythoncom
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+            self._com_inited = False
+        return False
+
+
 def convert_to_docx(input_path, output_path=None):
     """
-    将 .doc/.wps 转换为 .docx
+    将 .doc/.wps 转换为 .docx（单文件便捷入口；批量请用 OfficeSession）
     """
-    _ensure_windows()
-    try:
-        import pythoncom
-    except ModuleNotFoundError as e:
-        raise RuntimeError("缺少 pywin32（pythoncom）。请重新下载最新版 EXE 或安装 pywin32 后再试。") from e
-
-    input_path = Path(input_path).resolve()
-    if not input_path.exists():
-        raise FileNotFoundError(f"文件不存在: {input_path}")
-
-    if output_path is None:
-        fd, temp_path = tempfile.mkstemp(suffix='.docx')
-        os.close(fd)
-        output_path = temp_path
-
-    output_path = Path(output_path).resolve()
-
-    prog_id, _ = detect_office_app()
-    if not prog_id:
-        raise RuntimeError("未检测到 WPS 或 Microsoft Office，无法转换 .doc/.wps 文件")
-
-    app = None
-    doc = None
-    pythoncom.CoInitialize()
-    try:
-        app = _create_app(prog_id)
-        doc = app.Documents.Open(str(input_path))
-        doc.SaveAs2(str(output_path), FileFormat=16)
-        return str(output_path)
-    finally:
-        _safe_close(doc)
-        _safe_quit(app)
-        pythoncom.CoUninitialize()
+    with OfficeSession() as sess:
+        return sess.convert(input_path, output_path)
 
 
 def convert_from_docx(input_path, output_path, format='doc'):

@@ -18,6 +18,7 @@ def make_sample():
     doc = Document()
     doc.add_paragraph('秘密★1年')
     doc.add_paragraph('关于开展2026年度安全生产检查的通知')
+    doc.add_paragraph('某安委发〔2026〕12号')
     doc.add_paragraph('各部门、各单位:')
     doc.add_paragraph('为深入贯彻落实上级部署要求(含附件),现将有关事项通知如下.')
     doc.add_paragraph('一、总体要求')
@@ -31,6 +32,11 @@ def make_sample():
     doc.add_paragraph('附件:安全检查表')
     doc.add_paragraph('某某公司办公室')
     doc.add_paragraph('2026年7月17日')
+    table = doc.add_table(rows=2, cols=2)
+    table.rows[0].cells[0].text = '项目'
+    table.rows[0].cells[1].text = '预算(万元)'
+    table.rows[1].cells[0].text = '隐患整改'
+    table.rows[1].cells[1].text = '12'
     doc.save(SRC)
     print('[1] 样例文档已生成:', SRC)
 
@@ -73,7 +79,12 @@ def test_full():
     body_text = '\n'.join(p.text for p in doc.paragraphs)
     assert '（含附件）' in body_text, '英文括号未转换'
     assert '……' in body_text, '省略号未规范化'
-    print('[2] 智能一键: 边距/标题字体字号/标点转换 全部通过 (进度回调 {} 次)'.format(len(stages)))
+
+    # 发文字号：仿宋、居中
+    dn_para = [p for p in doc.paragraphs if '〔2026〕12号' in p.text][0]
+    from docx.enum.text import WD_ALIGN_PARAGRAPH as _WAP
+    assert dn_para.paragraph_format.alignment == _WAP.CENTER, '发文字号应居中'
+    print('[2] 智能一键: 边距/标题字体字号/标点转换/发文字号 全部通过 (进度回调 {} 次)'.format(len(stages)))
 
 
 def test_punctuation():
@@ -96,6 +107,8 @@ def test_diagnose():
     }
     n = sum(len(v) for v in results.values())
     assert len(results['punctuation']) > 0, '诊断应发现英文标点问题'
+    assert any(str(i.get('para', '')).startswith('表') for i in results['punctuation']), \
+        '诊断应覆盖表格单元格（预算(万元) 的英文括号）'
     from app.worker import build_diagnose_report
     report = build_diagnose_report('sample.docx', results)
     print('[4] 格式诊断: 发现 {} 项问题, 报告生成 OK'.format(n))
@@ -142,6 +155,33 @@ def test_ai_paste():
     print('[6] AI 粘贴生成: markdown 清洗 + 生成 + 排版 通过')
 
 
+def test_punct_edges():
+    from scripts.punctuation import fix_text, _fix_quotes_whole_text, _process_spaces_text
+    assert fix_text("it's a test, don't worry") == "it’s a test, don’t worry", '撇号被误配对'
+    r1, dq, sq = _fix_quotes_whole_text('他说"这是第一段', 0, 0)
+    r2, dq, sq = _fix_quotes_whole_text('这是第二段的结尾"', dq, sq)
+    assert r1.endswith('“这是第一段') and r2 == '这是第二段的结尾”', '跨段引号配对错误'
+    assert _process_spaces_text('参照 GB/T 9704 和 New York 规范', 'keep_en_words') \
+        == '参照GB/T 9704和New York规范', '英文词间空格保护失败'
+    assert fix_text('本次比分为3:2。') == '本次比分为3:2。', '数字比分冒号不应替换'
+    print('[7] 标点边界: 撇号/跨段引号/英文空格/比分 通过')
+
+
+def test_type_overrides():
+    from scripts.formatter import format_document
+    from docx.oxml.ns import qn as _qn
+    out = os.path.join(OUT_DIR, 'sample_override.docx')
+    # 把"一、总体要求"强制为正文
+    # 非空段序号：0密级 1标题 2文号 3主送 4为深入贯彻… 5一、总体要求
+    format_document(SRC, out, preset_name='official', type_overrides={5: 'body'})
+    doc = Document(out)
+    para = [p for p in doc.paragraphs if p.text.strip() == '一、总体要求'][0]
+    rpr = para.runs[0]._element.rPr
+    ea = rpr.rFonts.get(_qn('w:eastAsia')) if rpr is not None and rpr.rFonts is not None else None
+    assert ea == '仿宋_GB2312', '类型覆盖未生效（应为正文仿宋，实际 {}）'.format(ea)
+    print('[8] 手动类型覆盖: 生效 通过')
+
+
 if __name__ == '__main__':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     make_sample()
@@ -150,4 +190,6 @@ if __name__ == '__main__':
     test_diagnose()
     test_custom_preset()
     test_ai_paste()
+    test_punct_edges()
+    test_type_overrides()
     print('\n全部冒烟测试通过 ✓')

@@ -2,8 +2,8 @@
 """主窗口：侧边栏导航 + 四页堆叠 + 底部状态栏"""
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel,
-                             QMainWindow, QPushButton, QStackedWidget,
-                             QVBoxLayout, QWidget)
+                             QMainWindow, QMessageBox, QPushButton,
+                             QStackedWidget, QVBoxLayout, QWidget)
 
 from app.presets import PresetManager
 from app.theme import build_qss, current_theme_id
@@ -12,7 +12,7 @@ from app.pages.presets_page import PresetsPage
 from app.pages.theme_page import ThemePage
 from app.pages.log_page import LogPage
 
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 NAV_ITEMS = [('处理', 0), ('预设方案', 1), ('主题', 2), ('日志', 3)]
 
 
@@ -135,3 +135,19 @@ class MainWindow(QMainWindow):
     def _refresh_status(self):
         p = self.mgr.get(self.mgr.active_key)
         self.status_preset.setText("当前预设: {}".format(p.get('name', '')))
+
+    def closeEvent(self, event):
+        """处理线程运行中直接关窗会崩溃（QThread destroyed），先确认并停止"""
+        worker = getattr(self.home_page, 'worker', None)
+        if worker is not None and worker.isRunning():
+            ret = QMessageBox.question(
+                self, "正在处理",
+                "还有文件正在处理，确定退出吗？\n未完成的文件不会生成输出。",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ret != QMessageBox.Yes:
+                event.ignore()
+                return
+            if hasattr(worker, 'cancel'):
+                worker.cancel()
+            worker.wait(5000)
+        event.accept()
