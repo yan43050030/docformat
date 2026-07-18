@@ -52,7 +52,20 @@ packaging\build_windows.bat     → dist\DocFormatPro.exe
 
 .doc/.wps 输入依赖本机 WPS 或 Microsoft Word（自动检测，WPS 优先）。
 
-## 麒麟 / UOS 使用（推荐源码部署）
+## 麒麟 / UOS 使用
+
+**方式一（最简单）**：从 [Releases 页面](../../releases) 下载对应架构的
+`DocFormatPro-*-linux-x86_64.tar.gz`（Intel/AMD/兆芯/海光）或
+`DocFormatPro-*-linux-arm64.tar.gz`（飞腾/鲲鹏），解压后运行：
+
+```bash
+tar xzf DocFormatPro-*-linux-*.tar.gz && cd DocFormatPro && ./DocFormatPro
+```
+
+二进制在 glibc 2.28 环境构建，兼容麒麟 V10、统信 UOS 20 及更新系统。
+.doc/.wps 输入需另装 LibreOffice：`sudo apt install libreoffice-writer`。
+
+**方式二（内网/二进制不可用时，源码部署）**
 
 ```bash
 bash packaging/install_kylin.sh
