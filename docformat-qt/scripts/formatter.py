@@ -246,6 +246,42 @@ def _resolve_font_for_macos(font_name):
     logger.info(f"字体 '{font_name}' 未安装，回退到 '{fallback}'")
     return fallback
 
+def get_missing_cn_fonts(preset):
+    """Linux（麒麟/UOS）：用 fc-list 检查预设中文字体是否安装，返回缺失字体列表。
+
+    检测不可用（无 fc-list / 超时）时返回空列表，不打扰用户。
+    Word/WPS 在字体缺失时会静默替换为宋体，导致输出不合规而用户不知情，
+    因此在处理前给出明确警告。
+    """
+    if sys.platform in ('win32', 'darwin'):
+        return []
+    needed = set()
+    for key, fmt in preset.items():
+        if isinstance(fmt, dict) and fmt.get('font_cn'):
+            needed.add(fmt['font_cn'])
+    if preset.get('page_number_font'):
+        needed.add(preset['page_number_font'])
+    if not needed:
+        return []
+    import subprocess
+    try:
+        result = subprocess.run(['fc-list', '--format=%{family}\n'],
+                                capture_output=True, text=True, timeout=10)
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+        installed = set()
+        for line in result.stdout.strip().split('\n'):
+            for name in line.split(','):
+                name = name.strip()
+                if name:
+                    installed.add(name)
+        if len(installed) < 5:
+            return []
+        return sorted(needed - installed)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return []
+
+
 def _adapt_fonts_for_platform(preset):
     """在 macOS 上适配字体：优先使用 Windows 原字体，确认未安装时才回退到系统字体"""
     if sys.platform != 'darwin':
@@ -327,6 +363,17 @@ PRESETS = {
             'bold': False,
             'align': 'left',
             'indent': 0,  # 顶格
+            'space_before': 0,
+            'space_after': 0,
+        },
+        # 发文字号：三号仿宋，居中（如"×政发〔2026〕12号"）
+        'docnum': {
+            'font_cn': '仿宋_GB2312',
+            'font_en': 'Times New Roman',
+            'size': 16,  # 三号
+            'bold': False,
+            'align': 'center',
+            'indent': 0,
             'space_before': 0,
             'space_after': 0,
         },
@@ -446,6 +493,7 @@ PRESETS = {
         'deep_clean': False,
         'page': {'top': 2.5, 'bottom': 2.5, 'left': 2.5, 'right': 2.5},
         'security': {'font_cn': '黑体', 'font_en': 'Times New Roman', 'size': 14, 'bold': True, 'align': 'left', 'indent': 0},
+        'docnum': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 12, 'bold': False, 'align': 'center', 'indent': 0},
         'title': {'font_cn': '黑体', 'font_en': 'Times New Roman', 'size': 18, 'bold': True, 'align': 'center', 'indent': 0},
         'recipient': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 12, 'bold': False, 'align': 'left', 'indent': 0},
         'heading1': {'font_cn': '黑体', 'font_en': 'Times New Roman', 'size': 15, 'bold': True, 'align': 'left', 'indent': 0},
@@ -463,6 +511,7 @@ PRESETS = {
         'deep_clean': False,
         'page': {'top': 3.0, 'bottom': 2.5, 'left': 3.0, 'right': 2.5},
         'security': {'font_cn': '黑体', 'font_en': 'Times New Roman', 'size': 16, 'bold': False, 'align': 'left', 'indent': 0},
+        'docnum': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 14, 'bold': False, 'align': 'center', 'indent': 0},
         'title': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 22, 'bold': True, 'align': 'center', 'indent': 0},
         'recipient': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 14, 'bold': False, 'align': 'left', 'indent': 0},
         'heading1': {'font_cn': '黑体', 'font_en': 'Times New Roman', 'size': 14, 'bold': False, 'align': 'left', 'indent': 0},
@@ -629,7 +678,8 @@ def _set_table_col_widths_by_content(table, min_pct=8, max_pct=45):
 
     max_weights = [1.0] * col_count
     for row in table.rows:
-        for c_idx, cell in enumerate(row.cells):
+        # row.cells 每次访问都会重新解析 XML，取一次复用
+        for c_idx, cell in enumerate(tuple(row.cells)):
             text = ''.join(p.text for p in cell.paragraphs).strip()
             if text:
                 max_weights[c_idx] = max(max_weights[c_idx], _text_weight(text))
@@ -652,7 +702,7 @@ def _set_table_col_widths_by_content(table, min_pct=8, max_pct=45):
         tbl_grid.append(grid_col)
 
     for row in table.rows:
-        for c_idx, cell in enumerate(row.cells):
+        for c_idx, cell in enumerate(tuple(row.cells)):
             tc = cell._tc
             tc_pr = tc.tcPr
             if tc_pr is None:
@@ -769,7 +819,7 @@ def _normalize_date_text(text):
 
 def _is_date_text(text, date_patterns):
     normalized = _normalize_date_text(text)
-    return any(re.match(pattern, normalized) for pattern in date_patterns)
+    return any(pattern.match(normalized) for pattern in date_patterns)
 
 
 def _standardize_date_text(text):
@@ -804,14 +854,51 @@ def _build_text_context(doc):
     return all_texts, all_texts_idx_map
 
 
-# 段落类型识别规则（可被预设的 detect_rules 覆盖，正则字符串）
+# 日期行的默认识别模式（合并为单个可覆盖的规则字符串）
+_DATE_PATTERNS = (
+    r'^\d{4}年\d{1,2}月\d{1,2}日$',
+    r'^\d{4}年\d{1,2}月\d{1,2}$',
+    r'^\d{4}年\d{1,2}月$',
+    r'^\d{4}\.\d{1,2}\.\d{1,2}$',
+    r'^\d{4}\.\d{1,2}$',
+    r'^\d{4}/\d{1,2}/\d{1,2}$',
+    r'^\d{4}/\d{1,2}$',
+    r'^\d{4}-\d{1,2}-\d{1,2}$',
+    r'^\d{4}-\d{1,2}$',
+    r'^二[○〇零oO0][一二三四五六七八九零〇○oO0]{2}年.{1,3}月.{1,3}日$',
+    r'^二[○〇零oO0][一二三四五六七八九零〇○oO0]{2}年.{1,3}月$',
+)
+
+_CLOSING_PATTERNS = (
+    r'^特此(说明|通知|报告|函复|函告|批复|公告|通报)。?$',
+    r'^此致$',
+    r'^敬礼[！!]?$',
+    r'^以上(报告|意见|方案).{0,10}$',
+    r'^妥否.{0,10}$',
+    r'^请.{0,15}(批示|审批|审议|指示|核准)。?$',
+)
+
+# 段落类型识别规则（可被预设的 detect_rules 覆盖，正则字符串）。
+# 除正则本身外，引擎还会结合段落位置（如密级只看文首、署名只看文末）
+# 等上下文条件，避免正文中的相似文字被误判。
 DEFAULT_DETECT_RULES = {
     'security': r'^(绝密|机密|秘密)\s*[★\*]?\s*([一二三四五六七八九十0-9]+\s*(年|个月|月))?\s*$',
+    'docnum': r'^[一-鿿]{2,20}[〔\[](19|20)\d{2}[〕\]]\s*第?\s*\d+\s*号$',
     'heading1': r'^[一二三四五六七八九十]+、',
     'heading2': r'^（[一二三四五六七八九十]+）|^\([一二三四五六七八九十]+\)',
     'heading3': r'^\d+\.\s*[^\d.\s]',
     'heading4': r'^（\d+）|^\(\d+\)',
+    'recipient': r'^[一-鿿\d、，,（）()\s]+[：:]$',
+    'attachment': r'^附件\d*([：:．.\s]|$)',
+    'closing': '|'.join(_CLOSING_PATTERNS),
+    'date': '|'.join(_DATE_PATTERNS),
+    'signature': r'(公司|局|委|部|厅|院|所|中心|办公室|集团|银行|学校|大学|医院'
+                 r'|指挥部|领导小组|委员会|管理处|管委会)$',
 }
+
+# 预编译（detect_para_type 每段调用，避免重复构建）
+_CLOSING_RES = [re.compile(p) for p in _CLOSING_PATTERNS]
+_DATE_RES = [re.compile(p) for p in _DATE_PATTERNS]
 
 
 def _compile_rules(overrides):
@@ -848,38 +935,24 @@ def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=N
 
     # ===== 密级标识检测（GB/T 9704：版心左上角，如"秘密★1年""机密★3年"）=====
     # 仅识别文档最前部（前 3 个非空段落）中整行只有密级(+保密期限)的段落
-    early_pos = (all_texts_index if all_texts_index is not None else index) < 3
-    if early_pos and _rules['security'].match(text):
+    _early_idx = all_texts_index if all_texts_index is not None else index
+    if _early_idx < 3 and _rules['security'].match(text):
         return 'security'
 
-    closing_patterns = [
-        r'^特此(说明|通知|报告|函复|函告|批复|公告|通报)。?$',
-        r'^此致$',
-        r'^敬礼[！!]?$',
-        r'^以上(报告|意见|方案).{0,10}$',
-        r'^妥否.{0,10}$',
-        r'^请.{0,15}(批示|审批|审议|指示|核准)。?$',
-    ]
-    date_patterns = [
-        r'^\d{4}年\d{1,2}月\d{1,2}日$',
-        r'^\d{4}年\d{1,2}月\d{1,2}$',
-        r'^\d{4}年\d{1,2}月$',
-        r'^\d{4}\.\d{1,2}\.\d{1,2}$',
-        r'^\d{4}\.\d{1,2}$',
-        r'^\d{4}/\d{1,2}/\d{1,2}$',
-        r'^\d{4}/\d{1,2}$',
-        r'^\d{4}-\d{1,2}-\d{1,2}$',
-        r'^\d{4}-\d{1,2}$',
-        r'^二[○〇零oO0][一二三四五六七八九零〇○oO0]{2}年.{1,3}月.{1,3}日$',
-        r'^二[○〇零oO0][一二三四五六七八九零〇○oO0]{2}年.{1,3}月$',
-    ]
+    # ===== 发文字号检测（如"×政发〔2026〕12号"，位于文档前部版头区域）=====
+    if _early_idx < 6 and _rules['docnum'].match(text):
+        return 'docnum'
+
+    # 结束语/日期/附件/署名规则：用户自定义时替换默认（留空即默认）
+    closing_patterns = [_rules['closing']]
+    date_patterns = [_rules['date']]
 
     # ===== 标题续行检测 =====
     if prev_para_type == 'title':
         heading_prefix = re.match(r'^[一二三四五六七八九十（\(\d]', text)
         is_recipient_end = re.search(r'[：:]\s*$', text)
-        is_attachment = re.match(r'^附件', text)
-        is_closing = any(re.match(pattern, text) for pattern in closing_patterns)
+        is_attachment = _rules['attachment'].match(text)
+        is_closing = any(pattern.match(text) for pattern in closing_patterns)
         is_date = _is_date_text(text, date_patterns)
         is_sentence_end = re.search(r'[。！？.!?；;]\s*$', text)
         if not heading_prefix and not is_recipient_end and not is_attachment and not is_closing and not is_date and not is_sentence_end and len(text) < 50:
@@ -925,7 +998,7 @@ def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=N
     # ===== 主送机关：XXX： 或 XXX: =====
     # 特征：以冒号结尾的名词性短语，不含动词/虚词
     # 如"各处室、直属单位：" "各市（州）教育局："
-    if re.match(r'^[\u4e00-\u9fff\d、，,（）()\s]+[：:]$', text) and len(text) < 30:
+    if _rules['recipient'].match(text) and len(text) < 30:
         # 排除含动词/虚词的正文句子，如"现将有关事项通知如下："
         body_indicators = (
             r'(现将|为了|根据|按照|经研究|为贯彻|为落实|为进一步|为深入|'
@@ -948,16 +1021,12 @@ def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=N
                 return 'recipient'
     
     # ===== 附件行 =====
-    if re.match(r'^附件[：:]\s*', text):
-        return 'attachment'
-    if re.match(r'^附件\d*[：:．.\s]', text):
-        return 'attachment'
-    if re.match(r'^附件$', text):
+    if _rules['attachment'].match(text):
         return 'attachment'
     
     # ===== 结束语 =====
     for pattern in closing_patterns:
-        if re.match(pattern, text):
+        if pattern.match(text):
             return 'closing'
     
     # ===== 落款日期 =====
@@ -985,8 +1054,8 @@ def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=N
                 allow_signature_check = False
 
         if allow_signature_check:
-            # 检查是否像单位名称
-            if re.search(r'(公司|局|委|部|厅|院|所|中心|办公室|集团|银行|学校|大学|医院|指挥部|领导小组|委员会|管理处|管委会)$', text):
+            # 检查是否像单位名称（后缀规则可在预设中自定义）
+            if _rules['signature'].search(text):
                 return 'signature'
             # 正文句即使靠近文末日期，也不应因为“下文有日期”被误判为落款。
             if re.search(r'[。！？.!?；;]\s*$', text):
@@ -1081,15 +1150,7 @@ def _split_heading_by_punct(paragraph):
     return new_para is not None
 
 
-def _find_paragraph_index(doc, target_para):
-    target_p = target_para._p
-    for i, para in enumerate(doc.paragraphs):
-        if para._p is target_p:
-            return i
-    return None
-
-
-def _ensure_structural_blank_lines(doc, line_spacing_pt=28, rules=None):
+def _ensure_structural_blank_lines(doc, line_spacing_pt=28, rules=None, type_overrides=None):
     """
     Ensure the standard visible blank lines:
     - after the title block before recipient/body
@@ -1104,32 +1165,36 @@ def _ensure_structural_blank_lines(doc, line_spacing_pt=28, rules=None):
         text = para.text.strip()
         if not text:
             continue
-        para_type = detect_para_type(
-            text, i, total_paras,
-            para.paragraph_format.alignment,
-            all_texts,
-            all_texts_index=all_texts_idx_map.get(i),
-            prev_para_type=prev_para_type,
-            rules=rules
-        )
+        ai = all_texts_idx_map.get(i)
+        if type_overrides and ai is not None and ai in type_overrides:
+            para_type = type_overrides[ai]
+        else:
+            para_type = detect_para_type(
+                text, i, total_paras,
+                para.paragraph_format.alignment,
+                all_texts,
+                all_texts_index=ai,
+                prev_para_type=prev_para_type,
+                rules=rules
+            )
         entries.append((para, para_type, prev_para_type))
         prev_para_type = para_type
 
     structural_blank_ids = set()
+    p_tag = qn('w:p')
     for para, para_type, prev_para_type in entries:
         needs_blank = (
-            (prev_para_type == 'title' and para_type != 'title') or
+            (prev_para_type == 'title' and para_type not in ('title', 'docnum')) or
+            (prev_para_type == 'docnum' and para_type != 'docnum') or
             (para_type == 'signature' and prev_para_type not in (None, 'signature', 'date'))
         )
         if not needs_blank:
             continue
 
-        current_idx = _find_paragraph_index(doc, para)
-        if current_idx is None:
-            continue
-
-        if current_idx > 0 and not doc.paragraphs[current_idx - 1].text.strip():
-            blank_para = doc.paragraphs[current_idx - 1]
+        # 直接检查 XML 前一个兄弟节点，避免每次全量扫描 doc.paragraphs（O(n²)）
+        prev_el = para._p.getprevious()
+        if prev_el is not None and prev_el.tag == p_tag and not Paragraph(prev_el, para._parent).text.strip():
+            blank_para = Paragraph(prev_el, para._parent)
         else:
             blank_para = _insert_paragraph_before_paragraph(para)
 
@@ -1717,11 +1782,15 @@ def add_page_number(
                 _build_footer_line(first_footer, align)
 
 
-def format_document(input_path, output_path, preset_name='official', progress_callback=None, revision_mode=False, bold_serial=True, custom_settings=None):
+def format_document(input_path, output_path, preset_name='official', progress_callback=None,
+                    revision_mode=False, bold_serial=True, custom_settings=None,
+                    type_overrides=None):
     """格式化文档
-    
+
     Args:
         progress_callback: 可选回调函数，签名为 callback(current, total, stage_text)
+        type_overrides: 可选 {非空段序号: 段落类型}，用户在预览中手动指定的
+            段落类型，优先于自动识别（序号按非空段落从 0 计数）
     """
     _revision_counter[0] = 0   # 每篇文档从 1 开始计 ID
 
@@ -1796,7 +1865,8 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
     # v1.7.2: 清理 styles.xml 里的 Autospacing 属性，避免内置样式覆盖直接属性
     _strip_autospacing_from_styles(doc)
     _active_rules = _compile_rules(preset.get('detect_rules'))
-    structural_blank_ids = _ensure_structural_blank_lines(doc, body_line_spacing, rules=_active_rules)
+    structural_blank_ids = _ensure_structural_blank_lines(
+        doc, body_line_spacing, rules=_active_rules, type_overrides=type_overrides)
     total_paras = len(doc.paragraphs)
     all_texts, all_texts_idx_map = _build_text_context(doc)
     
@@ -1820,15 +1890,19 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
                 _compact_empty_paragraph(para)
             continue
         
-        para_type = detect_para_type(
-            text, i, total_paras, 
-            para.paragraph_format.alignment,
-            all_texts,
-            all_texts_index=all_texts_idx_map.get(i),
-            prev_para_type=prev_para_type,
-            rules=_active_rules
-        )
-        
+        _ai = all_texts_idx_map.get(i)
+        if type_overrides and _ai is not None and _ai in type_overrides:
+            para_type = type_overrides[_ai]
+        else:
+            para_type = detect_para_type(
+                text, i, total_paras,
+                para.paragraph_format.alignment,
+                all_texts,
+                all_texts_index=_ai,
+                prev_para_type=prev_para_type,
+                rules=_active_rules
+            )
+
         if para_type == 'date':
             standardized_date = _standardize_date_text(text)
             if standardized_date != text:
@@ -1860,7 +1934,8 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
 
     # 格式化后再复查一次。部分文档的标题依赖原始对齐或字体较难在第一次
     # 识别时命中，完成标题格式化后再补齐结构空行更稳。
-    structural_blank_ids.update(_ensure_structural_blank_lines(doc, body_line_spacing, rules=_active_rules))
+    structural_blank_ids.update(_ensure_structural_blank_lines(
+        doc, body_line_spacing, rules=_active_rules, type_overrides=type_overrides))
     _format_empty_paragraphs(doc, structural_blank_ids, body_line_spacing)
     
     # 4. 处理表格
@@ -1964,7 +2039,7 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
         # 表格内内容
         serial_col_idx = None
         if table.rows:
-            header_cells = table.rows[0].cells
+            header_cells = tuple(table.rows[0].cells)
             for c_idx, cell in enumerate(header_cells):
                 head_text = ''.join(p.text for p in cell.paragraphs).strip()
                 if '序号' in head_text or head_text == '序':
@@ -1977,7 +2052,7 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
                 row.height = Cm(table_cfg.get('row_height_cm'))
                 row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
 
-            for col_idx, cell in enumerate(row.cells):
+            for col_idx, cell in enumerate(tuple(row.cells)):
                 if table_cfg.get('optimize', True):
                     _set_cell_borders(cell, size_pt=table_cfg.get('border_size_pt', 0.5))
 

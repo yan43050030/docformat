@@ -9,21 +9,75 @@ from PyQt5.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
 from app.widgets.collapsible import CollapsibleSection
 from scripts.formatter import DEFAULT_DETECT_RULES
 
+# 识别规则配置：(键, 名称, 白话说明, 常用方案[(方案名, 正则)])
+# 方案下拉让不懂正则的用户直接选；选「自定义」才需要写正则。
 RULE_FIELDS = [
-    ('security', '密级标识', '整行匹配才识别，仅检查文档前 3 个非空段落'),
-    ('heading1', '一级标题', '默认识别「一、二、…」'),
-    ('heading2', '二级标题', '默认识别「（一）（二）…」'),
-    ('heading3', '三级标题', '默认识别「1. 2. …」（自动排除日期/版本号）'),
-    ('heading4', '四级标题', '默认识别「（1）（2）…」'),
+    ('security', '密级标识',
+     '怎样的一行文字算密级。只检查文档开头前 3 个非空行，且整行匹配才算。',
+     [('默认：秘密★1年 / 机密★3年 / 绝密', None)]),
+    ('docnum', '发文字号',
+     '怎样的一行算发文字号。只检查文档开头前 6 个非空行。',
+     [('默认：××发〔2026〕12号', None)]),
+    ('heading1', '一级标题',
+     '段落开头是什么样就算一级标题。',
+     [('默认：一、二、三、', None),
+      ('法律条文：第一条 第二条', r'^第[一二三四五六七八九十百]+条'),
+      ('章节：第一章 第二章', r'^第[一二三四五六七八九十百]+[章节]')]),
+    ('heading2', '二级标题',
+     '段落开头是什么样就算二级标题。',
+     [('默认：（一）（二）', None),
+      ('数字点：1. 2. 3.', r'^\d+\.\s*[^\d.\s]')]),
+    ('heading3', '三级标题',
+     '段落开头是什么样就算三级标题（默认已排除 2026.7.18 这类日期）。',
+     [('默认：1. 2. 3.', None),
+      ('带括号数字：（1）（2）', r'^（\d+）|^\(\d+\)')]),
+    ('heading4', '四级标题',
+     '段落开头是什么样就算四级标题。',
+     [('默认：（1）（2）', None)]),
+    ('attachment', '附件行',
+     '怎样的段落算附件说明行（会用附件专用的悬挂缩进排版）。',
+     [('默认：附件： / 附件1： / 附件2', None)]),
+    ('signature', '落款署名',
+     '文末怎样的短行算署名。默认按结尾词判断：以公司/局/委员会等机构词结尾。',
+     [('默认：以公司/局/办公室/委员会…结尾', None)]),
+    ('date', '落款日期',
+     '怎样的一行算日期（会规范为 2026年7月18日 样式并右对齐）。',
+     [('默认：2026年7月18日 / 2026.7.18 / 2026-07-18 等', None)]),
+    ('closing', '结束语',
+     '怎样的段落算结束语（特此通知等，不参与标题识别）。',
+     [('默认：特此通知 / 此致 / 敬礼 / 妥否…', None)]),
+    ('recipient', '主送机关',
+     '怎样的行算主送机关（顶格排版）。默认：以中文＋冒号结尾的短行，如「各部门、各单位：」。',
+     [('默认：以冒号结尾的机关列举行', None)]),
 ]
 
 ELEMENTS = [
-    ('security', '密级标识（左上角定密）'), ('title', '标题'), ('recipient', '主送机关'),
+    ('security', '密级标识（左上角定密）'), ('docnum', '发文字号'),
+    ('title', '标题'), ('recipient', '主送机关'),
     ('heading1', '一级标题'), ('heading2', '二级标题'),
     ('heading3', '三级标题'), ('heading4', '四级标题'),
     ('body', '正文'), ('signature', '署名'), ('date', '日期'),
     ('attachment', '附件'), ('closing', '结尾'),
 ]
+
+RULE_TYPE_LABELS = {
+    'security': '密级标识', 'docnum': '发文字号', 'heading1': '一级标题',
+    'heading2': '二级标题', 'heading3': '三级标题', 'heading4': '四级标题',
+    'attachment': '附件行', 'signature': '落款署名', 'date': '落款日期',
+    'closing': '结束语', 'recipient': '主送机关',
+}
+
+# 部分要素除规则外还有位置条件，测试结果里做补充说明
+_RULE_POS_NOTES = {
+    'security': "（还需位于文档开头前 3 个非空行）",
+    'docnum': "（还需位于文档开头前 6 个非空行）",
+    'signature': "（还需位于文档末尾附近）",
+    'date': "（正文中的日期不受影响，只有文末的日期行按落款日期排版）",
+}
+
+
+def key_pos_note(key):
+    return _RULE_POS_NOTES.get(key, '')
 
 CN_FONTS = ['方正小标宋简体', '方正仿宋_GBK', '仿宋_GB2312', '仿宋', '黑体',
             '楷体_GB2312', '楷体', '宋体', '华文中宋', '方正书宋_GBK',
@@ -135,19 +189,37 @@ class PresetsPage(QWidget):
 
     def _build_rules_section(self):
         import re as _re
-        sec = CollapsibleSection("识别规则（正则表达式，进阶）")
+        from PyQt5.QtWidgets import QLineEdit
+        sec = CollapsibleSection("识别规则（哪些文字算标题/密级/署名…）")
         g = QGridLayout()
         g.setHorizontalSpacing(10)
         g.setVerticalSpacing(6)
-        self._rule_edits = {}
+        self._rule_edits = {}     # key -> 自定义正则输入框
+        self._rule_combos = {}    # key -> 方案下拉
 
-        from PyQt5.QtWidgets import QLineEdit
-        for row, (key, label, tip) in enumerate(RULE_FIELDS):
+        intro = QLabel(
+            "每类要素按下拉框选择识别方式即可，选「自定义」才需要填写规则。\n"
+            "自定义规则用正则表达式描述「段落开头长什么样」，常用写法："
+            "^ 表示行开头，$ 表示行结尾，\\d 表示任意数字，[一二三] 表示这几个字中的任意一个，"
+            "+ 表示出现一次或多次，| 表示「或」。例如 ^第[一二三四五六七八九十百]+条 匹配「第十三条」。")
+        intro.setProperty("muted", "true")
+        intro.setWordWrap(True)
+        g.addWidget(intro, 0, 0, 1, 3)
+
+        for row, (key, label, tip, options) in enumerate(RULE_FIELDS, start=1):
             lab = QLabel(label)
             lab.setToolTip(tip)
+
+            combo = QComboBox()
+            for opt_label, opt_pattern in options:
+                combo.addItem(opt_label, opt_pattern)   # None = 默认规则
+            combo.addItem('自定义…', '__custom__')
+            combo.setToolTip(tip)
+
             edit = QLineEdit()
-            edit.setPlaceholderText(DEFAULT_DETECT_RULES[key])
+            edit.setPlaceholderText('自定义正则，留空即默认：{}'.format(DEFAULT_DETECT_RULES[key]))
             edit.setToolTip(tip)
+            edit.setVisible(False)
 
             def _validate(text, e=edit):
                 try:
@@ -159,28 +231,89 @@ class PresetsPage(QWidget):
                     e.setStyleSheet("border: 1px solid #C62828;")
                     return False
 
-            def _on_edited(text, k=key, e=edit):
+            def _on_combo(_idx, k=key, c=combo, e=edit):
+                if self._loading:
+                    return
+                val = c.currentData()
+                e.setVisible(val == '__custom__')
+                if val != '__custom__':
+                    # 选中的方案直接写入（None=默认→清空）
+                    e.blockSignals(True)
+                    e.setText(val or '')
+                    e.setStyleSheet("")
+                    e.blockSignals(False)
+                    self._save_from_widgets()
+                self._update_rule_tester()
+
+            def _on_edited(text, e=edit):
                 if _validate(text):
                     self._save_from_widgets()
+                self._update_rule_tester()
 
+            combo.currentIndexChanged.connect(_on_combo)
             edit.textChanged.connect(_on_edited)
-            reset_btn = QPushButton("重置")
-            reset_btn.setProperty("flat", "true")
-            reset_btn.setCursor(Qt.PointingHandCursor)
-            reset_btn.clicked.connect(lambda _=False, e=edit: e.setText(''))
-            g.addWidget(lab, row, 0)
-            g.addWidget(edit, row, 1)
-            g.addWidget(reset_btn, row, 2)
-            self._rule_edits[key] = edit
 
-        hint = QLabel("留空使用默认规则。示例：法律条文可将一级标题改为 ^第[一二三四五六七八九十百]+条")
-        hint.setProperty("muted", "true")
-        hint.setWordWrap(True)
-        g.addWidget(hint, len(RULE_FIELDS), 0, 1, 3)
-        g.setColumnStretch(1, 1)
+            g.addWidget(lab, row, 0)
+            g.addWidget(combo, row, 1)
+            g.addWidget(edit, row, 2)
+            self._rule_edits[key] = edit
+            self._rule_combos[key] = combo
+
+        # ---- 实时测试：粘贴一行文字，看会被识别成什么 ----
+        test_row = len(RULE_FIELDS) + 1
+        test_lab = QLabel("规则测试")
+        self.rule_test_edit = QLineEdit()
+        self.rule_test_edit.setPlaceholderText("在这里粘贴文档中的一行文字，立即查看它会被识别成什么")
+        self.rule_test_edit.textChanged.connect(self._update_rule_tester)
+        self.rule_test_result = QLabel("")
+        self.rule_test_result.setProperty("muted", "true")
+        self.rule_test_result.setWordWrap(True)
+        g.addWidget(test_lab, test_row, 0)
+        g.addWidget(self.rule_test_edit, test_row, 1, 1, 2)
+        g.addWidget(self.rule_test_result, test_row + 1, 1, 1, 2)
+
+        g.setColumnStretch(1, 2)
+        g.setColumnStretch(2, 3)
         sec.set_body_layout(g)
         self._sections.append(sec)
         self.editor_lay.addWidget(sec)
+
+    def _current_rules(self):
+        rules = {}
+        for key, edit in self._rule_edits.items():
+            val = edit.text().strip()
+            if val:
+                rules[key] = val
+        return rules
+
+    def _update_rule_tester(self, *_args):
+        text = self.rule_test_edit.text().strip() if hasattr(self, 'rule_test_edit') else ''
+        if not text:
+            self.rule_test_result.setText("")
+            return
+        from scripts.formatter import _compile_rules
+        compiled = _compile_rules(self._current_rules())
+        # 按引擎优先级顺序测试（与 detect_para_type 中的顺序一致）
+        order = ['security', 'docnum', 'heading1', 'heading2', 'heading3',
+                 'heading4', 'recipient', 'attachment', 'closing', 'date', 'signature']
+        matched = []
+        for key in order:
+            rule = compiled.get(key)
+            if rule is None:
+                continue
+            hit = rule.search(text) if key == 'signature' else rule.match(text)
+            if hit:
+                matched.append(key)
+        if matched:
+            first = RULE_TYPE_LABELS.get(matched[0], matched[0])
+            others = [RULE_TYPE_LABELS.get(k, k) for k in matched[1:]]
+            msg = "✓ 这行文字符合「{}」的识别规则{}".format(first, key_pos_note(matched[0]))
+            if others:
+                msg += "；也符合：{}（实际按引擎优先级和段落位置综合判断）".format('、'.join(others))
+            self.rule_test_result.setText(msg)
+        else:
+            self.rule_test_result.setText(
+                "○ 不符合任何要素规则，将结合位置识别为正文、标题或落款等")
 
     def _build_page_section(self):
         sec = CollapsibleSection("页面与页码", expanded=True)
@@ -399,8 +532,23 @@ class PresetsPage(QWidget):
 
         rules = p.get('detect_rules', {}) or {}
         for key, edit in self._rule_edits.items():
-            edit.setText(rules.get(key, ''))
+            combo = self._rule_combos[key]
+            pattern = rules.get(key, '')
+            edit.setText(pattern)
             edit.setStyleSheet("")
+            if not pattern:
+                combo.setCurrentIndex(0)          # 默认规则
+                edit.setVisible(False)
+            else:
+                idx = combo.findData(pattern)      # 命中某个内置方案
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+                    edit.setVisible(False)
+                else:
+                    combo.setCurrentIndex(combo.findData('__custom__'))
+                    edit.setVisible(True)
+        if hasattr(self, 'rule_test_edit'):
+            self._update_rule_tester()
 
         self._loading = False
         for sec in self._sections:

@@ -51,35 +51,41 @@ def analyze_punctuation(doc):
     # 使用负向前瞻确保不是连续句点的一部分
     period_pattern = r'(?<=[\u4e00-\u9fff])\.(?!\.)'
     
-    for i, para in enumerate(doc.paragraphs):
-        text = para.text
+    def _scan_text(text, location):
         if not text.strip():
-            continue
-        
+            return
         # 只在包含中文的段落中检查
         if not re.search(r'[\u4e00-\u9fff]', text):
-            continue
-        
+            return
         for name, pattern in patterns:
             for match in re.finditer(pattern, text):
-                issues.append({
-                    'para': i + 1,
-                    'type': name,
-                    'char': match.group(),
-                })
-        
+                issues.append({'para': location, 'type': name, 'char': match.group()})
         # 检查省略号（连续多个点）
         for match in re.finditer(ellipsis_pattern, text):
-            issues.append({'para': i + 1, 'type': '不规范省略号', 'char': match.group()})
-        
+            issues.append({'para': location, 'type': '不规范省略号', 'char': match.group()})
         # 检查破折号
         for match in re.finditer(dash_pattern, text):
-            issues.append({'para': i + 1, 'type': '不规范破折号', 'char': match.group()})
-        
+            issues.append({'para': location, 'type': '不规范破折号', 'char': match.group()})
         # 检查句末英文句号（中文后面的单独句点）
         for match in re.finditer(period_pattern, text):
-            issues.append({'para': i + 1, 'type': '英文句号', 'char': match.group()})
-    
+            issues.append({'para': location, 'type': '英文句号', 'char': match.group()})
+
+    for i, para in enumerate(doc.paragraphs):
+        _scan_text(para.text, i + 1)
+
+    # 表格单元格同样检查（修复模式会处理表格，诊断覆盖面应一致）
+    for t_idx, table in enumerate(doc.tables):
+        seen_tc = set()
+        for row in table.rows:
+            for cell in tuple(row.cells):
+                # 合并单元格会在多行重复出现，按底层 XML 去重
+                tc_id = id(cell._tc)
+                if tc_id in seen_tc:
+                    continue
+                seen_tc.add(tc_id)
+                for para in cell.paragraphs:
+                    _scan_text(para.text, '表{}'.format(t_idx + 1))
+
     return issues
 
 
