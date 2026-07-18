@@ -31,6 +31,27 @@ MAX_PARAS = 500
 
 ALIGN_CSS = {'left': 'left', 'center': 'center', 'right': 'right', 'justify': 'justify'}
 
+# 预览字体回退链：本机未安装方正字体时退到同族常见字体，
+# 保证标题黑体/楷体/仿宋/加粗等样式差异在预览里肉眼可见
+_CSS_FONT_FALLBACK = {
+    '方正小标宋_GBK': '"方正小标宋_GBK","方正小标宋简体","华文中宋","SimSun","宋体"',
+    '方正小标宋简体': '"方正小标宋简体","华文中宋","SimSun","宋体"',
+    '方正黑体_GBK': '"方正黑体_GBK","黑体","SimHei","Microsoft YaHei"',
+    '黑体': '"黑体","SimHei","Microsoft YaHei"',
+    '方正楷体_GBK': '"方正楷体_GBK","楷体","楷体_GB2312","KaiTi"',
+    '楷体_GB2312': '"楷体_GB2312","楷体","KaiTi"',
+    '楷体': '"楷体","KaiTi"',
+    '方正仿宋_GBK': '"方正仿宋_GBK","仿宋_GB2312","仿宋","FangSong"',
+    '仿宋_GB2312': '"仿宋_GB2312","仿宋","FangSong"',
+    '仿宋': '"仿宋","FangSong"',
+    '宋体': '"宋体","SimSun"',
+    '华文中宋': '"华文中宋","宋体","SimSun"',
+}
+
+
+def _css_font(name):
+    return _CSS_FONT_FALLBACK.get(name, '"{}"'.format(name))
+
 
 def _read_paragraphs(path):
     """返回 (段落列表[(text, alignment)], 表格数, 总段数)。
@@ -132,7 +153,7 @@ def render_after_html(paras, preset, overrides=None):
         fmt = preset.get(ptype if ptype in preset else 'body', preset.get('body', {}))
 
         style = [
-            'font-family:"{}"'.format(fmt.get('font_cn', '仿宋_GB2312')),
+            'font-family:{}'.format(_css_font(fmt.get('font_cn', '仿宋_GB2312'))),
             'font-size:{}pt'.format(fmt.get('size', 16)),
             'text-align:{}'.format(ALIGN_CSS.get(fmt.get('align', 'left'), 'left')),
         ]

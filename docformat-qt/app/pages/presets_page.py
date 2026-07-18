@@ -204,6 +204,8 @@ class PresetsPage(QWidget):
             "+ 表示出现一次或多次，| 表示「或」。例如 ^第[一二三四五六七八九十百]+条 匹配「第十三条」。")
         intro.setProperty("muted", "true")
         intro.setWordWrap(True)
+        # 允许鼠标选中复制（^ $ \d 等符号手打不便）
+        intro.setTextInteractionFlags(Qt.TextSelectableByMouse)
         g.addWidget(intro, 0, 0, 1, 3)
 
         for row, (key, label, tip, options) in enumerate(RULE_FIELDS, start=1):
@@ -236,7 +238,15 @@ class PresetsPage(QWidget):
                     return
                 val = c.currentData()
                 e.setVisible(val == '__custom__')
-                if val != '__custom__':
+                if val == '__custom__':
+                    # 预填当前生效的规则（此前选中的方案或默认规则），
+                    # 在现有规则基础上改，比从空白写正则容易得多
+                    if not e.text().strip():
+                        e.blockSignals(True)
+                        e.setText(DEFAULT_DETECT_RULES[k])
+                        e.setStyleSheet("")
+                        e.blockSignals(False)
+                else:
                     # 选中的方案直接写入（None=默认→清空）
                     e.blockSignals(True)
                     e.setText(val or '')
@@ -268,6 +278,7 @@ class PresetsPage(QWidget):
         self.rule_test_result = QLabel("")
         self.rule_test_result.setProperty("muted", "true")
         self.rule_test_result.setWordWrap(True)
+        self.rule_test_result.setTextInteractionFlags(Qt.TextSelectableByMouse)
         g.addWidget(test_lab, test_row, 0)
         g.addWidget(self.rule_test_edit, test_row, 1, 1, 2)
         g.addWidget(self.rule_test_result, test_row + 1, 1, 1, 2)

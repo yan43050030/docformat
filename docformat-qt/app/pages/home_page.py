@@ -306,6 +306,14 @@ class HomePage(QWidget):
             self._refresh_file_ui()
 
     def clear_files(self):
+        # 多个文件时先确认，避免误触（清空按钮就在每行移除按钮正上方）
+        if len(self.files) > 1:
+            ret = QMessageBox.question(
+                self, "清空列表",
+                "确定移除列表中的全部 {} 个文件吗？（不会删除文件本身）".format(len(self.files)),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ret != QMessageBox.Yes:
+                return
         self.files = []
         self._refresh_file_ui()
 
