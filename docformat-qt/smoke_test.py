@@ -182,6 +182,51 @@ def test_type_overrides():
     print('[8] 手动类型覆盖: 生效 通过')
 
 
+def test_official_gbk():
+    """图解标准模板：A4 + 3.8/3.3/2.8/2.8 边距 + 22行28字网格 + 落款对位"""
+    from scripts.formatter import format_document
+    from docx.oxml.ns import qn as _qn
+    out = os.path.join(OUT_DIR, 'sample_gbk.docx')
+    format_document(SRC, out, preset_name='official_gbk')
+    doc = Document(out)
+    sec = doc.sections[0]
+    assert abs(sec.page_width.cm - 21.0) < 0.05 and abs(sec.page_height.cm - 29.7) < 0.05, \
+        'A4 页面未设置: {}x{}'.format(sec.page_width.cm, sec.page_height.cm)
+    assert abs(sec.top_margin.cm - 3.8) < 0.05 and abs(sec.bottom_margin.cm - 3.3) < 0.05
+    assert abs(sec.left_margin.cm - 2.8) < 0.05 and abs(sec.right_margin.cm - 2.8) < 0.05
+
+    grid = sec._sectPr.find(_qn('w:docGrid'))
+    assert grid is not None, '文档网格未写入'
+    assert grid.get(_qn('w:type')) == 'linesAndChars'
+    lp = int(grid.get(_qn('w:linePitch')))
+    assert 570 <= lp <= 595, '每页22行 linePitch 异常: {}'.format(lp)
+    cs = int(grid.get(_qn('w:charSpace')))
+    assert -1750 <= cs <= -1600, '每行28字 charSpace 异常: {}'.format(cs)
+
+    # 标题：方正小标宋_GBK 二号加粗
+    title = [pp for pp in doc.paragraphs if '安全生产检查' in pp.text][0]
+    trun = title.runs[0]
+    tea = trun._element.rPr.rFonts.get(_qn('w:eastAsia'))
+    assert tea == '方正小标宋_GBK', '标题字体: {}'.format(tea)
+    assert trun.font.bold, '标题应加粗'
+
+    # 正文：方正仿宋_GBK 三号加粗
+    body = [pp for pp in doc.paragraphs if '为深入贯彻' in pp.text][0]
+    brun = body.runs[0]
+    bea = brun._element.rPr.rFonts.get(_qn('w:eastAsia'))
+    assert bea == '方正仿宋_GBK', '正文字体: {}'.format(bea)
+    assert brun.font.bold, '正文应加粗（图解要求）'
+
+    # 落款对位：署名7字 > 日期6.5字 → 署名右空2字(32pt)，日期右缩进0.5字(8pt)
+    sig = [pp for pp in doc.paragraphs if pp.text.strip() == '某某公司办公室'][0]
+    date = [pp for pp in doc.paragraphs if pp.text.strip() == '2026年7月17日'][0]
+    s_ri = sig.paragraph_format.right_indent.pt
+    d_ri = date.paragraph_format.right_indent.pt
+    assert abs(s_ri - 32) < 0.5, '署名右缩进: {}'.format(s_ri)
+    assert abs(d_ri - 8) < 0.5, '日期右缩进: {}'.format(d_ri)
+    print('[9] 图解标准模板: A4/边距/22行28字网格/GBK字体加粗/落款对位 通过')
+
+
 if __name__ == '__main__':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     make_sample()
@@ -192,4 +237,5 @@ if __name__ == '__main__':
     test_ai_paste()
     test_punct_edges()
     test_type_overrides()
+    test_official_gbk()
     print('\n全部冒烟测试通过 ✓')

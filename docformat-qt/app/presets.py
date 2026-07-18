@@ -9,7 +9,7 @@ from pathlib import Path
 
 from scripts.formatter import PRESETS as BUILTIN_PRESETS
 
-BUILTIN_ORDER = ['official', 'academic', 'legal']
+BUILTIN_ORDER = ['official_gbk', 'official', 'academic', 'legal']
 
 
 def config_dir():
@@ -41,7 +41,7 @@ class PresetManager(object):
 
     def __init__(self):
         self.user = {}       # key -> preset dict
-        self.active_key = 'official'
+        self.active_key = 'official_gbk'   # 默认使用图解标准版
         self.load()
 
     # ---------- 持久化 ----------
@@ -125,7 +125,7 @@ class PresetManager(object):
         if key in self.user:
             del self.user[key]
             if self.active_key == key:
-                self.active_key = 'official'
+                self.active_key = 'official_gbk'
             self.save()
 
     def update(self, key, preset):

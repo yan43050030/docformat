@@ -40,6 +40,10 @@
 
 ## 快速开始（Windows）
 
+已打包的独立 exe（免 Python 环境）请到 [Releases 页面](../../releases) 下载。
+
+源码运行 / 自行打包：
+
 ```bat
 cd docformat-qt
 pip install -r requirements.txt

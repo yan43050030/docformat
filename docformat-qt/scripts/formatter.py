@@ -132,7 +132,10 @@ MACOS_FONT_FALLBACK = {
     '楷体': 'STKaiti',
     '宋体': 'STSong',
     '方正小标宋简体': 'STSong',
+    '方正小标宋_GBK': 'STSong',
     '方正仿宋_GBK': 'STFangsong',
+    '方正黑体_GBK': 'STHeiti',
+    '方正楷体_GBK': 'STKaiti',
     '华文仿宋': 'STFangsong',
     '华文中宋': 'STZhongsong',
 }
@@ -344,9 +347,100 @@ def _merge_preset_settings(base, overrides):
     return merged
 
 PRESETS = {
+    # 图解标准版：方正 GBK 字体系列，上3.8/下3.3/左右2.8cm，
+    # 每页 22 行、每行 28 字（文档网格），行距固定 28 磅，
+    # 落款按"日期右空2字、署名与日期首字错2字"规则对位
+    'official_gbk': {
+        'name': '公文格式（图解版·22行28字）',
+        'deep_clean': False,
+        'page_number': True,
+        'page_number_font': '宋体',
+        'page_number_size': 14,   # 四号
+        'page_number_style': 'dash',
+        'page_number_position': 'outside',
+        'page_number_offset_mm': 7,
+        'replace_existing_page_number': True,
+        'page': {'top': 3.8, 'bottom': 3.3, 'left': 2.8, 'right': 2.8},
+        'page_size': 'A4',
+        'grid': {'lines_per_page': 22, 'chars_per_line': 28},
+        'gb_signature_layout': True,
+        # 密级：方正黑体三号加粗，顶格
+        'security': {
+            'font_cn': '方正黑体_GBK', 'font_en': 'Times New Roman',
+            'size': 16, 'bold': True, 'align': 'left', 'indent': 0,
+            'space_before': 0, 'space_after': 0,
+        },
+        # 发文字号：仿宋三号，居中
+        'docnum': {
+            'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
+            'size': 16, 'bold': False, 'align': 'center', 'indent': 0,
+            'space_before': 0, 'space_after': 0,
+        },
+        # 标题：方正小标宋_GBK 二号加粗，居中
+        'title': {
+            'font_cn': '方正小标宋_GBK', 'font_en': 'Times New Roman',
+            'size': 22, 'bold': True, 'align': 'center', 'indent': 0,
+            'space_before': 0, 'space_after': 0,
+        },
+        # 主送机关：方正仿宋_GBK 三号加粗，顶格
+        'recipient': {
+            'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
+            'size': 16, 'bold': True, 'align': 'left', 'indent': 0,
+        },
+        # 一级标题：方正黑体_GBK 三号加粗
+        'heading1': {
+            'font_cn': '方正黑体_GBK', 'font_en': 'Times New Roman',
+            'size': 16, 'bold': True, 'align': 'left', 'indent': 32,
+            'space_before': 0, 'space_after': 0,
+        },
+        # 二级标题：方正楷体_GBK 三号加粗
+        'heading2': {
+            'font_cn': '方正楷体_GBK', 'font_en': 'Times New Roman',
+            'size': 16, 'bold': True, 'align': 'left', 'indent': 32,
+            'space_before': 0, 'space_after': 0,
+        },
+        # 三级标题：方正仿宋_GBK 三号，数字 Times New Roman，加粗
+        'heading3': {
+            'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
+            'size': 16, 'bold': True, 'align': 'left', 'indent': 32,
+            'space_before': 0, 'space_after': 0,
+        },
+        # 四级标题：同三级
+        'heading4': {
+            'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
+            'size': 16, 'bold': True, 'align': 'left', 'indent': 32,
+            'space_before': 0, 'space_after': 0,
+        },
+        # 正文：方正仿宋_GBK 三号加粗，首行缩进2字，行距固定28磅
+        'body': {
+            'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
+            'size': 16, 'bold': True, 'align': 'justify', 'indent': 32,
+            'line_spacing': 28,
+        },
+        # 落款署名：右对齐（具体对位由 gb_signature_layout 计算）
+        'signature': {
+            'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
+            'size': 16, 'bold': True, 'align': 'right', 'indent': 0,
+        },
+        # 落款日期：右空2字（由 gb_signature_layout 计算）
+        'date': {
+            'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
+            'size': 16, 'bold': True, 'align': 'right', 'indent': 0,
+        },
+        # 附件说明：方正仿宋_GBK 三号加粗
+        'attachment': {
+            'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
+            'size': 16, 'bold': True, 'align': 'justify', 'indent': 0,
+        },
+        'closing': {
+            'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
+            'size': 16, 'bold': True, 'align': 'left', 'indent': 32,
+        },
+    },
     'official': {
         'name': '公文格式',
         'deep_clean': False,
+        'page_size': 'A4',
         'page_number': True,
         'page_number_font': '宋体',
         'page_number_size': 14,
@@ -525,6 +619,95 @@ PRESETS = {
         'closing': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 14, 'bold': False, 'align': 'left', 'indent': 28},
     },
 }
+
+
+def _apply_page_grid(doc, lines_per_page, chars_per_line, base_font_size_pt):
+    """设置 Word 文档网格（页面设置 → 文档网格）：每页行数 + 每行字符数。
+
+    - linePitch：版心高度 / 每页行数（单位 twips）。行距为固定值的段落
+      不受行网格影响，但 3.8/3.3cm 边距 + 28 磅固定行距本身就恰好排 22 行。
+    - charSpace：字符间距增量，单位 1/4096 磅，相对 Normal 样式字号；
+      版心宽 / 每行字数 得到字符跨度，与基准字号的差乘 4096。
+      为此需要同时把 Normal 样式基准字号设为正文字号。
+    """
+    for section in doc.sections:
+        sect_pr = section._sectPr
+        grid = sect_pr.find(qn('w:docGrid'))
+        if grid is None:
+            grid = OxmlElement('w:docGrid')
+            sect_pr.append(grid)
+
+        page_h = section.page_height or Cm(29.7)
+        page_w = section.page_width or Cm(21.0)
+        text_h_twips = page_h.twips - section.top_margin.twips - section.bottom_margin.twips
+        line_pitch = int(round(float(text_h_twips) / lines_per_page))
+        grid.set(qn('w:type'), 'linesAndChars' if chars_per_line else 'lines')
+        grid.set(qn('w:linePitch'), str(line_pitch))
+
+        if chars_per_line:
+            text_w_pt = page_w.pt - section.left_margin.pt - section.right_margin.pt
+            pitch_pt = text_w_pt / chars_per_line
+            char_space = int(round((pitch_pt - base_font_size_pt) * 4096))
+            grid.set(qn('w:charSpace'), str(char_space))
+
+
+def _set_normal_style_font(doc, font_cn, font_en, size_pt):
+    """把 Normal 样式的基准字体/字号设为正文配置。
+
+    文档网格的每行字符数以 Normal 样式字号为基准计算；同时也让未被
+    逐段格式化覆盖到的内容（如新插入段落）有正确的默认字体。
+    """
+    try:
+        style = doc.styles['Normal']
+        style.font.name = font_en
+        style.font.size = Pt(size_pt)
+        rpr = style.element.get_or_add_rPr()
+        rfonts = rpr.find(qn('w:rFonts'))
+        if rfonts is None:
+            rfonts = OxmlElement('w:rFonts')
+            rpr.insert(0, rfonts)
+        rfonts.set(qn('w:eastAsia'), font_cn)
+    except Exception:
+        pass
+
+
+def _apply_gb_signature_layout(typed_entries, preset):
+    """公文落款对位（图解标准）：
+
+    - 成文日期长于（含等于）署名：日期右空 2 字，署名首字比日期首字左移 2 字
+      （即署名右缩进 = 日期长 + 4 - 署名长）
+    - 成文日期短于署名：署名右空 2 字，日期首字比署名首字右移 2 字
+      （即日期右缩进 = 署名长 - 日期长）
+    长度按字符宽度计（汉字 1 字、英文数字 0.5 字）。
+    """
+    for idx, (para, ptype) in enumerate(typed_entries):
+        if ptype != 'date':
+            continue
+        sigs = []
+        j = idx - 1
+        while j >= 0 and typed_entries[j][1] == 'signature':
+            sigs.append(typed_entries[j][0])
+            j -= 1
+        if not sigs:
+            continue
+
+        size_d = (preset.get('date', {}) or {}).get('size', 16) or 16
+        size_s = (preset.get('signature', {}) or {}).get('size', 16) or 16
+        dlen = _text_weight(para.text.strip())
+        slen = max(_text_weight(s.text.strip()) for s in sigs)
+
+        if dlen >= slen:
+            d_right = 2.0
+            s_right = dlen + 4.0 - slen
+        else:
+            s_right = 2.0
+            d_right = slen - dlen
+
+        para.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        para.paragraph_format.right_indent = Pt(d_right * size_d)
+        for s in sigs:
+            s.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            s.paragraph_format.right_indent = Pt(s_right * size_s)
 
 
 def remove_background(doc):
@@ -1854,12 +2037,34 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
     _progress(5, 100, '设置页面边距...')
     page = preset['page']
     for section in doc.sections:
+        # 公文标准为 A4；python-docx 新建文档默认 Letter，需显式设置，
+        # 否则 AI 粘贴生成的文档页面尺寸错误、网格行数也算不准
+        if preset.get('page_size') == 'A4':
+            section.page_width = Cm(21.0)
+            section.page_height = Cm(29.7)
         section.top_margin = Cm(page['top'])
         section.bottom_margin = Cm(page['bottom'])
         section.left_margin = Cm(page['left'])
         section.right_margin = Cm(page['right'])
 
-    body_line_spacing = preset.get('body', {}).get('line_spacing', 28) or 28
+    body_fmt_cfg = preset.get('body', {})
+    body_line_spacing = body_fmt_cfg.get('line_spacing', 28) or 28
+
+    # 文档网格：每页 N 行 / 每行 M 字（如图解标准 22 行 × 28 字）
+    grid_cfg = preset.get('grid')
+    if grid_cfg and grid_cfg.get('lines_per_page'):
+        _set_normal_style_font(
+            doc,
+            body_fmt_cfg.get('font_cn', '仿宋_GB2312'),
+            body_fmt_cfg.get('font_en', 'Times New Roman'),
+            body_fmt_cfg.get('size', 16) or 16,
+        )
+        _apply_page_grid(
+            doc,
+            grid_cfg.get('lines_per_page'),
+            grid_cfg.get('chars_per_line'),
+            body_fmt_cfg.get('size', 16) or 16,
+        )
 
     # 标准公文版式保留两处可见空行：标题后、落款前。
     # v1.7.2: 清理 styles.xml 里的 Autospacing 属性，避免内置样式覆盖直接属性
@@ -1880,6 +2085,7 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
     }
     
     prev_para_type = None
+    typed_entries = []   # [(para, para_type)]，供落款对位等后处理使用
 
     for i, para in enumerate(doc.paragraphs):
         text = para.text.strip()
@@ -1920,7 +2126,8 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
             bold_serial=bold_serial
         )
         stats[para_type] = stats.get(para_type, 0) + 1
-        
+        typed_entries.append((para, para_type))
+
         # 打印处理信息
         preview = text[:35] + '...' if len(text) > 35 else text
         logger.info(f'   [{para_type:10}] {preview}')
@@ -1937,6 +2144,10 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
     structural_blank_ids.update(_ensure_structural_blank_lines(
         doc, body_line_spacing, rules=_active_rules, type_overrides=type_overrides))
     _format_empty_paragraphs(doc, structural_blank_ids, body_line_spacing)
+
+    # 落款对位（日期右空2字、署名与日期首字错2字），在段落格式化之后覆盖
+    if preset.get('gb_signature_layout'):
+        _apply_gb_signature_layout(typed_entries, preset)
     
     # 4. 处理表格
     logger.info('4. Formatting tables...')
