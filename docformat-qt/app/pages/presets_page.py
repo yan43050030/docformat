@@ -79,9 +79,9 @@ _RULE_POS_NOTES = {
 def key_pos_note(key):
     return _RULE_POS_NOTES.get(key, '')
 
-CN_FONTS = ['方正小标宋简体', '方正仿宋_GBK', '仿宋_GB2312', '仿宋', '黑体',
-            '楷体_GB2312', '楷体', '宋体', '华文中宋', '方正书宋_GBK',
-            '方正楷体_GBK', '方正黑体_GBK']
+CN_FONTS = ['方正小标宋_GBK', '方正小标宋简体', '方正仿宋_GBK', '仿宋_GB2312',
+            '仿宋', '黑体', '楷体_GB2312', '楷体', '宋体', '华文中宋',
+            '方正书宋_GBK', '方正楷体_GBK', '方正黑体_GBK']
 EN_FONTS = ['Times New Roman', 'Arial', 'Calibri', 'Cambria', 'Georgia']
 FONT_SIZES = [('初号 42', 42), ('小初 36', 36), ('一号 26', 26), ('小一 24', 24),
               ('二号 22', 22), ('小二 18', 18), ('三号 16', 16), ('小三 15', 15),
