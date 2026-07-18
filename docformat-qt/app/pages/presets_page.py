@@ -166,7 +166,7 @@ class PresetsPage(QWidget):
             bar.addWidget(btn)
         root.addWidget(bar_card)
 
-        self.builtin_hint = QLabel("内置预设为只读，可点击「复制」生成可编辑的自定义模板")
+        self.builtin_hint = QLabel("内置预设参数只读（名称可通过「重命名」修改），点击「复制」可生成参数可编辑的自定义模板")
         self.builtin_hint.setProperty("muted", "true")
         root.addWidget(self.builtin_hint)
 
@@ -555,7 +555,7 @@ class PresetsPage(QWidget):
             sec.set_editable(not is_builtin)
         self.builtin_hint.setVisible(is_builtin)
         self.delete_btn.setEnabled(not is_builtin)
-        self.rename_btn.setEnabled(not is_builtin)
+        self.rename_btn.setEnabled(True)   # 内置模板也允许改名（参数仍只读）
 
     @staticmethod
     def _set_combo_data(combo, value):
@@ -628,8 +628,6 @@ class PresetsPage(QWidget):
         self.presetsChanged.emit()
 
     def _rename(self):
-        if self.mgr.is_builtin(self.current_key):
-            return
         name, ok = QInputDialog.getText(self, "重命名", "新名称：",
                                         text=self.preset.get('name', ''))
         if ok and name.strip():

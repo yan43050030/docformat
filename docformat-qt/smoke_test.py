@@ -227,6 +227,42 @@ def test_official_gbk():
     print('[9] 图解标准模板: A4/边距/22行28字网格/GBK字体加粗/落款对位 通过')
 
 
+def test_text_input():
+    """.txt/.md 输入：ensure_docx 转换链 + 编码兼容 + Tab 清洗"""
+    from app.worker import ensure_docx, read_text_file
+    import shutil
+    md_path = os.path.join(OUT_DIR, 'draft.md')
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write('# 关于文本输入的通知\n\n\t各部门:\n\n- 做好准备工作。\n')
+    work, tmp_dir = ensure_docx(md_path, lambda *a: None)
+    assert work.endswith('.docx') and os.path.exists(work), 'txt/md 未转换为 docx'
+    text = '\n'.join(p.text for p in Document(work).paragraphs)
+    assert '关于文本输入的通知' in text and '#' not in text, 'markdown 标记未清洗'
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    gbk_path = os.path.join(OUT_DIR, 'gbk.txt')
+    with open(gbk_path, 'wb') as f:
+        f.write('中文GBK编码测试'.encode('gb18030'))
+    assert read_text_file(gbk_path) == '中文GBK编码测试', 'GBK 编码读取失败'
+
+    from scripts.punctuation import _process_spaces_text
+    assert _process_spaces_text('\t首行用Tab顶格的段落', 'keep_en_words') == '首行用Tab顶格的段落', 'Tab 未清洗'
+    print('[10] 文本输入: md/txt 转换 + GBK 编码 + Tab 清洗 通过')
+
+
+def test_builtin_rename():
+    from app.presets import PresetManager
+    mgr = PresetManager()
+    orig = mgr.get('official_gbk')['name']
+    mgr.rename('official_gbk', '本单位公文标准')
+    mgr2 = PresetManager()
+    assert mgr2.get('official_gbk')['name'] == '本单位公文标准', '内置模板改名未持久化'
+    assert dict((k, n) for k, n, _b in mgr2.list_all())['official_gbk'] == '本单位公文标准'
+    mgr2.rename('official_gbk', orig)   # 恢复默认名
+    assert 'official_gbk' not in PresetManager().builtin_names
+    print('[11] 内置模板重命名: 持久化 + 恢复默认 通过')
+
+
 if __name__ == '__main__':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     make_sample()
@@ -238,4 +274,6 @@ if __name__ == '__main__':
     test_punct_edges()
     test_type_overrides()
     test_official_gbk()
+    test_text_input()
+    test_builtin_rename()
     print('\n全部冒烟测试通过 ✓')

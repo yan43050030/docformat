@@ -5,7 +5,7 @@ import os
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QFrame, QLabel, QVBoxLayout
 
-ALLOWED_EXTS = ('.docx', '.doc', '.wps')
+ALLOWED_EXTS = ('.docx', '.doc', '.wps', '.txt', '.md')
 
 
 def filter_paths(urls):
@@ -47,7 +47,7 @@ class DropZone(QFrame):
         self.title = QLabel("拖拽文件到此处，或点击选择")
         self.title.setObjectName("DropTitle")
         self.title.setAlignment(Qt.AlignCenter)
-        self.hint = QLabel("支持 .docx / .doc / .wps 格式，可多选文件或拖入文件夹")
+        self.hint = QLabel("支持 .docx / .doc / .wps / .txt / .md 格式，可多选文件或拖入文件夹")
         self.hint.setObjectName("DropHint")
         self.hint.setAlignment(Qt.AlignCenter)
 

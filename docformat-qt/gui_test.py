@@ -26,6 +26,7 @@ from app.presets import PresetManager, templates_path
 
 win = MainWindow()
 home = win.home_page
+home.font_check_enabled = False   # 测试容器没有方正字体，跳过缺字体确认弹窗
 
 
 def wait_for(signal, timeout_ms=60000):
@@ -193,6 +194,24 @@ app.processEvents()
 assert '一级标题' in pp.rule_test_result.text(), '规则测试器未识别: {}'.format(pp.rule_test_result.text())
 win.mgr.delete(key2)
 print('[11] 自定义识别规则编辑/持久化/生效 + 方案下拉 + 实时测试 ✓')
+
+# ---------- 9b. txt 文件预览 ----------
+txt_path = os.path.join(SMOKE, 'preview.txt')
+with open(txt_path, 'w', encoding='utf-8') as f:
+    f.write('关于测试预览的通知\n\n各部门：\n\n一、做好文本预览。\n')
+tp, ttables, ttotal = _read_paragraphs(txt_path)
+assert any('关于测试预览' in t for t, _a in tp), 'txt 预览读取失败'
+txt_html = render_after_html(tp, preset_official)
+assert '一级标题' in txt_html, 'txt 预览未走类型识别'
+print('[11b] txt/md 文件预览 ✓')
+
+# ---------- 9c. 缺字体检测 ----------
+home.font_check_enabled = True
+missing = home._missing_fonts()
+assert isinstance(missing, list) and '方正仿宋_GBK' in missing, \
+    '离屏环境应检测到方正字体缺失: {}'.format(missing)
+home.font_check_enabled = False
+print('[11c] 排版字体缺失检测 ✓')
 
 # ---------- 10. 文件列表状态标记 ----------
 home.file_list.set_files([SAMPLE])
