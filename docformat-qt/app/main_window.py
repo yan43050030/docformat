@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""主窗口：侧边栏导航 + 四页堆叠 + 底部状态栏"""
+"""主窗口：侧边栏导航 + 六页堆叠 + 底部状态栏"""
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel,
                              QMainWindow, QMessageBox, QPushButton,
@@ -11,9 +11,12 @@ from app.pages.home_page import HomePage
 from app.pages.presets_page import PresetsPage
 from app.pages.theme_page import ThemePage
 from app.pages.log_page import LogPage
+from app.pages.template_draft_page import TemplateDraftPage
+from app.pages.template_maker_page import TemplateMakerPage
 
-VERSION = '1.2.0'
-NAV_ITEMS = [('处理', 0), ('预设方案', 1), ('主题', 2), ('日志', 3)]
+VERSION = '2.0.0'
+NAV_ITEMS = [('处理', 0), ('预设方案', 1), ('主题', 2), ('日志', 3),
+             ('模板起草', 4), ('模板制作', 5)]
 
 
 class MainWindow(QMainWindow):
@@ -81,7 +84,10 @@ class MainWindow(QMainWindow):
         self.presets_page = PresetsPage(self.mgr)
         self.theme_page = ThemePage()
         self.log_page = LogPage()
-        for page in [self.home_page, self.presets_page, self.theme_page, self.log_page]:
+        self.template_draft_page = TemplateDraftPage(self.mgr)
+        self.template_maker_page = TemplateMakerPage()
+        for page in [self.home_page, self.presets_page, self.theme_page, self.log_page,
+                     self.template_draft_page, self.template_maker_page]:
             self.stack.addWidget(page)
 
         body.addWidget(sidebar)
@@ -121,6 +127,8 @@ class MainWindow(QMainWindow):
             self.presets_page.reload()
         elif idx == 0:
             self.home_page.reload_presets()
+        elif idx == 4:
+            self.template_draft_page._load_template_list()
 
     def apply_theme(self, tid):
         self.setStyleSheet(build_qss(tid))
