@@ -104,6 +104,152 @@ def scan_templates(dirs=None):
     return results
 
 
+def read_template_preview(path, max_body_chars=300):
+    """读取模板文件的预览信息，返回 {title, tags, body_preview}
+
+    用于搜索和列表展示，只读一次即可覆盖多个搜索维度。
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = f.read()
+    except Exception:
+        return {"title": "", "tags": [], "body_preview": ""}
+
+    body_part, meta = raw, {}
+    if "---META---" in raw:
+        body_part, meta_part = raw.split("---META---", 1)
+        for line in meta_part.strip().splitlines():
+            if ":" in line or "：" in line:
+                k, v = re.split(r"[:：]", line, 1)
+                meta[k.strip()] = v.strip()
+
+    # 提取标题
+    title = ""
+    body_lines = []
+    for line in body_part.strip().splitlines():
+        s = line.strip()
+        if not s or s.startswith("//"):
+            continue
+        s = INLINE_COMMENT_RE.sub("", s).strip()
+        if not title and (s.startswith("标题:") or s.startswith("标题：")):
+            title = re.split(r"[:：]", s, 1)[1].strip()
+            continue
+        if s:
+            # 避免把 META 重复内容放入预览
+            body_lines.append(s)
+
+    body_preview = "  ".join(body_lines)[:max_body_chars]
+
+    # 标签（META 中的 _tags 或 _tag）
+    tags_raw = meta.get("_tags", "") or meta.get("_tag", "")
+    tags = [t.strip() for t in re.split(r"[，,]", tags_raw) if t.strip()]
+
+    return {"title": title, "tags": tags, "body_preview": body_preview}
+
+
+_TEMPLATE_CACHE = {}       # path → preview dict
+_CACHE_DIRS = None
+
+
+def _refresh_cache(dirs=None):
+    """刷新模板预览缓存"""
+    global _TEMPLATE_CACHE, _CACHE_DIRS
+    if dirs is None:
+        dirs = load_template_dirs()
+    _CACHE_DIRS = list(dirs)
+    _TEMPLATE_CACHE = {}
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(os.listdir(d)):
+            if fn.endswith(".md"):
+                full = os.path.join(d, fn)
+                _TEMPLATE_CACHE[full] = read_template_preview(full)
+
+
+def search_templates(query, dirs=None):
+    """全文搜索模板：匹配文件名、标题、标签、正文预览。
+
+    返回 [(display, path, src_dir, match_hint), ...]
+    match_hint 说明匹配来源，如 "匹配标签「刑事」" 或 "匹配正文内容"。
+    """
+    global _TEMPLATE_CACHE, _CACHE_DIRS
+    if dirs is None:
+        dirs = load_template_dirs()
+    current_dirs = list(dirs)
+
+    # 缓存失效检测
+    if _CACHE_DIRS != current_dirs or not _TEMPLATE_CACHE:
+        _refresh_cache(dirs)
+
+    q = (query or "").strip()
+    if not q:
+        # 无搜索词时返回全部
+        results = []
+        for d in dirs:
+            if not os.path.isdir(d):
+                continue
+            for fn in sorted(os.listdir(d)):
+                if fn.endswith(".md"):
+                    full = os.path.join(d, fn)
+                    results.append((fn[:-3], full, d, ""))
+        return results
+
+    q_lower = q.lower()
+    results = []
+    seen = set()
+
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(os.listdir(d)):
+            if not fn.endswith(".md"):
+                continue
+            full = os.path.join(d, fn)
+            if full in seen:
+                continue
+            seen.add(full)
+
+            display = fn[:-3]
+            hint = None
+
+            # 1) 文件名匹配
+            if q_lower in display.lower():
+                hint = "名称匹配"
+                results.append((display, full, d, hint))
+                continue
+
+            # 2) 标题 / 标签 / 正文匹配
+            preview = _TEMPLATE_CACHE.get(full)
+            if preview is None:
+                continue
+
+            # 标题匹配
+            if q_lower in preview.get("title", "").lower():
+                hint = "匹配标题「{}」".format(
+                    preview["title"][:30] + ("..." if len(preview["title"]) > 30 else ""))
+                results.append((display, full, d, hint))
+                continue
+
+            # 标签匹配
+            for tag in preview.get("tags", []):
+                if q_lower in tag.lower():
+                    hint = "匹配标签「{}」".format(tag)
+                    results.append((display, full, d, hint))
+                    break
+            if hint:
+                continue
+
+            # 正文预览匹配
+            body_lower = preview.get("body_preview", "").lower()
+            if q_lower in body_lower:
+                hint = "匹配正文内容"
+                results.append((display, full, d, hint))
+                continue
+
+    return results
+
+
 def strip_comments(text):
     """移除注释：// 行注释整行删除，【...】行内注释删除"""
     lines = text.splitlines()
