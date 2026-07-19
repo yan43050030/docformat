@@ -31,6 +31,7 @@ from app.template_common import (
     TEMPLATE_DIR, PLACEHOLDER_RE,
     extract_fields, parse_template, render, find_unfilled,
     load_template_dirs, save_template_dirs, scan_templates,
+    bundled_templates_dir, is_bundled_dir,
 )
 
 
@@ -190,9 +191,8 @@ class TemplateDraftPage(QWidget):
             self.list_widget.addItem(it)
 
     def _on_manage_dirs(self):
-        """管理模板目录：查看、添加、移除"""
+        """管理模板目录：查看、添加、移除（自带目录不可移除）"""
         dirs = load_template_dirs()
-        # 构建显示用的目录列表
         home = os.path.expanduser("~")
         labels = []
         for d in dirs:
@@ -201,18 +201,20 @@ class TemplateDraftPage(QWidget):
                 label = "~" + label[len(home):]
             labels.append(label)
 
-        msg = "当前模板目录：\n\n" + "\n".join(
-            "{}. {}".format(i + 1, lbl) for i, lbl in enumerate(labels))
-        msg += "\n\n提示：\n- 「添加」选择一个新目录\n- 「移除」删除列表中选中的目录\n- 至少保留一个目录"
-
         from PyQt5.QtWidgets import QDialog, QListWidget as QL2, QDialogButtonBox
         dlg = QDialog(self)
         dlg.setWindowTitle("管理模板目录")
         dlg.resize(500, 350)
         dlv = QVBoxLayout(dlg)
 
+        hint = QLabel("「软件自带」目录随打包发布，不可移除\n「添加」选择新目录  「移除」删除用户目录")
+        hint.setStyleSheet("color: #888; font-size: 11px;")
+        dlv.addWidget(hint)
+
         dl_list = QL2()
-        for i, (label, d) in enumerate(zip(labels, dirs)):
+        for label, d in zip(labels, dirs):
+            if is_bundled_dir(d):
+                label = label + "（软件自带）"
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, d)
             dl_list.addItem(item)
@@ -242,9 +244,14 @@ class TemplateDraftPage(QWidget):
             if sel is None:
                 return
             d = sel.data(Qt.UserRole)
+            if is_bundled_dir(d):
+                QMessageBox.information(dlg, "提示", "软件自带模板目录不可移除")
+                return
             cur = load_template_dirs()
-            if len(cur) <= 1:
-                QMessageBox.information(dlg, "提示", "至少保留一个模板目录")
+            # 除了自带目录外至少保留一个
+            non_bundled = [x for x in cur if not is_bundled_dir(x)]
+            if len(non_bundled) <= 1 and not is_bundled_dir(d):
+                QMessageBox.information(dlg, "提示", "至少保留一个用户模板目录")
                 return
             if d in cur:
                 cur.remove(d)

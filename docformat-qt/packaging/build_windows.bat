@@ -7,6 +7,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --collect-data docx ^
     --icon assets/icon.ico ^
     --add-data "assets;assets" ^
+    --add-data "templates;templates" ^
     --hidden-import scripts.formatter ^
     --hidden-import scripts.punctuation ^
     --hidden-import scripts.analyzer ^

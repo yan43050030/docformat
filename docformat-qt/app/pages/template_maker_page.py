@@ -41,6 +41,7 @@ from PyQt5.QtCore import Qt
 from app.template_common import (
     TEMPLATE_DIR, PLACEHOLDER_RE,
     load_template_dirs, save_template_dirs,
+    is_bundled_dir,
 )
 
 
@@ -184,10 +185,11 @@ class TemplateMakerPage(QWidget):
         dirs = load_template_dirs()
         for d in dirs:
             label = d
-            # 显示时用 ~ 代替 home 目录
             home = os.path.expanduser("~")
-            if d.startswith(home):
-                label = "~" + d[len(home):]
+            if label.startswith(home):
+                label = "~" + label[len(home):]
+            if is_bundled_dir(d):
+                label = label + "（软件自带）"
             self.dir_combo.addItem(label, d)
 
     def _on_add_dir(self):
