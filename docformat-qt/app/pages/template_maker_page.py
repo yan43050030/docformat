@@ -148,6 +148,15 @@ class TemplateMakerPage(QWidget):
         self.meta_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.meta_table.setMaximumHeight(140)
         self.meta_table.verticalHeader().setVisible(False)
+        # 独立配色：在任何主题下都保持可读
+        self.meta_table.setStyleSheet("""
+            QTableWidget { background: #FAFAFA; border: 1px solid #CCC; border-radius: 6px;
+                gridline-color: #E0E0E0; }
+            QTableWidget::item { padding: 4px 8px; color: #1A1A1A; }
+            QTableWidget::item:selected { background: #DEE2E6; }
+            QHeaderView::section { background: #EEE; color: #333; border: none;
+                border-bottom: 1px solid #CCC; padding: 6px 8px; font-weight: 600; }
+        """)
         meta_bar.addWidget(self.meta_table)
 
         meta_btns = QVBoxLayout()
