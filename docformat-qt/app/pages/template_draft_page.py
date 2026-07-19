@@ -40,12 +40,10 @@ from app.template_common import (
 
 
 def _build_plain_text(rendered):
-    """将渲染后的结构化 dict 拼成纯文本（_ 开头的内部元数据不输出）"""
+    """将渲染后的结构化 dict 拼成纯文本（注释已被 strip_comments 移除）"""
     lines = [rendered["title"], ""]
     lines += [b["text"] for b in rendered["body"]]
     for k, v in rendered["meta"].items():
-        if k.startswith("_"):
-            continue
         lines += ["", "{}: {}".format(k, v)]
     return "\n".join(lines)
 
