@@ -34,6 +34,7 @@ from app.template_common import (
     load_template_dirs, save_template_dirs, scan_templates,
     bundled_templates_dir, is_bundled_dir,
     load_quick_inserts, save_quick_inserts, DEFAULT_QUICK_INSERTS,
+    find_placeholder_at,
 )
 
 
@@ -300,13 +301,28 @@ class TemplateDraftPage(QWidget):
 
     def _on_preview_context_menu(self, pos):
         menu = QMenu(self)
-
-        # 如果有选中文字，增加挖空选项
         cursor = self.preview.textCursor()
+        cursor_pos = cursor.position()
+        full_text = self.preview.toPlainText()
         selected = cursor.selectedText().strip()
+
+        # 光标在占位符上时，提供占位符操作
+        ph_info = find_placeholder_at(full_text, cursor_pos) if not selected else None
+        action_rename = action_fill = action_unhole = None
+        if ph_info:
+            _, field_name, _, _ = ph_info
+            menu.addAction("占位符 {{" + field_name + "}}").setEnabled(False)
+            action_rename = menu.addAction("重命名字段...")
+            action_fill = menu.addAction("填入具体值...")
+            action_unhole = menu.addAction("取消挖空（删除 {{ }} 标记）")
+            menu.addSeparator()
+
+        # 选中文字时，增加挖空选项
+        action_hole = None
         if selected:
-            action_hole = menu.addAction("挖空「{}」为占位符...".format(
-                selected if len(selected) <= 15 else selected[:12] + "..."))
+            label = "挖空「{}」为占位符...".format(
+                selected if len(selected) <= 15 else selected[:12] + "...")
+            action_hole = menu.addAction(label)
             menu.addSeparator()
 
         for item in load_quick_inserts():
@@ -321,10 +337,47 @@ class TemplateDraftPage(QWidget):
         menu.addAction("管理快捷插入...", self._on_manage_quick_inserts)
         action = menu.exec_(self.preview.mapToGlobal(pos))
 
-        if action == locals().get('action_hole', None):
+        if action == action_rename and ph_info:
+            self._do_rename_placeholder(ph_info)
+        elif action == action_fill and ph_info:
+            self._do_fill_placeholder(ph_info)
+        elif action == action_unhole and ph_info:
+            self._do_unhole_placeholder(ph_info)
+        elif action == action_hole:  # was action_hole
             self._do_hollow_in_preview(selected)
         elif action and action.data():
             self._insert_text(action.data())
+
+    def _do_placeholder_op(self, ph_info, new_text):
+        """替换占位符并刷新"""
+        _, _, start, end = ph_info
+        full = self.preview.toPlainText()
+        new_full = full[:start] + new_text + full[end:]
+        self.preview.setPlainText(new_full)
+        self.current_template_text = new_full
+        self._rebuild_form()
+
+    def _do_rename_placeholder(self, ph_info):
+        _, old_name, _, _ = ph_info
+        new_name, ok = QInputDialog.getText(self, "重命名字段",
+            "将 {} 重命名为：".format(old_name), text=old_name)
+        if not ok or not new_name.strip():
+            return
+        new_name = new_name.strip()
+        self._do_placeholder_op(ph_info, "{{" + new_name + "}}")
+
+    def _do_fill_placeholder(self, ph_info):
+        _, field_name, _, _ = ph_info
+        value, ok = QInputDialog.getText(self, "填入具体值",
+            "为 {} 填入具体值（将删除 {{}} 标记）：".format(field_name))
+        if not ok:
+            return
+        self._do_placeholder_op(ph_info, value.strip())
+
+    def _do_unhole_placeholder(self, ph_info):
+        _, field_name, _, _ = ph_info
+        # 删除 {{ }} 标记，保留字段名作为普通文字
+        self._do_placeholder_op(ph_info, field_name)
 
     def _do_hollow_in_preview(self, selected):
         field, ok = QInputDialog.getText(self, "命名字段",
