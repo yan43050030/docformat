@@ -39,10 +39,12 @@ from app.template_common import (
 
 
 def _build_plain_text(rendered):
-    """将渲染后的结构化 dict 拼成纯文本"""
+    """将渲染后的结构化 dict 拼成纯文本（_ 开头的内部元数据不输出）"""
     lines = [rendered["title"], ""]
     lines += [b["text"] for b in rendered["body"]]
     for k, v in rendered["meta"].items():
+        if k.startswith("_"):
+            continue
         lines += ["", "{}: {}".format(k, v)]
     return "\n".join(lines)
 
@@ -173,9 +175,18 @@ class TemplateDraftPage(QWidget):
         lv.setContentsMargins(8, 8, 4, 8)
 
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("搜索模板（模糊匹配）...")
+        self.search_edit.setPlaceholderText("搜索模板...")
         self.search_edit.textChanged.connect(self._on_search)
         lv.addWidget(self.search_edit)
+
+        scope_row = QHBoxLayout()
+        scope_row.addWidget(QLabel("范围："))
+        self.scope_combo = QComboBox()
+        self.scope_combo.addItems(["全部", "文件名", "标签", "正文", "文件名+标签"])
+        self.scope_combo.currentTextChanged.connect(lambda: self._on_search(self.search_edit.text()))
+        scope_row.addWidget(self.scope_combo)
+        scope_row.addStretch()
+        lv.addLayout(scope_row)
 
         self.list_widget = QListWidget()
         self.list_widget.currentItemChanged.connect(self._on_select_template)
@@ -410,9 +421,10 @@ class TemplateDraftPage(QWidget):
     def _refresh_list_display(self, query=None):
         self.list_widget.clear()
         q = (query or "").strip()
+        scope = self.scope_combo.currentText() if hasattr(self, 'scope_combo') else "全部"
 
         # 搜不到时的回退：仍用 scan_templates 以免缓存未命中
-        results = search_templates(q)
+        results = search_templates(q, scope=scope)
         if not results and not q:
             # 缓存未命中时走旧逻辑兜底
             self._all_templates = scan_templates()

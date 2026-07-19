@@ -167,9 +167,10 @@ def _refresh_cache(dirs=None):
                 _TEMPLATE_CACHE[full] = read_template_preview(full)
 
 
-def search_templates(query, dirs=None):
-    """全文搜索模板：匹配文件名、标题、标签、正文预览。
+def search_templates(query, dirs=None, scope="全部"):
+    """搜索模板。
 
+    scope 可选: "全部" "文件名" "标签" "正文" "文件名+标签"
     返回 [(display, path, src_dir, match_hint), ...]
     match_hint 说明匹配来源，如 "匹配标签「刑事」" 或 "匹配正文内容"。
     """
@@ -196,6 +197,12 @@ def search_templates(query, dirs=None):
         return results
 
     q_lower = q.lower()
+
+    # 根据 scope 决定启用哪些搜索维度
+    search_name = scope in ("全部", "文件名", "文件名+标签")
+    search_tag = scope in ("全部", "标签", "文件名+标签")
+    search_body = scope in ("全部", "正文")
+
     results = []
     seen = set()
 
@@ -214,14 +221,27 @@ def search_templates(query, dirs=None):
             hint = None
 
             # 1) 文件名匹配
-            if q_lower in display.lower():
+            if search_name and q_lower in display.lower():
                 hint = "名称匹配"
                 results.append((display, full, d, hint))
                 continue
 
-            # 2) 标题 / 标签 / 正文匹配
+            # 2) 标签 / 标题 / 正文匹配
             preview = _TEMPLATE_CACHE.get(full)
             if preview is None:
+                continue
+
+            # 标签匹配
+            if search_tag:
+                for tag in preview.get("tags", []):
+                    if q_lower in tag.lower():
+                        hint = "匹配标签「{}」".format(tag)
+                        results.append((display, full, d, hint))
+                        break
+                if hint:
+                    continue
+
+            if not search_body:
                 continue
 
             # 标题匹配
@@ -231,18 +251,8 @@ def search_templates(query, dirs=None):
                 results.append((display, full, d, hint))
                 continue
 
-            # 标签匹配
-            for tag in preview.get("tags", []):
-                if q_lower in tag.lower():
-                    hint = "匹配标签「{}」".format(tag)
-                    results.append((display, full, d, hint))
-                    break
-            if hint:
-                continue
-
             # 正文预览匹配
-            body_lower = preview.get("body_preview", "").lower()
-            if q_lower in body_lower:
+            if q_lower in preview.get("body_preview", "").lower():
                 hint = "匹配正文内容"
                 results.append((display, full, d, hint))
                 continue
