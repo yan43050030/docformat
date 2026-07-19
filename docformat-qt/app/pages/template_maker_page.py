@@ -140,6 +140,15 @@ class TemplateMakerPage(QWidget):
         mid.addStretch()
         outer.addLayout(mid)
 
+        # 模板标签
+        tag_row = QHBoxLayout()
+        tag_row.addWidget(QLabel("模板标签："))
+        self.tags_edit = QLineEdit()
+        self.tags_edit.setPlaceholderText("用逗号分隔，如：刑事, 侦查, 逮捕（辅助起草页搜索）")
+        tag_row.addWidget(self.tags_edit)
+        tag_row.addStretch()
+        outer.addLayout(tag_row)
+
         # 附加字段（META 键值对）表格
         outer.addWidget(QLabel("附加字段（落款单位、日期等，可自由增删）"))
         meta_bar = QHBoxLayout()
@@ -183,7 +192,12 @@ class TemplateMakerPage(QWidget):
         bottom.addWidget(QLabel("模板名:"))
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("必填，如 技术调查措施请示")
+        self.name_edit.setMinimumWidth(180)
         bottom.addWidget(self.name_edit)
+        self.btn_browse_save = QPushButton("浏览...")
+        self.btn_browse_save.setToolTip("自定义保存路径和文件名")
+        self.btn_browse_save.clicked.connect(self._on_browse_save)
+        bottom.addWidget(self.btn_browse_save)
         self.btn_save = QPushButton("保存为模板")
         self.btn_save.clicked.connect(self._on_save)
         bottom.addWidget(self.btn_save)
@@ -405,6 +419,24 @@ class TemplateMakerPage(QWidget):
                 meta[key] = val
         return meta
 
+    # ---------------- 浏览保存路径 ----------------
+    def _on_browse_save(self):
+        name = self.name_edit.text().strip()
+        if not name:
+            name = "未命名模板"
+        safe = "".join(c for c in name if c not in r'\/:*?"<>|')
+        default_dir = self.dir_combo.currentData() or os.path.expanduser("~/Desktop")
+        if not os.path.isdir(default_dir):
+            default_dir = os.path.expanduser("~")
+        default_path = os.path.join(default_dir, safe + ".md")
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "选择模板保存位置", default_path,
+            "Markdown 模板 (*.md)")
+        if not path:
+            return
+        self._do_save(path)
+
     # ---------------- 保存 ----------------
     def _on_save(self):
         name = self.name_edit.text().strip()
@@ -416,15 +448,6 @@ class TemplateMakerPage(QWidget):
             QMessageBox.warning(self, "提示", "正文为空")
             return
 
-        # 组装模板内容
-        parts = [body, "", "---META---"]
-        for k, v in self._collect_meta().items():
-            parts.append("{}: {}".format(k, v))
-        # 如果 META 完全为空，留一行占位
-        if not self._collect_meta():
-            parts.append("# 可在此添加附加字段，如 落款单位: {{办案单位}}")
-        content = "\n".join(parts) + "\n"
-
         save_dir = self.dir_combo.currentData() or TEMPLATE_DIR
         os.makedirs(save_dir, exist_ok=True)
         safe = "".join(c for c in name if c not in r'\/:*?"<>|')
@@ -434,6 +457,31 @@ class TemplateMakerPage(QWidget):
                 "{} 已存在，覆盖吗？".format(safe + ".md"),
                 QMessageBox.Yes | QMessageBox.No) == QMessageBox.No:
                 return
+        self._do_save(path)
+
+    def _do_save(self, path):
+        """执行保存（组装模板内容并写盘）"""
+        body = self.editor.toPlainText().strip()
+        name = self.name_edit.text().strip() or os.path.splitext(os.path.basename(path))[0]
+
+        # 组装模板内容
+        parts = [body, "", "---META---"]
+
+        # 标签
+        tags = self.tags_edit.text().strip()
+        if tags:
+            parts.append("_tags: {}".format(tags))
+
+        for k, v in self._collect_meta().items():
+            parts.append("{}: {}".format(k, v))
+        # 如果 META 完全为空，留一行占位
+        if not tags and not self._collect_meta():
+            parts.append("# 可在此添加附加字段，如 落款单位: {{办案单位}}")
+        content = "\n".join(parts) + "\n"
+
+        save_dir = os.path.dirname(path)
+        os.makedirs(save_dir, exist_ok=True)
+
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
 

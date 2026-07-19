@@ -34,7 +34,7 @@ from app.template_common import (
     load_template_dirs, save_template_dirs, scan_templates,
     bundled_templates_dir, is_bundled_dir,
     load_quick_inserts, save_quick_inserts, DEFAULT_QUICK_INSERTS,
-    find_placeholder_at,
+    find_placeholder_at, search_templates, read_template_preview,
 )
 
 
@@ -402,7 +402,6 @@ class TemplateDraftPage(QWidget):
 
     # ===== 模板列表 & 搜索 =====
     def _load_template_list(self):
-        self._all_templates = scan_templates()
         self._refresh_list_display()
 
     def _on_search(self, query):
@@ -411,16 +410,55 @@ class TemplateDraftPage(QWidget):
     def _refresh_list_display(self, query=None):
         self.list_widget.clear()
         q = (query or "").strip()
-        for display, path, src_dir in self._all_templates:
-            if q and q.lower() not in display.lower():
-                continue
+
+        # 搜不到时的回退：仍用 scan_templates 以免缓存未命中
+        results = search_templates(q)
+        if not results and not q:
+            # 缓存未命中时走旧逻辑兜底
+            self._all_templates = scan_templates()
+            for display, path, src_dir in self._all_templates:
+                home = os.path.expanduser("~")
+                src_label = src_dir
+                if src_label.startswith(home):
+                    src_label = "~" + src_label[len(home):]
+                label = "{}  [{}]".format(display, src_label)
+                it = QListWidgetItem(label)
+                it.setData(Qt.UserRole, path)
+                self.list_widget.addItem(it)
+            return
+
+        # 存储当前完整结果以便后续使用
+        self._all_templates = [(d, p, s) for d, p, s, _ in results]
+
+        shown_count = 0
+        for display, path, src_dir, match_hint in results:
             home = os.path.expanduser("~")
             src_label = src_dir
             if src_label.startswith(home):
                 src_label = "~" + src_label[len(home):]
-            label = "{}  [{}]".format(display, src_label)
+
+            # 构建列表项显示文本
+            preview = read_template_preview(path)
+            tags = preview.get("tags", [])
+            tag_str = "  #{}".format(" #".join(tags)) if tags else ""
+
+            if q and match_hint:
+                label = "{}  [{}]  — {}".format(display, src_label, match_hint)
+            elif q:
+                label = "{}  [{}]".format(display, src_label)
+            else:
+                label = "{}  [{}]{}".format(display, src_label, tag_str)
+
             it = QListWidgetItem(label)
             it.setData(Qt.UserRole, path)
+            if tags:
+                it.setToolTip("标签: {}".format("、".join(tags)))
+            self.list_widget.addItem(it)
+            shown_count += 1
+
+        if q and shown_count == 0:
+            it = QListWidgetItem("未找到匹配的模板")
+            it.setFlags(Qt.NoItemFlags)
             self.list_widget.addItem(it)
 
     def _on_manage_dirs(self):
