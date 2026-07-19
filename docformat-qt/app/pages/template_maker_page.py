@@ -33,7 +33,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTextEdit, QLineEdit, QFileDialog, QMessageBox, QInputDialog,
     QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
-    QAbstractItemView, QSplitter,
+    QAbstractItemView, QSplitter, QMenu, QCheckBox,
 )
 from PyQt5.QtGui import QTextCursor
 from PyQt5.QtCore import Qt
@@ -41,7 +41,7 @@ from PyQt5.QtCore import Qt
 from app.template_common import (
     TEMPLATE_DIR, PLACEHOLDER_RE,
     load_template_dirs, save_template_dirs,
-    is_bundled_dir,
+    is_bundled_dir, detect_auto_fields,
 )
 
 
@@ -125,6 +125,8 @@ class TemplateMakerPage(QWidget):
         outer.addWidget(QLabel("正文（选中要变成变量的文字，点下方按钮挖空）"))
         self.editor = QTextEdit()
         self.editor.setAcceptRichText(False)
+        self.editor.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.editor.customContextMenuRequested.connect(self._on_editor_context_menu)
         outer.addWidget(self.editor)
 
         # 工具条
@@ -239,6 +241,7 @@ class TemplateMakerPage(QWidget):
             if tmp_dir:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
         self.editor.setPlainText(_rough_split(text))
+        self._auto_detect_and_ask(self.editor.toPlainText())
 
     # ---------------- 挖空 ----------------
     def _on_make_hole(self):
@@ -270,6 +273,56 @@ class TemplateMakerPage(QWidget):
         if line.startswith("标题:") or line.startswith("标题："):
             return
         cursor.insertText("标题: " + line)
+
+    def _on_editor_context_menu(self, pos):
+        """右键菜单：挖空选中文字"""
+        menu = QMenu(self)
+        action_hole = menu.addAction("挖空为占位符")
+        menu.addSeparator()
+        menu.addAction("全选", self.editor.selectAll)
+        action = menu.exec_(self.editor.mapToGlobal(pos))
+        if action == action_hole:
+            self._on_make_hole()
+
+    def _auto_detect_and_ask(self, text):
+        """扫描文本，检测身份证号/法律条款/日期等，提示用户批量挖空"""
+        matches = detect_auto_fields(text)
+        if not matches:
+            return
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("自动检测到可挖空字段")
+        dlg.setText("软件检测到以下可能反复变化的字段，\n勾选要自动挖空的项：")
+        dlg.setIcon(QMessageBox.Question)
+
+        # 用 QCheckBox 列表代替标准按钮
+        widget = QWidget()
+        lv = QVBoxLayout(widget)
+        checks = []
+        for i, (matched, field, label) in enumerate(matches):
+            cb = QCheckBox("「{}」→ 挖空为 {{{{ {} }}}}（{}）".format(
+                matched if len(matched) <= 20 else matched[:17] + "...",
+                field, label))
+            cb.setChecked(True)
+            cb._field = field
+            cb._matched = matched
+            checks.append(cb)
+            lv.addWidget(cb)
+        dlg.layout().addWidget(widget, 1, 0, 1, dlg.layout().columnCount())
+
+        dlg.addButton("全部挖空", QMessageBox.AcceptRole)
+        dlg.addButton("跳过", QMessageBox.RejectRole)
+        dlg.setDefaultButton(dlg.buttons()[0])
+        if dlg.exec_() == QMessageBox.Rejected:
+            return
+
+        full = self.editor.toPlainText()
+        for cb in checks:
+            if cb.isChecked():
+                placeholder = "{{" + cb._field + "}}"
+                full = full.replace(cb._matched, placeholder)
+                if cb._field not in self.field_names:
+                    self.field_names.append(cb._field)
+        self.editor.setPlainText(full)
 
     # ---------------- META 动态表格 ----------------
     def _add_meta_row(self, key="", value=""):
