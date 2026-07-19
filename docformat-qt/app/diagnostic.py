@@ -256,6 +256,14 @@ def _try_show_qt_crash_dialog(tb_lines):
         dlg.setWindowTitle("DocFormat Pro — 诊断报告")
         dlg.resize(720, 540)
         dlg.setMinimumSize(600, 420)
+        # 独立配色：不依赖外部主题 QSS，在任何系统上都清晰可读
+        dlg.setStyleSheet("""
+            QDialog { background: #FFFFFF; }
+            QLabel { color: #333333; font-size: 13px; }
+            QPushButton { border: 1px solid #BBB; border-radius: 4px;
+                padding: 6px 16px; color: #333333; background: #F5F5F5; }
+            QPushButton:hover { background: #E8E8E8; }
+        """)
 
         layout = QVBoxLayout(dlg)
         layout.setSpacing(10)
@@ -270,14 +278,18 @@ def _try_show_qt_crash_dialog(tb_lines):
             "这会帮助我们快速定位问题。"
         )
         desc.setWordWrap(True)
+        desc.setStyleSheet("QLabel { color: #555555; }")
         layout.addWidget(desc)
 
         # 诊断文本区
         editor = QTextEdit()
         editor.setReadOnly(True)
         editor.setAcceptRichText(False)
-        editor.setFont(QFont("monospace", 10))
-        editor.setStyleSheet("QTextEdit { background: #FAFAFA; border: 1px solid #CCC; border-radius: 4px; padding: 8px; }")
+        editor.setFont(QFont("Courier New, monospace", 10))
+        editor.setStyleSheet(
+            "QTextEdit { background: #FAFAFA; color: #222222; "
+            "border: 1px solid #CCC; border-radius: 4px; padding: 8px; }"
+        )
 
         # 拼装内容：错误信息 + 系统信息
         lines = []
@@ -364,12 +376,20 @@ def show_diagnostic_dialog(parent=None):
         dlg.setWindowTitle("系统诊断信息")
         dlg.resize(700, 500)
         dlg.setMinimumSize(560, 380)
+        # 独立配色：不依赖外部主题
+        dlg.setStyleSheet("""
+            QDialog { background: #FFFFFF; }
+            QLabel { color: #333333; font-size: 13px; }
+            QPushButton { border: 1px solid #BBB; border-radius: 4px;
+                padding: 6px 16px; color: #333333; background: #F5F5F5; }
+            QPushButton:hover { background: #E8E8E8; }
+        """)
 
         layout = QVBoxLayout(dlg)
         layout.setSpacing(10)
 
         title = QLabel("系统诊断信息")
-        title.setStyleSheet("QLabel { font-size: 16px; font-weight: bold; }")
+        title.setStyleSheet("QLabel { font-size: 16px; font-weight: bold; color: #2C3E50; }")
         layout.addWidget(title)
 
         hint = QLabel(
@@ -377,15 +397,16 @@ def show_diagnostic_dialog(parent=None):
             "如软件运行异常，请复制以下内容反馈给开发者。"
         )
         hint.setWordWrap(True)
+        hint.setStyleSheet("QLabel { color: #555555; }")
         layout.addWidget(hint)
 
         editor = QTextEdit()
         editor.setReadOnly(True)
         editor.setAcceptRichText(False)
-        editor.setFont(QFont("monospace", 10))
+        editor.setFont(QFont("Courier New, monospace", 10))
         editor.setStyleSheet(
-            "QTextEdit { background: #FAFAFA; border: 1px solid #CCC; "
-            "border-radius: 4px; padding: 8px; }"
+            "QTextEdit { background: #FAFAFA; color: #222222; "
+            "border: 1px solid #CCC; border-radius: 4px; padding: 8px; }"
         )
         editor.setPlainText(format_diagnostic_text())
         layout.addWidget(editor, 1)
@@ -395,6 +416,11 @@ def show_diagnostic_dialog(parent=None):
 
         copy_btn = QPushButton("复制全部信息")
         copy_btn.setMinimumHeight(36)
+        copy_btn.setStyleSheet(
+            "QPushButton { background: #2980B9; color: white; border: none; "
+            "border-radius: 4px; padding: 8px 24px; font-size: 14px; font-weight: bold; }"
+            "QPushButton:hover { background: #3498DB; }"
+        )
         def do_copy():
             editor.selectAll()
             editor.copy()
