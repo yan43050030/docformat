@@ -355,6 +355,24 @@ def check_dependencies():
     ]
     if sys.platform == "win32":
         deps.append(("win32com", "pywin32，Windows .doc/.wps 转换"))
+    else:
+        # Linux: 检测 LibreOffice / WPS 用于 .doc/.wps 转换
+        try:
+            from app.converter_linux import find_soffice, find_wps
+            soffice = find_soffice()
+            wps = find_wps()
+            if soffice:
+                results.append(("ok", "LibreOffice", "已安装（{}）".format(soffice)))
+            elif wps:
+                results.append(("warn", "格式转换",
+                    "WPS 已安装但未找到 LibreOffice。「.doc/.wps 转 .docx 功能」将尝试使用 WPS，"
+                    "若转换失败请安装 LibreOffice: sudo apt install libreoffice-writer"))
+            else:
+                results.append(("warn", "格式转换",
+                    "未找到 LibreOffice 或 WPS。「.doc/.wps 转 .docx 功能」将不可用。"
+                    "请安装 LibreOffice: sudo apt install libreoffice-writer"))
+        except Exception:
+            pass
     for mod, desc in deps:
         try:
             __import__(mod)

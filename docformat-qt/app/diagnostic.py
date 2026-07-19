@@ -67,6 +67,17 @@ def collect_system_info():
         else:
             info.append(("{} 版本".format(pkg_name), "✗ 未安装"))
 
+    # ── 格式转换工具 ──
+    if sys.platform != "win32":
+        try:
+            from app.converter_linux import find_soffice, find_wps
+            soffice = find_soffice()
+            wps = find_wps()
+            info.append(("LibreOffice", soffice if soffice else "未找到"))
+            info.append(("WPS Office", wps if wps else "未找到"))
+        except Exception:
+            pass
+
     # ── 当前工作目录 ──
     info.append(("工作目录", os.getcwd()))
     info.append(("用户目录", os.path.expanduser("~")))
