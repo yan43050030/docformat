@@ -5,13 +5,13 @@
 ============================================================================
 
 【用途】
-给 docformat-qt 增加"起草"能力。选文书模板 → 填字段 → 生成初稿 → 排版引擎排版。
+给 docformat-qt 增加"起草"能力。选文书模板 → 填字段 → 预览/编辑 → 排版引擎排版。
 
-模板中的 {{占位符}} 会自动识别为表单字段：
-  - 含"情况/说明/内容/简要/事实"等关键词的 → 多行文本区
-  - 其他 → 单行输入框
-
-【模板格式】见 template_common.py
+【功能】
+  - 搜索模板、多目录管理
+  - 字段自动生成（含"情况/说明"等关键词 → 多行框）
+  - 预览窗口可直接编辑文本，右键快捷插入常用事项
+  - 可编辑模板源码并保存回 .md 文件
 ============================================================================
 """
 import os
@@ -23,7 +23,8 @@ from PyQt5.QtWidgets import (
     QWidget, QListWidget, QListWidgetItem, QLineEdit, QTextEdit,
     QPushButton, QLabel, QFormLayout, QVBoxLayout, QScrollArea,
     QMessageBox, QSplitter, QPlainTextEdit, QFileDialog, QHBoxLayout,
-    QApplication, QComboBox, QInputDialog,
+    QApplication, QMenu, QAction, QDialog, QTableWidget, QTableWidgetItem,
+    QHeaderView, QAbstractItemView, QDialogButtonBox, QInputDialog,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
@@ -32,6 +33,7 @@ from app.template_common import (
     extract_fields, parse_template, render, find_unfilled,
     load_template_dirs, save_template_dirs, scan_templates,
     bundled_templates_dir, is_bundled_dir,
+    load_quick_inserts, save_quick_inserts, DEFAULT_QUICK_INSERTS,
 )
 
 
@@ -86,6 +88,69 @@ class DraftFormatWorker(QThread):
             shutil.rmtree(tmp_root, ignore_errors=True)
 
 
+class QuickInsertDialog(QDialog):
+    """管理快捷插入项目"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("管理快捷插入")
+        self.resize(500, 400)
+        self.items = load_quick_inserts()
+        self._build()
+
+    def _build(self):
+        lv = QVBoxLayout(self)
+
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels(["菜单名", "插入内容"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.verticalHeader().setVisible(False)
+        lv.addWidget(self.table)
+
+        for item in self.items:
+            self._add_row(item["label"], item["text"])
+
+        btn_row = QHBoxLayout()
+        btn_add = QPushButton("添加")
+        btn_del = QPushButton("删除选中")
+        btn_reset = QPushButton("恢复默认")
+        btn_save = QPushButton("保存")
+        btn_add.clicked.connect(lambda: self._add_row("", ""))
+        btn_del.clicked.connect(self._del_row)
+        btn_reset.clicked.connect(self._reset_default)
+        btn_save.clicked.connect(self._save)
+        for b in [btn_add, btn_del, btn_reset, btn_save]:
+            btn_row.addWidget(b)
+        lv.addLayout(btn_row)
+
+    def _add_row(self, label, text):
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        self.table.setItem(r, 0, QTableWidgetItem(label))
+        self.table.setItem(r, 1, QTableWidgetItem(text))
+
+    def _del_row(self):
+        rows = set(i.row() for i in self.table.selectedIndexes())
+        for r in sorted(rows, reverse=True):
+            self.table.removeRow(r)
+
+    def _reset_default(self):
+        self.table.setRowCount(0)
+        for item in DEFAULT_QUICK_INSERTS:
+            self._add_row(item["label"], item["text"])
+
+    def _save(self):
+        items = []
+        for r in range(self.table.rowCount()):
+            label = (self.table.item(r, 0).text() if self.table.item(r, 0) else "").strip()
+            text = (self.table.item(r, 1).text() if self.table.item(r, 1) else "").strip()
+            if label:
+                items.append({"label": label, "text": text})
+        save_quick_inserts(items)
+        self.accept()
+
+
 class TemplateDraftPage(QWidget):
     def __init__(self, mgr, parent=None):
         super().__init__(parent)
@@ -93,7 +158,8 @@ class TemplateDraftPage(QWidget):
         self.current_template_text = ""
         self.current_template_path = ""
         self.field_inputs = {}
-        self._all_templates = []  # [(display_name, full_path, source_dir), ...]
+        self._all_templates = []
+        self._edit_source_mode = False   # False=预览模式 True=编辑模板源码
         self._build_ui()
         self._load_template_list()
 
@@ -105,23 +171,19 @@ class TemplateDraftPage(QWidget):
         lv = QVBoxLayout(left)
         lv.setContentsMargins(8, 8, 4, 8)
 
-        # 搜索框
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("搜索模板（模糊匹配）...")
         self.search_edit.textChanged.connect(self._on_search)
         lv.addWidget(self.search_edit)
 
-        # 模板列表
         self.list_widget = QListWidget()
         self.list_widget.currentItemChanged.connect(self._on_select_template)
         lv.addWidget(self.list_widget)
 
-        # 底部按钮行
         btn_row = QHBoxLayout()
         refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self._load_template_list)
         btn_row.addWidget(refresh_btn)
-
         dir_btn = QPushButton("目录管理")
         dir_btn.clicked.connect(self._on_manage_dirs)
         btn_row.addWidget(dir_btn)
@@ -150,13 +212,36 @@ class TemplateDraftPage(QWidget):
         mv.addWidget(self.gen_btn)
         splitter.addWidget(mid)
 
-        # ===== 右侧：预览 =====
+        # ===== 右侧：预览 / 编辑 =====
         right = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(4, 8, 8, 8)
-        rv.addWidget(QLabel("正文预览（未填字段显示 {{字段名}}）"))
+
+        # 工具栏
+        preview_bar = QHBoxLayout()
+        mode_label = QLabel("预览/编辑")
+        preview_bar.addWidget(mode_label)
+        preview_bar.addStretch()
+
+        self.btn_toggle_mode = QPushButton("编辑模板源码")
+        self.btn_toggle_mode.setCheckable(True)
+        self.btn_toggle_mode.toggled.connect(self._on_toggle_mode)
+        preview_bar.addWidget(self.btn_toggle_mode)
+
+        self.btn_save_template = QPushButton("保存模板")
+        self.btn_save_template.clicked.connect(self._on_save_template)
+        self.btn_save_template.setEnabled(False)
+        preview_bar.addWidget(self.btn_save_template)
+
+        btn_quick = QPushButton("快捷插入")
+        btn_quick.clicked.connect(lambda: self._show_quick_menu(btn_quick))
+        preview_bar.addWidget(btn_quick)
+        rv.addLayout(preview_bar)
+
+        # 预览编辑区
         self.preview = QPlainTextEdit()
-        self.preview.setReadOnly(True)
+        self.preview.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.preview.customContextMenuRequested.connect(self._on_preview_context_menu)
         rv.addWidget(self.preview)
         splitter.addWidget(right)
 
@@ -164,9 +249,81 @@ class TemplateDraftPage(QWidget):
         outer = QVBoxLayout(self)
         outer.addWidget(splitter)
 
-    # ---------- 模板列表 & 搜索 ----------
+    # ===== 预览模式切换 =====
+    def _on_toggle_mode(self, checked):
+        self._edit_source_mode = checked
+        self.btn_toggle_mode.setText("返回预览" if checked else "编辑模板源码")
+        self.btn_save_template.setEnabled(checked)
+        if checked:
+            self.preview.setStyleSheet("QPlainTextEdit { background: #fffef5; }")
+            if self.current_template_text:
+                self.preview.setPlainText(self.current_template_text)
+        else:
+            self.preview.setStyleSheet("")
+            self._update_preview()
+
+    # ===== 保存模板（源码编辑模式下） =====
+    def _on_save_template(self):
+        if not self.current_template_path:
+            QMessageBox.warning(self, "提示", "请先选择一个模板")
+            return
+        new_text = self.preview.toPlainText()
+        if not new_text.strip():
+            QMessageBox.warning(self, "提示", "模板内容不能为空")
+            return
+        try:
+            with open(self.current_template_path, "w", encoding="utf-8") as f:
+                f.write(new_text)
+            self.current_template_text = new_text
+            self._rebuild_form()
+            QMessageBox.information(self, "已保存", "模板已更新：{}".format(self.current_template_path))
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", str(e))
+
+    # ===== 快捷插入 =====
+    def _show_quick_menu(self, anchor_widget=None):
+        menu = QMenu(self)
+        for item in load_quick_inserts():
+            label = item.get("label", "")
+            text = item.get("text", "")
+            if not label:
+                continue
+            action = menu.addAction(label)
+            action.setData(text)
+            action.triggered.connect(lambda checked, t=text: self._insert_text(t))
+        menu.addSeparator()
+        menu.addAction("管理快捷插入...", self._on_manage_quick_inserts)
+        if anchor_widget:
+            menu.exec_(anchor_widget.mapToGlobal(anchor_widget.rect().bottomLeft()))
+        else:
+            menu.exec_(self.preview.mapToGlobal(self.preview.rect().center()))
+
+    def _on_preview_context_menu(self, pos):
+        menu = QMenu(self)
+        for item in load_quick_inserts():
+            label = item.get("label", "")
+            text = item.get("text", "")
+            if not label:
+                continue
+            action = menu.addAction(label)
+            action.setData(text)
+
+        menu.addSeparator()
+        menu.addAction("管理快捷插入...", self._on_manage_quick_inserts)
+        action = menu.exec_(self.preview.mapToGlobal(pos))
+        if action and action.data():
+            self._insert_text(action.data())
+
+    def _insert_text(self, text):
+        cursor = self.preview.textCursor()
+        cursor.insertText(text)
+
+    def _on_manage_quick_inserts(self):
+        dlg = QuickInsertDialog(self)
+        dlg.exec_()
+
+    # ===== 模板列表 & 搜索 =====
     def _load_template_list(self):
-        """重新扫描所有目录，更新模板列表"""
         self._all_templates = scan_templates()
         self._refresh_list_display()
 
@@ -174,13 +331,11 @@ class TemplateDraftPage(QWidget):
         self._refresh_list_display(query)
 
     def _refresh_list_display(self, query=None):
-        """根据搜索词过滤并刷新列表显示"""
         self.list_widget.clear()
         q = (query or "").strip()
         for display, path, src_dir in self._all_templates:
-            if q and q not in display:
+            if q and q.lower() not in display.lower():
                 continue
-            # 列表中显示模板名 + 来源目录
             home = os.path.expanduser("~")
             src_label = src_dir
             if src_label.startswith(home):
@@ -191,7 +346,6 @@ class TemplateDraftPage(QWidget):
             self.list_widget.addItem(it)
 
     def _on_manage_dirs(self):
-        """管理模板目录：查看、添加、移除（自带目录不可移除）"""
         dirs = load_template_dirs()
         home = os.path.expanduser("~")
         labels = []
@@ -248,7 +402,6 @@ class TemplateDraftPage(QWidget):
                 QMessageBox.information(dlg, "提示", "软件自带模板目录不可移除")
                 return
             cur = load_template_dirs()
-            # 除了自带目录外至少保留一个
             non_bundled = [x for x in cur if not is_bundled_dir(x)]
             if len(non_bundled) <= 1 and not is_bundled_dir(d):
                 QMessageBox.information(dlg, "提示", "至少保留一个用户模板目录")
@@ -264,7 +417,7 @@ class TemplateDraftPage(QWidget):
         dlg.exec_()
         self._load_template_list()
 
-    # ---------- 选择模板 ----------
+    # ===== 选择模板 =====
     def _on_select_template(self, current, _prev):
         if current is None:
             self.current_template_text = ""
@@ -273,9 +426,12 @@ class TemplateDraftPage(QWidget):
         self.current_template_path = current.data(Qt.UserRole)
         with open(self.current_template_path, encoding="utf-8") as f:
             self.current_template_text = f.read()
+        self.btn_save_template.setEnabled(False)
+        if self._edit_source_mode:
+            self.preview.setPlainText(self.current_template_text)
         self._rebuild_form()
 
-    # ---------- 动态表单 ----------
+    # ===== 动态表单 =====
     def _rebuild_form(self):
         while self.form_layout.rowCount():
             self.form_layout.removeRow(0)
@@ -304,24 +460,36 @@ class TemplateDraftPage(QWidget):
     def _update_preview(self):
         if not self.current_template_text:
             return
+        if self._edit_source_mode:
+            return  # 源码编辑模式不自动刷新
         self.preview.setPlainText(_build_plain_text(self._current_rendered()))
 
-    # ---------- 生成 & 排版 ----------
+    # ===== 生成 & 排版 =====
     def _on_generate(self):
         if not self.current_template_text:
             QMessageBox.warning(self, "提示", "请先从左侧选择文书模板")
             return
-        rendered = self._current_rendered()
-        unfilled = find_unfilled(rendered)
-        if unfilled:
-            if QMessageBox.question(
-                self, "存在未填字段",
-                "未填写：\n" + "、".join(unfilled) + "\n\n仍要生成吗？",
-                QMessageBox.Yes | QMessageBox.No) == QMessageBox.No:
-                return
 
-        plain = _build_plain_text(rendered)
-        title = rendered.get("title", "未命名")
+        if self._edit_source_mode:
+            # 源码编辑模式下，使用预览区的文本作为最终正文
+            plain = self.preview.toPlainText()
+        else:
+            rendered = self._current_rendered()
+            unfilled = find_unfilled(rendered)
+            if unfilled:
+                if QMessageBox.question(
+                    self, "存在未填字段",
+                    "未填写：\n" + "、".join(unfilled) + "\n\n仍要生成吗？",
+                    QMessageBox.Yes | QMessageBox.No) == QMessageBox.No:
+                    return
+            plain = _build_plain_text(rendered)
+
+        title = "未命名"
+        for line in plain.splitlines():
+            s = line.strip()
+            if s:
+                title = s
+                break
 
         default_dir = os.path.expanduser("~/Desktop")
         if not os.path.isdir(default_dir):

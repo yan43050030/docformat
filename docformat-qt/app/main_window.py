@@ -14,7 +14,7 @@ from app.pages.log_page import LogPage
 from app.pages.template_draft_page import TemplateDraftPage
 from app.pages.template_maker_page import TemplateMakerPage
 
-VERSION = '2.1.0'
+VERSION = '2.2.0'
 NAV_ITEMS = [('处理', 0), ('预设方案', 1), ('主题', 2), ('日志', 3),
              ('模板起草', 4), ('模板制作', 5)]
 
@@ -120,6 +120,14 @@ class MainWindow(QMainWindow):
         self.apply_theme(current_theme_id())
         self._refresh_status()
         self.log_page.append('info', 'DocFormat Pro 已启动')
+        self._check_deps()
+
+    def _check_deps(self):
+        from app.template_common import check_dependencies
+        results = check_dependencies()
+        for status, mod, detail in results:
+            level = 'warning' if status == 'warn' else 'info'
+            self.log_page.append(level, '依赖检测: {}'.format(detail))
 
     def _switch_page(self, idx):
         self.stack.setCurrentIndex(idx)

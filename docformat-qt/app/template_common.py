@@ -182,3 +182,65 @@ def find_unfilled(rendered):
     for b in rendered["body"]:
         remaining |= set(PLACEHOLDER_RE.findall(b["text"]))
     return sorted(x.strip() for x in remaining)
+
+
+# ================================================================
+# 运行依赖检测
+# ================================================================
+def check_dependencies():
+    """检测核心依赖包是否安装，返回 [(状态, 包名, 详情), ...]。状态: 'ok'/'warn'"""
+    results = []
+    deps = [
+        ("PyQt5", "GUI 框架，软件运行必需"),
+        ("docx", "python-docx，读写 Word 文档"),
+        ("lxml", "XML 解析，python-docx 依赖"),
+    ]
+    if sys.platform == "win32":
+        deps.append(("win32com", "pywin32，Windows .doc/.wps 转换"))
+    for mod, desc in deps:
+        try:
+            __import__(mod)
+            results.append(("ok", mod, desc + " ✓"))
+        except ImportError:
+            results.append(("warn", mod, desc + " ✗ 未安装"))
+    return results
+
+
+# ================================================================
+# 快捷插入管理
+# ================================================================
+QUICK_INSERT_PATH = os.path.join(config_dir(), "quick_insert.json")
+
+DEFAULT_QUICK_INSERTS = [
+    {"label": "姓名", "text": "{{嫌疑人姓名}}"},
+    {"label": "身份证号", "text": "{{身份证号}}"},
+    {"label": "性别", "text": "{{性别}}"},
+    {"label": "出生日期", "text": "{{出生日期}}"},
+    {"label": "民族", "text": "{{民族}}"},
+    {"label": "户籍地", "text": "{{户籍地}}"},
+    {"label": "现住址", "text": "{{现住址}}"},
+    {"label": "罪名", "text": "{{罪名}}"},
+    {"label": "办案单位", "text": "{{办案单位}}"},
+    {"label": "法律条文引用", "text": "《中华人民共和国刑法》第{{条}}条"},
+    {"label": "刑诉法引用", "text": "《中华人民共和国刑事诉讼法》第{{条}}条"},
+    {"label": "落款日期", "text": "{{落款日期}}"},
+]
+
+
+def load_quick_inserts():
+    """加载快捷插入列表，无配置则返回默认列表"""
+    if os.path.exists(QUICK_INSERT_PATH):
+        try:
+            with open(QUICK_INSERT_PATH, "r", encoding="utf-8") as f:
+                items = json.load(f)
+            if items:
+                return items
+        except Exception:
+            pass
+    return list(DEFAULT_QUICK_INSERTS)
+
+
+def save_quick_inserts(items):
+    """保存快捷插入列表"""
+    with open(QUICK_INSERT_PATH, "w", encoding="utf-8") as f:
+        json.dump(items, f, ensure_ascii=False, indent=2)
