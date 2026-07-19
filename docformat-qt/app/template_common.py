@@ -11,6 +11,7 @@
 import json
 import os
 import re
+import sys
 
 from app.presets import config_dir
 
@@ -25,37 +26,62 @@ INLINE_COMMENT_RE = re.compile(r"【[^】]*】")
 TEMPLATE_DIR = os.path.join(config_dir(), "templates")
 
 
+def bundled_templates_dir():
+    """软件自带的模板目录（PyInstaller 打包后从临时目录，开发时从项目目录）"""
+    if getattr(sys, 'frozen', False):
+        # PyInstaller --onefile：sys._MEIPASS 为临时解压目录
+        # PyInstaller --onedir：sys._MEIPASS 为 exe 所在目录
+        return os.path.join(sys._MEIPASS, "templates")
+    # 开发环境：app/template_common.py → 上一级是 app，再上一级是项目根
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates")
+
+
+def is_bundled_dir(path):
+    """判断是否为打包自带的模板目录（不可移除）"""
+    return os.path.normpath(path) == os.path.normpath(bundled_templates_dir())
+
+
 def _template_dirs_config_path():
     """多模板目录列表的配置文件路径"""
     return os.path.join(config_dir(), "template_dirs.json")
 
 
 def load_template_dirs():
-    """返回所有模板目录列表。有保存配置则用配置，否则回退到默认目录"""
+    """返回所有模板目录列表：自带目录 + 用户保存的目录 + 兜底默认目录"""
+    dirs = []
+    # 软件自带模板目录（优先、只读）
+    bundled = bundled_templates_dir()
+    if os.path.isdir(bundled):
+        dirs.append(bundled)
+    # 用户保存的目录
     cfg = _template_dirs_config_path()
     if os.path.exists(cfg):
         try:
             with open(cfg, "r", encoding="utf-8") as f:
                 saved = json.load(f)
-            dirs = []
             for d in saved:
                 d = os.path.expanduser(d)
                 if d not in dirs:
                     dirs.append(d)
-            if dirs:
-                return dirs
         except Exception:
             pass
-    return [TEMPLATE_DIR]
+    # 兜底：用户配置目录下的模板文件夹
+    if TEMPLATE_DIR not in dirs:
+        dirs.append(TEMPLATE_DIR)
+    return dirs
 
 
 def save_template_dirs(dirs):
-    """保存模板目录列表（完整保存，去重）"""
+    """保存用户添加的模板目录（自带目录自动排除，不持久化）"""
     cfg = _template_dirs_config_path()
+    bundled = os.path.normpath(bundled_templates_dir())
     seen = []
     uniq = []
     for d in dirs:
         d = os.path.expanduser(d)
+        d = os.path.normpath(d)
+        if d == bundled:
+            continue  # 自带目录无需保存
         if d not in seen:
             seen.append(d)
             uniq.append(d)

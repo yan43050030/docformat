@@ -9,6 +9,8 @@ pip3 install --user pyinstaller
 python3 -m PyInstaller --noconfirm --clean --onefile --windowed \
     --name DocFormatPro \
     --collect-data docx \
+    --add-data "assets:assets" \
+    --add-data "templates:templates" \
     --hidden-import scripts.formatter \
     --hidden-import scripts.punctuation \
     --hidden-import scripts.analyzer \
