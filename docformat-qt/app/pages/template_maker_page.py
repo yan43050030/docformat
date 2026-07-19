@@ -41,7 +41,7 @@ from PyQt5.QtCore import Qt
 from app.template_common import (
     TEMPLATE_DIR, PLACEHOLDER_RE,
     load_template_dirs, save_template_dirs,
-    is_bundled_dir, detect_auto_fields,
+    is_bundled_dir, detect_auto_fields, find_placeholder_at,
 )
 
 
@@ -275,14 +275,68 @@ class TemplateMakerPage(QWidget):
         cursor.insertText("标题: " + line)
 
     def _on_editor_context_menu(self, pos):
-        """右键菜单：挖空选中文字"""
+        """右键菜单：挖空选中文字 / 调整已有占位符"""
+        cursor = self.editor.textCursor()
+        cursor_pos = cursor.position()
+        full_text = self.editor.toPlainText()
+        selected = cursor.selectedText().strip()
+
         menu = QMenu(self)
-        action_hole = menu.addAction("挖空为占位符")
-        menu.addSeparator()
+
+        # 光标在占位符上时
+        ph_info = find_placeholder_at(full_text, cursor_pos) if not selected else None
+        action_rename = action_fill = action_unhole = None
+        if ph_info:
+            _, field_name, _, _ = ph_info
+            menu.addAction("占位符 {{" + field_name + "}}").setEnabled(False)
+            action_rename = menu.addAction("重命名字段...")
+            action_fill = menu.addAction("填入具体值...")
+            action_unhole = menu.addAction("取消挖空（删除 {{ }} 标记）")
+            menu.addSeparator()
+
+        action_hole = None
+        if selected:
+            action_hole = menu.addAction("挖空为占位符")
+            menu.addSeparator()
+
         menu.addAction("全选", self.editor.selectAll)
         action = menu.exec_(self.editor.mapToGlobal(pos))
-        if action == action_hole:
+
+        if action == action_rename and ph_info:
+            self._do_rename_in_editor(ph_info)
+        elif action == action_fill and ph_info:
+            self._do_fill_in_editor(ph_info)
+        elif action == action_unhole and ph_info:
+            self._do_unhole_in_editor(ph_info)
+        elif action == action_hole:
             self._on_make_hole()
+
+    def _do_replace_in_editor(self, ph_info, new_text):
+        """替换占位符文本"""
+        _, _, start, end = ph_info
+        full = self.editor.toPlainText()
+        new_full = full[:start] + new_text + full[end:]
+        self.editor.setPlainText(new_full)
+
+    def _do_rename_in_editor(self, ph_info):
+        _, old_name, _, _ = ph_info
+        new_name, ok = QInputDialog.getText(self, "重命名字段",
+            "将 {} 重命名为：".format(old_name), text=old_name)
+        if not ok or not new_name.strip():
+            return
+        self._do_replace_in_editor(ph_info, "{{" + new_name.strip() + "}}")
+
+    def _do_fill_in_editor(self, ph_info):
+        _, field_name, _, _ = ph_info
+        value, ok = QInputDialog.getText(self, "填入具体值",
+            "为 {} 填入具体值（将删除 {{}} 标记）：".format(field_name))
+        if not ok:
+            return
+        self._do_replace_in_editor(ph_info, value.strip())
+
+    def _do_unhole_in_editor(self, ph_info):
+        _, field_name, _, _ = ph_info
+        self._do_replace_in_editor(ph_info, field_name)
 
     def _auto_detect_and_ask(self, text):
         """扫描文本，检测身份证号/法律条款/日期等，提示用户批量挖空"""

@@ -7,10 +7,40 @@ https://github.com/KaguraNanaga/docformat-gui
 """
 import os
 import sys
+import traceback
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
+
+
+def _setup_crash_handler():
+    """安装全局异常钩子：任何未捕获异常都弹出诊断报告窗口"""
+    # 保存原始 excepthook
+    _original_excepthook = sys.excepthook
+
+    def _global_excepthook(exc_type, exc_value, exc_tb):
+        # 忽略 KeyboardInterrupt（用户主动 Ctrl+C）
+        if exc_type is KeyboardInterrupt:
+            sys.exit(1)
+
+        # 打印到 stderr 供终端可见
+        traceback.print_exception(exc_type, exc_value, exc_tb)
+
+        # 尝试弹出诊断对话框
+        try:
+            from app.diagnostic import show_crash_dialog
+            show_crash_dialog(exc_type, exc_value, exc_tb)
+        except Exception:
+            pass
+
+        # 调用原始 hook
+        _original_excepthook(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _global_excepthook
+
+
+_setup_crash_handler()
 
 from PyQt5.QtCore import Qt, QCoreApplication
 from PyQt5.QtGui import QFont, QGuiApplication, QIcon

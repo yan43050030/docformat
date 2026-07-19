@@ -14,7 +14,7 @@ from app.pages.log_page import LogPage
 from app.pages.template_draft_page import TemplateDraftPage
 from app.pages.template_maker_page import TemplateMakerPage
 
-VERSION = '2.2.1'
+VERSION = '2.3.0'
 NAV_ITEMS = [('处理', 0), ('预设方案', 1), ('主题', 2), ('日志', 3),
              ('模板起草', 4), ('模板制作', 5)]
 
@@ -73,6 +73,14 @@ class MainWindow(QMainWindow):
             sb.addWidget(btn)
 
         sb.addStretch(1)
+
+        self.btn_diagnostic = QPushButton("系统诊断")
+        self.btn_diagnostic.setCursor(Qt.PointingHandCursor)
+        self.btn_diagnostic.setToolTip("收集系统信息，方便排查运行问题")
+        self.btn_diagnostic.clicked.connect(self._show_diagnostic)
+        sb.addWidget(self.btn_diagnostic)
+        sb.addSpacing(6)
+
         ver = QLabel("版本 {} · GB/T 9704-2012".format(VERSION))
         ver.setObjectName("Version")
         ver.setWordWrap(True)
@@ -128,6 +136,10 @@ class MainWindow(QMainWindow):
         for status, mod, detail in results:
             level = 'warning' if status == 'warn' else 'info'
             self.log_page.append(level, '依赖检测: {}'.format(detail))
+
+    def _show_diagnostic(self):
+        from app.diagnostic import show_diagnostic_dialog
+        show_diagnostic_dialog(self)
 
     def _switch_page(self, idx):
         self.stack.setCurrentIndex(idx)

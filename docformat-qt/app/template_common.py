@@ -247,6 +247,20 @@ def save_quick_inserts(items):
 
 
 # ================================================================
+# 占位符定位（右键菜单辅助）
+# ================================================================
+_PH_FULL_RE = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
+
+
+def find_placeholder_at(text, cursor_pos):
+    """返回光标所在位置的占位符信息 (full_match, field_name, start, end)，不在占位符内返回 None"""
+    for m in _PH_FULL_RE.finditer(text):
+        if m.start() <= cursor_pos < m.end():
+            return (m.group(0), m.group(1).strip(), m.start(), m.end())
+    return None
+
+
+# ================================================================
 # 自动识别常见字段（模板制作时辅助挖空）
 # ================================================================
 _AUTO_PATTERNS = [
