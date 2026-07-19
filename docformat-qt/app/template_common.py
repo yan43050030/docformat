@@ -104,10 +104,14 @@ def scan_templates(dirs=None):
     return results
 
 
+# 标签行注释：// tags: 关键词1, 关键词2
+_TAGS_LINE_RE = re.compile(r"^//\s*tags?\s*[:：]\s*(.+)$", re.IGNORECASE)
+
+
 def read_template_preview(path, max_body_chars=300):
     """读取模板文件的预览信息，返回 {title, tags, body_preview}
 
-    用于搜索和列表展示，只读一次即可覆盖多个搜索维度。
+    标签从 // tags: ... 行注释中提取（统一使用 // 注释语法）。
     """
     try:
         with open(path, encoding="utf-8") as f:
@@ -115,34 +119,32 @@ def read_template_preview(path, max_body_chars=300):
     except Exception:
         return {"title": "", "tags": [], "body_preview": ""}
 
-    body_part, meta = raw, {}
-    if "---META---" in raw:
-        body_part, meta_part = raw.split("---META---", 1)
-        for line in meta_part.strip().splitlines():
-            if ":" in line or "：" in line:
-                k, v = re.split(r"[:：]", line, 1)
-                meta[k.strip()] = v.strip()
+    # 从全文提取标签（// tags: 行注释）
+    tags = []
+    for line in raw.splitlines():
+        m = _TAGS_LINE_RE.match(line.strip())
+        if m:
+            tags = [t.strip() for t in re.split(r"[，,]", m.group(1)) if t.strip()]
+            break  # 只取第一条
 
-    # 提取标题
+    # 提取标题和正文预览（跳过 // 注释行）
     title = ""
     body_lines = []
-    for line in body_part.strip().splitlines():
+    # 去掉 META 区，避免 META 内容进入预览
+    body_part = raw.split("---META---")[0] if "---META---" in raw else raw
+    for line in body_part.splitlines():
         s = line.strip()
         if not s or s.startswith("//"):
             continue
         s = INLINE_COMMENT_RE.sub("", s).strip()
+        if not s:
+            continue
         if not title and (s.startswith("标题:") or s.startswith("标题：")):
             title = re.split(r"[:：]", s, 1)[1].strip()
             continue
-        if s:
-            # 避免把 META 重复内容放入预览
-            body_lines.append(s)
+        body_lines.append(s)
 
     body_preview = "  ".join(body_lines)[:max_body_chars]
-
-    # 标签（META 中的 _tags 或 _tag）
-    tags_raw = meta.get("_tags", "") or meta.get("_tag", "")
-    tags = [t.strip() for t in re.split(r"[，,]", tags_raw) if t.strip()]
 
     return {"title": title, "tags": tags, "body_preview": body_preview}
 

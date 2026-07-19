@@ -465,17 +465,20 @@ class TemplateMakerPage(QWidget):
         name = self.name_edit.text().strip() or os.path.splitext(os.path.basename(path))[0]
 
         # 组装模板内容
-        parts = [body, "", "---META---"]
+        parts = [body]
 
-        # 标签
+        # 标签（统一使用 // tags: 行注释语法）
         tags = self.tags_edit.text().strip()
         if tags:
-            parts.append("_tags: {}".format(tags))
+            parts.append("")
+            parts.append("// tags: {}".format(tags))
 
+        parts.append("")
+        parts.append("---META---")
         for k, v in self._collect_meta().items():
             parts.append("{}: {}".format(k, v))
         # 如果 META 完全为空，留一行占位
-        if not tags and not self._collect_meta():
+        if not self._collect_meta():
             parts.append("# 可在此添加附加字段，如 落款单位: {{办案单位}}")
         content = "\n".join(parts) + "\n"
 
