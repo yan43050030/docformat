@@ -14,7 +14,7 @@ from app.pages.log_page import LogPage
 from app.pages.template_draft_page import TemplateDraftPage
 from app.pages.template_maker_page import TemplateMakerPage
 
-VERSION = '2.2.0'
+VERSION = '2.2.1'
 NAV_ITEMS = [('处理', 0), ('预设方案', 1), ('主题', 2), ('日志', 3),
              ('模板起草', 4), ('模板制作', 5)]
 

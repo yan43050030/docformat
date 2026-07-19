@@ -244,3 +244,42 @@ def save_quick_inserts(items):
     """保存快捷插入列表"""
     with open(QUICK_INSERT_PATH, "w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
+
+
+# ================================================================
+# 自动识别常见字段（模板制作时辅助挖空）
+# ================================================================
+_AUTO_PATTERNS = [
+    ("身份证号（18位）", r"\b\d{17}[\dXx]\b"),
+    ("身份证号（15位）", r"\b\d{15}\b"),
+    ("法律条款引用", r"第[一二三四五六七八九十百千\d]+条(?:之[一二三四五六七八九十\d]+)?"),
+    ("日期（中文）", r"\d{4}年\d{1,2}月\d{1,2}日"),
+    ("手机号码", r"\b1[3-9]\d{9}\b"),
+    ("公文发文字号", r"[A-Za-z\u4e00-\u9fff]+〔\d+〕\d+号"),
+]
+
+
+def detect_auto_fields(text):
+    """扫描文本，返回 [(匹配文本, 建议字段名, 类型标签), ...]，按匹配文本去重"""
+    seen_texts = set()
+    results = []
+    for label, pattern in _AUTO_PATTERNS:
+        for m in re.finditer(pattern, text):
+            matched = m.group(0)
+            if matched not in seen_texts:
+                seen_texts.add(matched)
+                # 生成建议字段名
+                if "身份证" in label:
+                    field = "身份证号"
+                elif "法律条款" in label:
+                    field = "条款"
+                elif "日期" in label:
+                    field = "日期"
+                elif "手机" in label:
+                    field = "联系电话"
+                elif "发文字号" in label:
+                    field = "发文字号"
+                else:
+                    field = label
+                results.append((matched, field, label))
+    return results

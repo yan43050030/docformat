@@ -300,6 +300,15 @@ class TemplateDraftPage(QWidget):
 
     def _on_preview_context_menu(self, pos):
         menu = QMenu(self)
+
+        # 如果有选中文字，增加挖空选项
+        cursor = self.preview.textCursor()
+        selected = cursor.selectedText().strip()
+        if selected:
+            action_hole = menu.addAction("挖空「{}」为占位符...".format(
+                selected if len(selected) <= 15 else selected[:12] + "..."))
+            menu.addSeparator()
+
         for item in load_quick_inserts():
             label = item.get("label", "")
             text = item.get("text", "")
@@ -311,8 +320,24 @@ class TemplateDraftPage(QWidget):
         menu.addSeparator()
         menu.addAction("管理快捷插入...", self._on_manage_quick_inserts)
         action = menu.exec_(self.preview.mapToGlobal(pos))
-        if action and action.data():
+
+        if action == locals().get('action_hole', None):
+            self._do_hollow_in_preview(selected)
+        elif action and action.data():
             self._insert_text(action.data())
+
+    def _do_hollow_in_preview(self, selected):
+        field, ok = QInputDialog.getText(self, "命名字段",
+            "把「{}」变成占位符，字段名：".format(selected))
+        field = field.strip()
+        if not ok or not field:
+            return
+        placeholder = "{{" + field + "}}"
+        full = self.preview.toPlainText()
+        new_full = full.replace(selected, placeholder)
+        self.preview.setPlainText(new_full)
+        self.current_template_text = new_full
+        self._rebuild_form()
 
     def _insert_text(self, text):
         cursor = self.preview.textCursor()
