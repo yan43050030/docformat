@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QSplitter, QPlainTextEdit, QFileDialog, QHBoxLayout,
     QApplication, QMenu, QAction, QDialog, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QDialogButtonBox, QInputDialog,
+    QComboBox,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
