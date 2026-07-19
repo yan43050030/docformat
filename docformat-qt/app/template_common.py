@@ -16,6 +16,12 @@ from app.presets import config_dir
 
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
 
+# 注释语法：
+#   // ...         → 整行注释（以 // 开头），生成时完全忽略
+#   【...】        → 行内注释，生成时忽略方括号及其内容
+COMMENT_LINE_RE = re.compile(r"^\s*//")
+INLINE_COMMENT_RE = re.compile(r"【[^】]*】")
+
 TEMPLATE_DIR = os.path.join(config_dir(), "templates")
 
 
@@ -72,10 +78,23 @@ def scan_templates(dirs=None):
     return results
 
 
+def strip_comments(text):
+    """移除注释：// 行注释整行删除，【...】行内注释删除"""
+    lines = text.splitlines()
+    cleaned = []
+    for line in lines:
+        if COMMENT_LINE_RE.match(line):
+            continue
+        line = INLINE_COMMENT_RE.sub("", line)
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
+
 def extract_fields(template_text):
-    """按出现顺序提取去重后的占位符字段名"""
+    """按出现顺序提取去重后的占位符字段名（忽略注释行）"""
+    clean = strip_comments(template_text)
     seen = []
-    for m in PLACEHOLDER_RE.finditer(template_text):
+    for m in PLACEHOLDER_RE.finditer(clean):
         name = m.group(1).strip()
         if name not in seen:
             seen.append(name)
@@ -86,15 +105,18 @@ def parse_template(template_text):
     """解析模板 → {'title', 'body':[{'type','text'}], 'meta':{}}
 
     模板格式约定（勿改，两个模块靠此对接）：
+      - // 开头 → 注释行，生成时忽略
+      - 【...】 → 行内注释，生成时忽略
       - 标题: 以 "标题:" 开头的行
       - "一、" 开头 → 一级标题 (h1)
       - "（一）" 开头 → 二级标题 (h2)
       - 其余 → 正文 (body)
-      - ---META--- 之后 → 落款单位/日期
+      - ---META--- 之后 → 附加字段（落款单位/日期等）
     """
-    body_part, meta = template_text, {}
-    if "---META---" in template_text:
-        body_part, meta_part = template_text.split("---META---", 1)
+    cleaned = strip_comments(template_text)
+    body_part, meta = cleaned, {}
+    if "---META---" in cleaned:
+        body_part, meta_part = cleaned.split("---META---", 1)
         for line in meta_part.strip().splitlines():
             if ":" in line or "：" in line:
                 k, v = re.split(r"[:：]", line, 1)
