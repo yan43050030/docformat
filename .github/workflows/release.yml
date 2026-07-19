@@ -100,8 +100,11 @@ jobs:
             echo "deb http://archive.debian.org/debian buster main" > /etc/apt/sources.list
             apt-get -o Acquire::Check-Valid-Until=false update
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-              python3-pip python3-setuptools python3-wheel python3-pyqt5 binutils
-            pip3 install --no-cache-dir python-docx "pyinstaller==5.13.2"
+              python3-pip python3-setuptools python3-wheel python3-pyqt5 python3-lxml binutils
+            # Debian 10 自带 pip 18 不认 manylinux2014 wheel，先升级（<24.1 仍支持 py3.7）；
+            # python-docx 钉 0.8.11（1.x 需要 py3.8+），lxml 用系统包避免源码编译
+            pip3 install --no-cache-dir --upgrade "pip<24.1"
+            pip3 install --no-cache-dir "python-docx==0.8.11" "pyinstaller==5.13.2"
             python3 smoke_test.py
             python3 -m PyInstaller --noconfirm --clean --onefile --windowed \
               --name DocFormatPro \
