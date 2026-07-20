@@ -225,6 +225,7 @@ class PresetsPage(QWidget):
         self._build_element_sections()
         self._build_rules_section()
         self._build_table_section()
+        self._build_image_section()
         self._build_advanced_section()
         self.editor_lay.addStretch(1)
 
@@ -513,6 +514,36 @@ class PresetsPage(QWidget):
         self._sections.append(sec)
         self.editor_lay.addWidget(sec)
 
+    def _build_image_section(self):
+        sec = CollapsibleSection("图片处理")
+        g = QGridLayout()
+        g.setHorizontalSpacing(12)
+        self.img_enabled = QCheckBox("启用图片压缩与排版（统一宽度、对齐、压缩体积）")
+        self.img_enabled.stateChanged.connect(self._save_from_widgets)
+        g.addWidget(self.img_enabled, 0, 0, 1, 3)
+        g.addWidget(QLabel("最大宽度 (cm)"), 1, 0)
+        self.img_max_w = _spin(2, 30, 1, 0)
+        self.img_max_w.valueChanged.connect(self._save_from_widgets)
+        g.addWidget(self.img_max_w, 2, 0)
+        g.addWidget(QLabel("最大高度 (cm)"), 1, 1)
+        self.img_max_h = _spin(2, 30, 1, 0)
+        self.img_max_h.valueChanged.connect(self._save_from_widgets)
+        g.addWidget(self.img_max_h, 2, 1)
+        g.addWidget(QLabel("对齐方式"), 1, 2)
+        self.img_align = _LockCombo()
+        for al, av in [('居中', 'center'), ('左对齐', 'left'), ('右对齐', 'right')]:
+            self.img_align.addItem(al, av)
+        self.img_align.currentIndexChanged.connect(self._save_from_widgets)
+        g.addWidget(self.img_align, 2, 2)
+        g.addWidget(QLabel("JPEG 质量 (1-100)"), 3, 0)
+        self.img_quality = _spin(1, 100, 5, 0)
+        self.img_quality.valueChanged.connect(self._save_from_widgets)
+        g.addWidget(self.img_quality, 4, 0)
+        g.setColumnStretch(3, 1)
+        sec.set_body_layout(g)
+        self._sections.append(sec)
+        self.editor_lay.addWidget(sec)
+
     def _build_advanced_section(self):
         sec = CollapsibleSection("高级选项")
         g = QGridLayout()
@@ -597,6 +628,13 @@ class PresetsPage(QWidget):
         self.adv_bold_serial.setChecked(bool(p.get('bold_serial', True)))
         self.adv_deep_clean.setChecked(bool(p.get('deep_clean', False)))
 
+        img = p.get('image', {}) or {}
+        self.img_enabled.setChecked(bool(img.get('auto_compress', False)))
+        self.img_max_w.setValue(float(img.get('width', 14)))
+        self.img_max_h.setValue(float(img.get('height', 8)))
+        self._set_combo_data(self.img_align, img.get('alignment', 'center'))
+        self.img_quality.setValue(float(img.get('quality', 85)))
+
         rules = p.get('detect_rules', {}) or {}
         for key, edit in self._rule_edits.items():
             combo = self._rule_combos[key]
@@ -668,6 +706,17 @@ class PresetsPage(QWidget):
         p['first_line_bold'] = self.adv_first_bold.isChecked()
         p['bold_serial'] = self.adv_bold_serial.isChecked()
         p['deep_clean'] = self.adv_deep_clean.isChecked()
+
+        if self.img_enabled.isChecked():
+            p['image'] = {
+                'auto_compress': True,
+                'width': self.img_max_w.value(),
+                'height': self.img_max_h.value(),
+                'alignment': self.img_align.currentData(),
+                'quality': int(self.img_quality.value()),
+            }
+        else:
+            p.pop('image', None)
 
         rules = {}
         for key, edit in self._rule_edits.items():
