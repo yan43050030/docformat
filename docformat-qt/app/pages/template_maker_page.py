@@ -40,8 +40,9 @@ from PyQt5.QtCore import Qt
 
 from app.template_common import (
     TEMPLATE_DIR, PLACEHOLDER_RE,
-    load_template_dirs, save_template_dirs,
-    is_bundled_dir, detect_auto_fields, find_placeholder_at,
+    load_template_dirs, save_template_dirs, is_bundled_dir,
+    detect_auto_fields, find_placeholder_at,
+    load_quick_inserts, save_quick_inserts, DEFAULT_QUICK_INSERTS,
 )
 
 
@@ -121,36 +122,38 @@ class TemplateMakerPage(QWidget):
         top.addWidget(self.btn_add_dir)
         outer.addLayout(top)
 
-        # 正文编辑区
-        outer.addWidget(QLabel("正文（选中要变成变量的文字，点下方按钮挖空）"))
+        # 正文编辑区 + 工具条紧凑布局
+        outer.addWidget(QLabel("正文（选中文字 → 点下方按钮挖空为占位符）"))
         self.editor = QTextEdit()
         self.editor.setAcceptRichText(False)
+        self.editor.setMinimumHeight(200)
         self.editor.setContextMenuPolicy(Qt.CustomContextMenu)
         self.editor.customContextMenuRequested.connect(self._on_editor_context_menu)
         outer.addWidget(self.editor)
 
-        # 工具条
         mid = QHBoxLayout()
         self.btn_hole = QPushButton("① 挖空选中文字为占位符")
         self.btn_hole.clicked.connect(self._on_make_hole)
         self.btn_title = QPushButton("② 标记选中行为标题")
         self.btn_title.clicked.connect(self._on_mark_title)
+        self.btn_quick = QPushButton("③ 快捷插入")
+        self.btn_quick.clicked.connect(lambda: self._show_quick_menu(self.btn_quick))
         mid.addWidget(self.btn_hole)
         mid.addWidget(self.btn_title)
+        mid.addWidget(self.btn_quick)
         mid.addStretch()
+        # 模板标签和工具条同行
+        mid.addWidget(QLabel("标签："))
+        self.tags_edit = QLineEdit()
+        self.tags_edit.setPlaceholderText("逗号分隔，辅助起草页搜索")
+        self.tags_edit.setMaximumWidth(240)
+        mid.addWidget(self.tags_edit)
         outer.addLayout(mid)
 
-        # 模板标签
-        tag_row = QHBoxLayout()
-        tag_row.addWidget(QLabel("模板标签："))
-        self.tags_edit = QLineEdit()
-        self.tags_edit.setPlaceholderText("用逗号分隔，如：刑事, 侦查, 逮捕（辅助起草页搜索）")
-        tag_row.addWidget(self.tags_edit)
-        tag_row.addStretch()
-        outer.addLayout(tag_row)
-
         # 附加字段（META 键值对）表格
-        outer.addWidget(QLabel("附加字段（落款单位、日期等，可自由增删）"))
+        meta_label = QLabel("附加字段（正文挖空后自动同步到此表，也可手动增删）")
+        meta_label.setContentsMargins(0, 4, 0, 0)
+        outer.addWidget(meta_label)
         meta_bar = QHBoxLayout()
         self.meta_table = QTableWidget(0, 2)
         self.meta_table.setHorizontalHeaderLabels(["字段名", "字段值（可用 {{占位符}}）"])
@@ -275,6 +278,14 @@ class TemplateMakerPage(QWidget):
         self.editor.setPlainText(new_full)
         if field not in self.field_names:
             self.field_names.append(field)
+            # 同步到附加字段表格
+            existing_keys = set()
+            for r in range(self.meta_table.rowCount()):
+                item = self.meta_table.item(r, 0)
+                if item:
+                    existing_keys.add(item.text().strip())
+            if field not in existing_keys:
+                self._add_meta_row(field, "{{" + field + "}}")
         QMessageBox.information(self, "已挖空",
             "已把所有「{}」替换为 {}".format(selected, placeholder))
 
@@ -391,6 +402,34 @@ class TemplateMakerPage(QWidget):
                 if cb._field not in self.field_names:
                     self.field_names.append(cb._field)
         self.editor.setPlainText(full)
+
+    # ---------------- 快捷插入 ----------------
+    def _show_quick_menu(self, anchor_widget=None):
+        menu = QMenu(self)
+        for item in load_quick_inserts():
+            label = item.get("label", "")
+            text = item.get("text", "")
+            if not label:
+                continue
+            action = menu.addAction(label)
+            action.setData(text)
+            action.triggered.connect(lambda checked, t=text: self._insert_quick_text(t))
+        menu.addSeparator()
+        menu.addAction("管理快捷插入...", self._on_manage_quick_inserts)
+        if anchor_widget:
+            menu.exec_(anchor_widget.mapToGlobal(anchor_widget.rect().bottomLeft()))
+        else:
+            menu.exec_(self.editor.mapToGlobal(self.editor.rect().center()))
+
+    def _insert_quick_text(self, text):
+        cursor = self.editor.textCursor()
+        cursor.insertText(text)
+        self.editor.setTextCursor(cursor)
+
+    def _on_manage_quick_inserts(self):
+        from app.pages.template_draft_page import QuickInsertDialog
+        dlg = QuickInsertDialog(self)
+        dlg.exec_()
 
     # ---------------- META 动态表格 ----------------
     def _add_meta_row(self, key="", value=""):
