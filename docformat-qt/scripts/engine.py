@@ -40,6 +40,7 @@ from .paragraph import (
     format_paragraph, _format_structural_blank_paragraph,
     _format_empty_paragraphs, _compact_empty_paragraph,
     _is_structural_blank, deep_clean_document,
+    _keep_first_sentence_runs, _append_body_run,
 )
 from .detector import (
     detect_para_type, _compile_rules, _build_text_context,
@@ -309,14 +310,41 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
             fmt_key = para_type if para_type in preset else 'body'
             fmt = preset.get(fmt_key, preset['body'])
 
-            format_paragraph(
-                para, fmt, para_type,
-                first_line_bold=first_line_bold,
-                revision_mode=revision_mode,
-                bold_serial=bold_serial
-            )
-            stats[para_type] = stats.get(para_type, 0) + 1
-            typed_entries.append((para, para_type))
+            # 长标题同行混排：二级/三级/四级标题含多个句号时，
+            # 第一句按标题格式、后段内容按正文格式，仍在同一段落中
+            heading_part = body_tail = None
+            if para_type in ('heading2', 'heading3', 'heading4') and text.count('。') > 1:
+                idx = text.index('。')
+                heading_part = text[:idx + 1].strip()
+                body_tail = text[idx + 1:].strip()
+                if not body_tail or len(heading_part) < 4:
+                    heading_part = body_tail = None
+
+            if heading_part is not None:
+                bfmt = preset.get('body', {})
+                # 先按标题格式套整个段落（缩进/行距等）
+                format_paragraph(
+                    para, fmt, para_type,
+                    first_line_bold=first_line_bold,
+                    revision_mode=revision_mode,
+                    bold_serial=bold_serial
+                )
+                # 清除所有 run 的文字，仅保留标题句
+                _keep_first_sentence_runs(para, heading_part)
+                # 在段落末尾追加正文 run
+                _append_body_run(para, body_tail, bfmt, revision_mode)
+                stats[para_type] = stats.get(para_type, 0) + 1
+                typed_entries.append((para, para_type))
+            else:
+                format_paragraph(
+                    para, fmt, para_type,
+                    first_line_bold=first_line_bold,
+                    revision_mode=revision_mode,
+                    bold_serial=bold_serial
+                )
+                stats[para_type] = stats.get(para_type, 0) + 1
+                typed_entries.append((para, para_type))
+
             prev_para_type = para_type
 
             preview = text[:35] + '...' if len(text) > 35 else text

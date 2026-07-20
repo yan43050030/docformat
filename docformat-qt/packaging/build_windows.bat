@@ -1,9 +1,14 @@
 @echo off
-REM Build standalone DocFormatPro.exe (requires: pip install pyinstaller)
+REM Build DocFormatPro-v{version}.exe (requires: pip install pyinstaller)
 cd /d "%~dp0\.."
 
+REM Extract version from source
+for /f %%v in ('python -c "import re; m=re.search(r"VERSION = '(.+?)'", open('app/main_window.py',encoding='utf-8').read()); print(m.group(1) if m else 'unknown')"') do set VER=%%v
+
+echo Building DocFormatPro-v%VER%.exe ...
+
 python -m PyInstaller --noconfirm --clean --onefile --windowed ^
-    --name DocFormatPro ^
+    --name "DocFormatPro-v%VER%" ^
     --collect-data docx ^
     --icon assets/icon.ico ^
     --add-data "assets;assets" ^
@@ -17,5 +22,5 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
     main.py
 
 echo.
-echo Done: dist\DocFormatPro.exe
+echo Done: dist\DocFormatPro-v%VER%.exe
 pause

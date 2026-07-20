@@ -3,9 +3,9 @@
 段落格式化 — 从 formatter.py 拆分
 
 包含：format_paragraph、_set_paragraph_spacing_points、
-      结构空行处理、deep_clean_document
+_keep_first_sentence_runs、_append_body_run
+_keep_first_sentence_runs、_append_body_run、结构空行处理、deep_clean_document
 """
-
 import re
 import logging
 from copy import deepcopy
@@ -112,6 +112,41 @@ def deep_clean_document(doc):
             for cell in row.cells:
                 for para in cell.paragraphs:
                     _clean_paragraph(para)
+
+
+def _keep_first_sentence_runs(para, heading_text):
+    """将已格式化段落的文字重置为仅含标题句（保留第一个 run 的格式）"""
+    # 收集第一个有效 run 的格式
+    first_run = None
+    for r in para.runs:
+        if r.text.strip():
+            first_run = r
+            break
+    # 清空全部 run 的文字
+    for r in para.runs:
+        r.text = ''
+    # 把标题句写入第一个 run
+    if first_run:
+        first_run.text = heading_text
+
+
+def _append_body_run(para, body_text, bfmt, revision_mode=False):
+    """在段尾追加一个正文格式的 run"""
+    from .font import set_font
+    run = para.add_run(body_text)
+    set_font(
+        run,
+        bfmt.get('font_cn', '仿宋_GB2312'),
+        bfmt.get('font_en', 'Times New Roman'),
+        bfmt.get('size', 16),
+        bold=bfmt.get('bold', False),
+    )
+    if revision_mode:
+        from .font import _add_rpr_change, _next_rev_id, _rev_date
+        rpr = run._element.get_or_add_rPr()
+        rpr.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}id',
+                str(_next_rev_id()))
+        _add_rpr_change(run, para)
 
 
 def format_paragraph(para, fmt, para_type, line_spacing_pt=28, first_line_bold=False, revision_mode=False, bold_serial=True):
