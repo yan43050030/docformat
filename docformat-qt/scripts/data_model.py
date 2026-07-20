@@ -285,6 +285,11 @@ PRESETS = {
             'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
             'size': 16, 'bold': True, 'align': 'justify', 'indent': 0,
         },
+        'roster': {
+            'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
+            'size': 16, 'bold': True, 'align': 'left', 'indent': 0,
+            'space_before': 0, 'space_after': 0,
+        },
         'closing': {
             'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
             'size': 16, 'bold': True, 'align': 'left', 'indent': 32,
@@ -359,6 +364,11 @@ PRESETS = {
             'font_cn': '仿宋_GB2312', 'font_en': 'Times New Roman',
             'size': 16, 'bold': False, 'align': 'justify', 'indent': 0,
         },
+        'roster': {
+            'font_cn': '仿宋_GB2312', 'font_en': 'Times New Roman',
+            'size': 16, 'bold': False, 'align': 'left', 'indent': 0,
+            'space_before': 0, 'space_after': 0,
+        },
         'closing': {
             'font_cn': '仿宋_GB2312', 'font_en': 'Times New Roman',
             'size': 16, 'bold': False, 'align': 'left', 'indent': 32,
@@ -380,6 +390,7 @@ PRESETS = {
         'signature': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 12, 'bold': False, 'align': 'right', 'indent': 0},
         'date': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 12, 'bold': False, 'align': 'right', 'indent': 0},
         'attachment': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 12, 'bold': False, 'align': 'justify', 'indent': 0},
+        'roster': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 12, 'bold': False, 'align': 'left', 'indent': 0},
         'closing': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 12, 'bold': False, 'align': 'left', 'indent': 24},
     },
     'legal': {
@@ -398,6 +409,7 @@ PRESETS = {
         'signature': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 14, 'bold': False, 'align': 'right', 'indent': 0},
         'date': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 14, 'bold': False, 'align': 'right', 'indent': 0},
         'attachment': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 14, 'bold': False, 'align': 'justify', 'indent': 0},
+        'roster': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 14, 'bold': False, 'align': 'left', 'indent': 0},
         'closing': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 14, 'bold': False, 'align': 'left', 'indent': 28},
     },
 }
