@@ -196,11 +196,11 @@ class PresetsPage(QWidget):
             bar.addWidget(btn)
 
         bar.addStretch()
-        self.btn_lock = QPushButton("🔒 参数已锁定")
+        self.btn_lock = QPushButton("🔒 禁止滚轮修改参数")
         self.btn_lock.setCheckable(True)
         self.btn_lock.setChecked(True)
         self.btn_lock.setCursor(Qt.PointingHandCursor)
-        self.btn_lock.setToolTip("锁定后滚轮不会误改参数值，点击解锁后可编辑")
+        self.btn_lock.setToolTip("锁定后鼠标滚轮不会误改参数值；点击下拉框或用键盘输入仍可正常修改")
         self.btn_lock.toggled.connect(self._on_lock_toggled)
         bar.addWidget(self.btn_lock)
         set_wheel_locked(True)
@@ -668,8 +668,11 @@ class PresetsPage(QWidget):
     def _on_lock_toggled(self, checked):
         set_wheel_locked(checked)
         if checked:
-            self.btn_lock.setText("🔒 参数已锁定")
-            self.btn_lock.setToolTip("锁定后滚轮不会误改参数值，点击解锁后可编辑")
+            self.btn_lock.setText("🔒 禁止滚轮修改参数")
+            self.btn_lock.setToolTip("锁定后鼠标滚轮不会误改参数值；点击下拉框或用键盘输入仍可正常修改")
+        else:
+            self.btn_lock.setText("🔓 滚轮可修改参数")
+            self.btn_lock.setToolTip("滚轮可修改参数值，翻阅页面时请注意勿误触")
         else:
             self.btn_lock.setText("🔓 参数已解锁")
             self.btn_lock.setToolTip("解锁状态，滚轮可调整参数值，点击锁定防误触")
