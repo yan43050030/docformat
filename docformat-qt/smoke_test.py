@@ -300,6 +300,36 @@ def test_builtin_rename():
     print('[11] 内置模板重命名: 持久化 + 恢复默认 通过')
 
 
+def test_heading_split():
+    """长标题同行混排：二级/三级/四级标题含多个句号 → 第一句 run 按标题格式，后段 run 按正文格式，同一段落"""
+    from scripts.punctuation import process_document
+    from scripts.formatter import format_document
+    doc = Document()
+    doc.add_paragraph('关于开展2026年度安全生产检查的通知')
+    doc.add_paragraph('各部门：')
+    doc.add_paragraph('（一）加强组织领导。各部门要高度重视安全生产工作，严格落实主体责任，确保各项措施落到实处。')
+    p_src = os.path.join(OUT_DIR, 'hs_src.docx')
+    doc.save(p_src)
+    p_mid = os.path.join(OUT_DIR, 'hs_mid.docx')
+    process_document(p_src, p_mid)
+    p_out = os.path.join(OUT_DIR, 'hs_out.docx')
+    format_document(p_mid, p_out, preset_name='official_gbk')
+    result = Document(p_out)
+    # 输出应仍为 1 个段落（同行混排，不拆分段落）
+    cand = [p for p in result.paragraphs if '加强组织领导' in p.text and '各部门要高度重视' in p.text]
+    assert len(cand) == 1, '应保持同一段落，实际拆成了 {} 段'.format(len(cand) if not cand else 1)
+    para = cand[0]
+    runs = [r for r in para.runs if r.text.strip()]
+    assert len(runs) >= 2, '应至少有 2 个 run（标题 + 正文），实际 {}'.format(len(runs))
+    from docx.oxml.ns import qn as _qn
+    h_font = runs[0]._element.rPr.rFonts.get(_qn('w:eastAsia'))
+    assert h_font == '方正楷体_GBK', '第一个 run 字体应为方正楷体，实际 {}'.format(h_font)
+    b_font = runs[-1]._element.rPr.rFonts.get(_qn('w:eastAsia'))
+    assert b_font == '方正仿宋_GBK', '最后一个 run 字体应为方正仿宋，实际 {}'.format(b_font)
+    assert abs(para.paragraph_format.first_line_indent.pt - 32) < 0.5, '段落缩进应保持不变'
+    print('[12] 长标题同行混排: heading2 多句号 → 同一段落 标题run(楷体) + 正文run(仿宋) ✓')
+
+
 if __name__ == '__main__':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     make_sample()
@@ -313,4 +343,5 @@ if __name__ == '__main__':
     test_official_gbk()
     test_text_input()
     test_builtin_rename()
+    test_heading_split()
     print('\n全部冒烟测试通过 ✓')
