@@ -275,7 +275,24 @@ def test_official_gbk():
     # 元素间表现为 engine 插入的固定空段，此处附件紧接结尾属于正确行为
     assert a_idx - b_idx >= 1, '结尾和附件之间应有空行，实测间距 {} 段'.format(a_idx - b_idx)
 
-    print('[9] 图解标准模板: A4/边距/22行28字网格/GBK字体加粗/落款对位+页码居中+密级/结尾空行 通过')
+    # 公章布局：gb_seal=True → 日期右空4字(64pt)，署名居中于日期
+    import copy as _cp
+    from scripts.formatter import PRESETS as _P
+    from scripts.punctuation import process_document as _pd
+    seal_p = _cp.deepcopy(_P['official_gbk'])
+    seal_p['gb_seal'] = True
+    seal_out = os.path.join(OUT_DIR, 'sample_seal.docx')
+    seal_mid = os.path.join(OUT_DIR, 'seal_mid.docx')
+    _pd(SRC, seal_mid)
+    format_document(seal_mid, seal_out, preset_name='custom', custom_settings=seal_p)
+    seal_doc = Document(seal_out)
+    seal_sig = [pp for pp in seal_doc.paragraphs if pp.text.strip() == '某某公司办公室'][0]
+    seal_date = [pp for pp in seal_doc.paragraphs if pp.text.strip() == '2026年7月17日'][0]
+    d_ri_seal = seal_date.paragraph_format.right_indent.pt
+    assert abs(d_ri_seal - 64) < 2, '公章模式日期右空应为4字(64pt)，实际 {}'.format(d_ri_seal)
+    s_ri_seal = seal_sig.paragraph_format.right_indent.pt
+    assert s_ri_seal > 40, '公章署名应居中于日期，右缩进应较大，实际 {}'.format(s_ri_seal)
+    print('[9] 图解标准模板: A4/边距/22行28字网格/GBK字体加粗/落款对位+公章布局+页码居中+密级/结尾空行 通过')
 
 
 def test_text_input():

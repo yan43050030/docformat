@@ -8,9 +8,9 @@ import os
 
 from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtGui import QCursor
-from PyQt5.QtWidgets import (QComboBox, QDialog, QHBoxLayout, QLabel, QMenu,
-                             QPushButton, QSplitter, QTextBrowser, QVBoxLayout,
-                             QWidget)
+from PyQt5.QtWidgets import (QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel,
+                             QMenu, QPushButton, QSplitter, QTextBrowser,
+                             QVBoxLayout, QWidget)
 
 from scripts.formatter import (_build_text_context, _compile_rules,
                                detect_para_type)
@@ -213,6 +213,9 @@ class PreviewDialog(QDialog):
         self.notice.setWordWrap(True)
         self.notice.setVisible(False)
         root.addWidget(self.notice)
+
+        self.seal_check = QCheckBox("加盖公章（落款日期右空4字，署名居中于日期编排）")
+        root.addWidget(self.seal_check)
 
         hint = QLabel("提示：点击右侧段落前的类型标签，可手动指定该段是标题/正文/附件等（红色标签=已手动指定）")
         hint.setProperty("muted", "true")

@@ -216,7 +216,7 @@ def _merge_preset_settings(base, overrides):
 
 PRESETS = {
     'official_gbk': {
-        'name': '公文格式（图解版·22行28字）',
+        'name': '常用排版',
         'deep_clean': False,
         'page_number': True,
         'page_number_font': '宋体',
