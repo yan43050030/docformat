@@ -288,7 +288,7 @@ PRESETS = {
         'roster': {
             'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
             'size': 16, 'bold': True, 'align': 'left', 'indent': 0,
-            'space_before': 0, 'space_after': 0,
+            'line_spacing': 28, 'space_before': 0, 'space_after': 0,
         },
         'closing': {
             'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
