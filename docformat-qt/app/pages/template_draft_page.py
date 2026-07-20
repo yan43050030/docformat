@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QSplitter, QPlainTextEdit, QFileDialog, QHBoxLayout,
     QApplication, QMenu, QAction, QDialog, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QDialogButtonBox, QInputDialog,
-    QComboBox,
+    QComboBox, QStackedWidget, QTextBrowser,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
@@ -244,16 +244,30 @@ class TemplateDraftPage(QWidget):
         self.btn_save_template.setEnabled(False)
         preview_bar.addWidget(self.btn_save_template)
 
+        self.btn_format_view = QPushButton("纯文本")
+        self.btn_format_view.setCheckable(True)
+        self.btn_format_view.setToolTip("切换格式预览 / 纯文本视图")
+        self.btn_format_view.toggled.connect(self._on_format_view_toggled)
+        preview_bar.addWidget(self.btn_format_view)
+
         btn_quick = QPushButton("快捷插入")
         btn_quick.clicked.connect(lambda: self._show_quick_menu(btn_quick))
         preview_bar.addWidget(btn_quick)
         rv.addLayout(preview_bar)
 
-        # 预览编辑区
+        # 预览编辑区：格式预览（QTextBrowser） + 纯文本（QPlainTextEdit）
+        self.preview_stack = QStackedWidget()
+
+        self.preview_html = QTextBrowser()
+        self.preview_html.setOpenLinks(False)
+        self.preview_stack.addWidget(self.preview_html)  # index 0
+
         self.preview = QPlainTextEdit()
         self.preview.setContextMenuPolicy(Qt.CustomContextMenu)
         self.preview.customContextMenuRequested.connect(self._on_preview_context_menu)
-        rv.addWidget(self.preview)
+        self.preview_stack.addWidget(self.preview)       # index 1
+
+        rv.addWidget(self.preview_stack)
         splitter.addWidget(right)
 
         splitter.setSizes([240, 360, 420])
@@ -265,13 +279,150 @@ class TemplateDraftPage(QWidget):
         self._edit_source_mode = checked
         self.btn_toggle_mode.setText("返回预览" if checked else "编辑模板源码")
         self.btn_save_template.setEnabled(checked)
+        self.btn_format_view.setEnabled(not checked)
         if checked:
+            # 源码编辑：强制纯文本模式
             self.preview.setStyleSheet("QPlainTextEdit { background: #fffef5; }")
             if self.current_template_text:
                 self.preview.setPlainText(self.current_template_text)
+            self.preview_stack.setCurrentIndex(1)
         else:
+            # 预览模式：根据格式切换状态决定
+            self._apply_format_view()
+
+    def _on_format_view_toggled(self, checked):
+        """纯文本 / 格式预览切换"""
+        if self._edit_source_mode:
+            return
+        self._apply_format_view()
+
+    def _apply_format_view(self):
+        """根据当前状态切换到对应视图"""
+        if self.btn_format_view.isChecked():
+            # 纯文本模式
+            self.btn_format_view.setText("格式预览")
+            self.preview_stack.setCurrentIndex(1)
             self.preview.setStyleSheet("")
-            self._update_preview()
+            self._update_preview_text()
+        else:
+            # 格式预览模式
+            self.btn_format_view.setText("纯文本")
+            self.preview_stack.setCurrentIndex(0)
+            self._update_preview_html()
+
+    def _update_preview_text(self):
+        """更新纯文本预览"""
+        if not self.current_template_text:
+            return
+        self.preview.setPlainText(_build_plain_text(self._current_rendered()))
+
+    # ---- 格式预览 HTML 渲染 ----
+    # 字体回退链（与 preview_dialog.py 一致）
+    _CSS_FONT_FALLBACK = {
+        '方正小标宋_GBK': '"方正小标宋_GBK","方正小标宋简体","华文中宋","SimSun","宋体"',
+        '方正小标宋简体': '"方正小标宋简体","华文中宋","SimSun","宋体"',
+        '方正黑体_GBK': '"方正黑体_GBK","黑体","SimHei","Microsoft YaHei"',
+        '黑体': '"黑体","SimHei","Microsoft YaHei"',
+        '方正楷体_GBK': '"方正楷体_GBK","楷体","楷体_GB2312","KaiTi"',
+        '楷体_GB2312': '"楷体_GB2312","楷体","KaiTi"',
+        '楷体': '"楷体","KaiTi"',
+        '方正仿宋_GBK': '"方正仿宋_GBK","仿宋_GB2312","仿宋","FangSong"',
+        '仿宋_GB2312': '"仿宋_GB2312","仿宋","FangSong"',
+        '仿宋': '"仿宋","FangSong"',
+        '宋体': '"宋体","SimSun"',
+        '华文中宋': '"华文中宋","宋体","SimSun"',
+    }
+
+    # 模板段落类型 → 预设键名
+    _TYPE_TO_PRESET = {'h1': 'heading1', 'h2': 'heading2', 'body': 'body'}
+
+    def _update_preview_html(self):
+        """更新格式预览 HTML"""
+        if not self.current_template_text:
+            self.preview_html.setHtml("")
+            return
+        rendered = self._current_rendered()
+        preset = (self.mgr.get(self.mgr.active_key) or {}) if self.mgr else {}
+
+        # 页面默认参数
+        body_fmt = preset.get('body', {})
+        base_size = body_fmt.get('size', 16)
+        base_font = self._css_font(body_fmt.get('font_cn', '仿宋_GB2312'))
+
+        parts = []
+
+        # 标题
+        title = rendered.get('title', '')
+        if title:
+            tf = preset.get('title', {})
+            parts.append(self._fmt_para(title, tf, 'title'))
+
+        # 正文段落
+        prev_type = None
+        for b in rendered.get('body', []):
+            ptype = self._TYPE_TO_PRESET.get(b.get('type', 'body'), 'body')
+            fmt = preset.get(ptype, body_fmt)
+
+            # 段前间距：不同类型之间稍大间距
+            spacing = ""
+            if prev_type and prev_type != ptype and ptype in ('heading1', 'heading2'):
+                spacing = "margin-top: 8pt;"
+            prev_type = ptype
+
+            parts.append(self._fmt_para(b['text'], fmt, ptype, extra_style=spacing))
+
+        # META 落款区
+        meta = rendered.get('meta', {})
+        if meta:
+            parts.append('<p style="margin-top:14pt;">&nbsp;</p>')
+            sig_fmt = preset.get('signature', body_fmt)
+            date_fmt = preset.get('date', body_fmt)
+            for k, v in meta.items():
+                if '单位' in k or '署名' in k:
+                    parts.append(self._fmt_para(v, sig_fmt, 'signature'))
+                elif '日期' in k:
+                    parts.append(self._fmt_para(v, date_fmt, 'date'))
+                else:
+                    parts.append(self._fmt_para("{}: {}".format(k, v), body_fmt, 'meta'))
+
+        body_html = ''.join(parts)
+        html = (
+            '<html><head><style>'
+            'body {{ font-family: {}; font-size: {}pt; margin: 20px 24px; line-height: 1.8; }}'
+            'p {{ margin: 2px 0; white-space: pre-wrap; }}'
+            '</style></head><body>{}</body></html>'
+        ).format(base_font, base_size, body_html)
+
+        # 保持滚动位置
+        bar = self.preview_html.verticalScrollBar()
+        pos = bar.value() if bar else 0
+        self.preview_html.setHtml(html)
+        if bar:
+            bar.setValue(pos)
+
+    def _fmt_para(self, text, fmt, ptype, extra_style=""):
+        """渲染单个段落为 HTML"""
+        font = self._css_font(fmt.get('font_cn', '仿宋_GB2312'))
+        size = fmt.get('size', 16)
+        align = fmt.get('align', 'left')
+        indent = fmt.get('indent', 0) or 0
+        bold = 'font-weight:bold;' if fmt.get('bold') else ''
+        ls = fmt.get('line_spacing')
+        lh = 'line-height:{}pt;'.format(ls) if ls else ''
+
+        style = (
+            'font-family:{};font-size:{}pt;text-align:{};'
+            'text-indent:{}pt;{}{}{}'
+        ).format(font, size, align, indent, bold, lh, extra_style)
+
+        return '<p style="{}">{}</p>'.format(style, self._esc_html(text))
+
+    def _css_font(self, name):
+        return self._CSS_FONT_FALLBACK.get(name, '"{}"'.format(name))
+
+    @staticmethod
+    def _esc_html(text):
+        return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
     # ===== 保存模板（源码编辑模式下） =====
     def _on_save_template(self):
@@ -588,8 +739,11 @@ class TemplateDraftPage(QWidget):
         if not self.current_template_text:
             return
         if self._edit_source_mode:
-            return  # 源码编辑模式不自动刷新
-        self.preview.setPlainText(_build_plain_text(self._current_rendered()))
+            return
+        if self.btn_format_view.isChecked():
+            self._update_preview_text()
+        else:
+            self._update_preview_html()
 
     # ===== 生成 & 排版 =====
     def _on_generate(self):
