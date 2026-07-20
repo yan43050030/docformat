@@ -113,7 +113,7 @@ QComboBox QAbstractItemView {{
     selection-background-color: {accent}; selection-color: {accent_fg};
 }}
 QCheckBox, QRadioButton {{ color: {ink}; spacing: 7px; }}
-QRadioButton::indicator, QCheckBox::indicator {{ width: 16px; height: 16px; }}
+QRadioButton::indicator, QCheckBox::indicator {{ width: 18px; height: 18px; }}
 QPlainTextEdit, QTextEdit {{
     background: {card}; border: 1px solid {border_medium}; border-radius: 8px; color: {ink};
     padding: 6px;
