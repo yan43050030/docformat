@@ -758,8 +758,8 @@ class TemplateDraftPage(QWidget):
             return
 
         if self._edit_source_mode:
-            # 源码编辑模式下，使用预览区的文本作为最终正文
             plain = self.preview.toPlainText()
+            type_ov = {}
         else:
             rendered = self._current_rendered()
             unfilled = find_unfilled(rendered)
@@ -788,6 +788,30 @@ class TemplateDraftPage(QWidget):
             self, "保存排版后的公文", default_path, "Word 文档 (*.docx)")
         if not out_path:
             return
+
+        # 生成临时 docx 用于预览
+        tmp_root = tempfile.mkdtemp(prefix='docformat_preview_')
+        preview_path = os.path.join(tmp_root, 'preview.docx')
+        from docx import Document as _Doc
+        import re
+        _d = _Doc()
+        for _line in plain.splitlines():
+            _d.add_paragraph(re.sub(r'^标题[:：]\d*[:：]\s*', '', _line))
+        _d.save(preview_path)
+
+        # 始终打开预览对比确认
+        from app.preview_dialog import PreviewDialog
+        preset = self.mgr.get(self.mgr.active_key)
+        dlg = PreviewDialog([preview_path], preset, self)
+        if dlg.exec_() != PreviewDialog.Accepted:
+            shutil.rmtree(tmp_root, ignore_errors=True)
+            return
+        dlg_overrides = dlg.get_overrides()
+        if dlg_overrides:
+            merged_ov = dict(type_ov)
+            merged_ov.update(dlg_overrides.get(os.path.normpath(preview_path), {}))
+            type_ov = merged_ov
+        shutil.rmtree(tmp_root, ignore_errors=True)
 
         preset_name = self.mgr.active_key
         custom_settings = None
