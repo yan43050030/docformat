@@ -67,6 +67,11 @@ def collect_system_info():
         else:
             info.append(("{} 版本".format(pkg_name), "✗ 未安装"))
 
+    # ── 系统运行时库（Linux 关键项，缺失会导致 Qt 启动失败）──
+    if sys.platform != "win32":
+        for label, status in _check_system_libs():
+            info.append(("系统库: {}".format(label), status))
+
     # ── 格式转换工具 ──
     if sys.platform != "win32":
         try:
@@ -231,6 +236,72 @@ def _memory_info():
     except Exception:
         pass
     return ""
+
+
+def _check_system_libs():
+    """检测关键系统运行时库（Linux）。
+
+    返回 [(库名, 状态)] 列表，状态为 "✓" / "✗ 缺失" / "⚠ 不确定"。
+    这些库是 PyInstaller 打包的 Qt5 应用启动所必需的。
+    """
+    if sys.platform == "win32":
+        return []
+
+    import ctypes
+
+    # 关键库及其说明（不含 glibc 本身，因为 glibc 是 ABI 边界无法捆绑）
+    CRITICAL_LIBS = [
+        # Qt5 核心 — 缺失任何一个 GUI 都拉不起来
+        ("libQt5Widgets.so.5", "Qt5 Widgets"),
+        ("libQt5Gui.so.5", "Qt5 GUI"),
+        ("libQt5Core.so.5", "Qt5 Core"),
+        ("libQt5PrintSupport.so.5", "Qt5 打印"),
+
+        # XCB — Qt 在 Linux 上的显示后端
+        ("libxcb.so.1", "X11 协议核心"),
+        ("libxcb-util.so.1", "XCB 工具"),
+        ("libxcb-icccm.so.4", "XCB ICCCM"),
+        ("libxcb-image.so.0", "XCB 图像"),
+        ("libxcb-keysyms.so.1", "XCB 按键"),
+        ("libxcb-randr.so.0", "XCB 分辨率"),
+        ("libxcb-render.so.0", "XCB 渲染"),
+        ("libxcb-shape.so.0", "XCB 形状"),
+        ("libxcb-shm.so.0", "XCB 共享内存"),
+        ("libxcb-sync.so.1", "XCB 同步"),
+        ("libxcb-xfixes.so.0", "XCB 修复扩展"),
+        ("libxcb-xinerama.so.0", "XCB 多屏"),
+        ("libxcb-xkb.so.1", "XCB 键盘"),
+
+        # 字体 — 中文渲染依赖
+        ("libfontconfig.so.1", "字体配置"),
+        ("libfreetype.so.6", "字体渲染"),
+
+        # 图形
+        ("libGL.so.1", "OpenGL"),
+        ("libEGL.so.1", "EGL"),
+
+        # GLib — Qt 事件循环依赖
+        ("libglib-2.0.so.0", "GLib"),
+        ("libgobject-2.0.so.0", "GObject"),
+
+        # C++ 运行时
+        ("libstdc++.so.6", "C++ 标准库"),
+
+        # D-Bus — Linux 桌面通信
+        ("libdbus-1.so.3", "D-Bus"),
+    ]
+
+    results = []
+    for soname, desc in CRITICAL_LIBS:
+        try:
+            ctypes.CDLL(soname)
+            results.append(("{} ({})".format(desc, soname), "✓"))
+        except OSError:
+            results.append(("{} ({})".format(desc, soname), "✗ 缺失"))
+        except Exception:
+            results.append(("{} ({})".format(desc, soname), "⚠ 不确定"))
+
+    return results
 
 
 # ================================================================
