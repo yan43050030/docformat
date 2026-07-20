@@ -22,11 +22,12 @@ TYPE_LABELS = {
     'heading1': '一级标题', 'heading2': '二级标题', 'heading3': '三级标题',
     'heading4': '四级标题', 'body': '正文', 'signature': '署名',
     'date': '日期', 'attachment': '附件', 'closing': '结尾', 'empty': '',
+    'roster': '组成人员名单',
 }
 # 手动指定类型菜单里展示的顺序
 TYPE_MENU_ORDER = ['title', 'docnum', 'security', 'recipient',
                    'heading1', 'heading2', 'heading3', 'heading4',
-                   'body', 'attachment', 'closing', 'signature', 'date']
+                   'body', 'roster', 'attachment', 'closing', 'signature', 'date']
 MAX_PARAS = 500
 
 ALIGN_CSS = {'left': 'left', 'center': 'center', 'right': 'right', 'justify': 'justify'}
