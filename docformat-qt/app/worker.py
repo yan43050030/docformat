@@ -12,6 +12,8 @@ MODE_FULL = 'full'
 MODE_DIAGNOSE = 'diagnose'
 MODE_PUNCTUATION = 'punctuation'
 MODE_AI_PASTE = 'ai_paste'
+MODE_TOC_AUTO = 'toc_auto'
+MODE_TOC_MANUAL = 'toc_manual'
 
 # Windows/Linux 文件名中的非法字符
 _INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
@@ -275,6 +277,13 @@ class ProcessWorker(QThread):
 
                         punctuation.process_document(work, out, progress_callback=_punct_cb)
                         self._log('success', '已完成: {} → {}'.format(base, os.path.basename(out)))
+                        self.fileFinished.emit(path, out)
+                    elif self.mode in (MODE_TOC_AUTO, MODE_TOC_MANUAL):
+                        out = output_path_for(path, self.suffix)
+                        from scripts import toc
+                        toc.generate_toc(work, out,
+                                         mode='auto' if self.mode == MODE_TOC_AUTO else 'manual')
+                        self._log('success', '已生成目录: {} → {}'.format(base, os.path.basename(out)))
                         self.fileFinished.emit(path, out)
                     else:  # MODE_FULL
                         out = output_path_for(path, self.suffix)

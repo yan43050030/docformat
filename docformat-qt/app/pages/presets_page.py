@@ -226,6 +226,8 @@ class PresetsPage(QWidget):
         self._build_rules_section()
         self._build_table_section()
         self._build_image_section()
+        self._build_watermark_section()
+        self._build_header_footer_section()
         self._build_advanced_section()
         self.editor_lay.addStretch(1)
 
@@ -424,6 +426,20 @@ class PresetsPage(QWidget):
         self.pn_pos.currentIndexChanged.connect(self._save_from_widgets)
         g.addWidget(self.pn_pos, 6, 3)
 
+        # 页数/字数网格 + 页码距版心偏移
+        g.addWidget(QLabel("每页行数 (0=不设)"), 7, 0)
+        self.grid_lines = _spin(0, 60, 1, 0)
+        self.grid_lines.valueChanged.connect(self._save_from_widgets)
+        g.addWidget(self.grid_lines, 8, 0)
+        g.addWidget(QLabel("每行字数 (0=不设)"), 7, 1)
+        self.grid_chars = _spin(0, 80, 1, 0)
+        self.grid_chars.valueChanged.connect(self._save_from_widgets)
+        g.addWidget(self.grid_chars, 8, 1)
+        g.addWidget(QLabel("页码距版心下缘 (mm)"), 7, 2)
+        self.pn_offset = _spin(0, 50, 1, 0)
+        self.pn_offset.valueChanged.connect(self._save_from_widgets)
+        g.addWidget(self.pn_offset, 8, 2)
+
         sec.set_body_layout(g)
         self._sections.append(sec)
         self.editor_lay.addWidget(sec)
@@ -544,6 +560,65 @@ class PresetsPage(QWidget):
         self._sections.append(sec)
         self.editor_lay.addWidget(sec)
 
+    def _build_watermark_section(self):
+        sec = CollapsibleSection("水印")
+        g = QGridLayout()
+        g.setHorizontalSpacing(12)
+        self.wm_enabled = QCheckBox("添加水印（适用于内部资料、机密件等场景）")
+        self.wm_enabled.stateChanged.connect(self._save_from_widgets)
+        g.addWidget(self.wm_enabled, 0, 0, 1, 3)
+        g.addWidget(QLabel("水印文字"), 1, 0)
+        from PyQt5.QtWidgets import QLineEdit
+        self.wm_text = QLineEdit()
+        self.wm_text.setPlaceholderText("例：内部资料·注意保密")
+        self.wm_text.textChanged.connect(self._save_from_widgets)
+        g.addWidget(self.wm_text, 2, 0, 1, 2)
+        g.addWidget(QLabel("字号 (pt)"), 1, 2)
+        self.wm_size = _spin(20, 200, 5, 0)
+        self.wm_size.valueChanged.connect(self._save_from_widgets)
+        g.addWidget(self.wm_size, 2, 2)
+        g.addWidget(QLabel("透明度 (0-100)"), 3, 0)
+        self.wm_opacity = _spin(0, 100, 5, 0)
+        self.wm_opacity.valueChanged.connect(self._save_from_widgets)
+        g.addWidget(self.wm_opacity, 4, 0)
+        g.addWidget(QLabel("颜色"), 3, 1)
+        self.wm_color = _LockCombo()
+        for cl, cv in [('灰色 #888888', '#888888'), ('红色 #CC0000', '#CC0000'), ('黑色 #000000', '#000000')]:
+            self.wm_color.addItem(cl, cv)
+        self.wm_color.currentIndexChanged.connect(self._save_from_widgets)
+        g.addWidget(self.wm_color, 4, 1)
+        g.setColumnStretch(3, 1)
+        sec.set_body_layout(g)
+        self._sections.append(sec)
+        self.editor_lay.addWidget(sec)
+
+    def _build_header_footer_section(self):
+        sec = CollapsibleSection("页眉页脚")
+        g = QGridLayout()
+        g.setHorizontalSpacing(12)
+        self.hf_enabled = QCheckBox("添加页眉页脚")
+        self.hf_enabled.stateChanged.connect(self._save_from_widgets)
+        g.addWidget(self.hf_enabled, 0, 0, 1, 3)
+        g.addWidget(QLabel("页眉文字"), 1, 0)
+        from PyQt5.QtWidgets import QLineEdit
+        self.hf_header = QLineEdit()
+        self.hf_header.setPlaceholderText("例：XX单位文件")
+        self.hf_header.textChanged.connect(self._save_from_widgets)
+        g.addWidget(self.hf_header, 2, 0, 1, 2)
+        g.addWidget(QLabel("字号 (pt)"), 1, 2)
+        self.hf_size = _spin(6, 24, 1, 0)
+        self.hf_size.valueChanged.connect(self._save_from_widgets)
+        g.addWidget(self.hf_size, 2, 2)
+        g.addWidget(QLabel("页脚文字"), 3, 0)
+        self.hf_footer = QLineEdit()
+        self.hf_footer.setPlaceholderText("留空使用默认页码")
+        self.hf_footer.textChanged.connect(self._save_from_widgets)
+        g.addWidget(self.hf_footer, 4, 0, 1, 2)
+        g.setColumnStretch(3, 1)
+        sec.set_body_layout(g)
+        self._sections.append(sec)
+        self.editor_lay.addWidget(sec)
+
     def _build_advanced_section(self):
         sec = CollapsibleSection("高级选项")
         g = QGridLayout()
@@ -603,6 +678,11 @@ class PresetsPage(QWidget):
         self._set_combo_data(self.pn_style, p.get('page_number_style', 'dash'))
         self._set_combo_data(self.pn_pos, p.get('page_number_position', 'outside'))
 
+        grid = p.get('grid', {}) or {}
+        self.grid_lines.setValue(float(grid.get('lines_per_page', 0)))
+        self.grid_chars.setValue(float(grid.get('chars_per_line', 0)))
+        self.pn_offset.setValue(float(p.get('page_number_offset_mm', 7)))
+
         for key2, w in self._el_widgets.items():
             el = p.get(key2, {})
             w['font_cn'].setCurrentText(el.get('font_cn', '仿宋_GB2312'))
@@ -634,6 +714,19 @@ class PresetsPage(QWidget):
         self.img_max_h.setValue(float(img.get('height', 8)))
         self._set_combo_data(self.img_align, img.get('alignment', 'center'))
         self.img_quality.setValue(float(img.get('quality', 85)))
+
+        wm = p.get('watermark', {}) or {}
+        self.wm_enabled.setChecked(bool(wm.get('text', '')))
+        self.wm_text.setText(wm.get('text', ''))
+        self.wm_size.setValue(float(wm.get('size', 72)))
+        self.wm_opacity.setValue(float(wm.get('opacity', 20)))
+        self._set_combo_data(self.wm_color, wm.get('color', '#888888'))
+
+        hf = p.get('header_footer', {}) or {}
+        self.hf_enabled.setChecked(bool(hf.get('header_text', '') or hf.get('footer_text', '')))
+        self.hf_header.setText(hf.get('header_text', ''))
+        self.hf_footer.setText(hf.get('footer_text', ''))
+        self.hf_size.setValue(float(hf.get('font_size', 10)))
 
         rules = p.get('detect_rules', {}) or {}
         for key, edit in self._rule_edits.items():
@@ -682,6 +775,14 @@ class PresetsPage(QWidget):
         p['page_number_style'] = self.pn_style.currentData()
         p['page_number_position'] = self.pn_pos.currentData()
 
+        lp = int(self.grid_lines.value())
+        cp = int(self.grid_chars.value())
+        if lp > 0 or cp > 0:
+            p['grid'] = {'lines_per_page': lp, 'chars_per_line': cp}
+        else:
+            p.pop('grid', None)
+        p['page_number_offset_mm'] = int(self.pn_offset.value())
+
         for key, w in self._el_widgets.items():
             el = p.setdefault(key, {})
             el['font_cn'] = w['font_cn'].currentText()
@@ -717,6 +818,25 @@ class PresetsPage(QWidget):
             }
         else:
             p.pop('image', None)
+
+        if self.wm_enabled.isChecked() and self.wm_text.text().strip():
+            p['watermark'] = {
+                'text': self.wm_text.text().strip(),
+                'size': int(self.wm_size.value()),
+                'opacity': int(self.wm_opacity.value()),
+                'color': self.wm_color.currentData(),
+            }
+        else:
+            p.pop('watermark', None)
+
+        if self.hf_enabled.isChecked():
+            p['header_footer'] = {
+                'header_text': self.hf_header.text().strip(),
+                'footer_text': self.hf_footer.text().strip(),
+                'font_size': int(self.hf_size.value()),
+            }
+        else:
+            p.pop('header_footer', None)
 
         rules = {}
         for key, edit in self._rule_edits.items():

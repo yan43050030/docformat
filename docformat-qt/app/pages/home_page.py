@@ -13,13 +13,16 @@ from PyQt5.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog,
 from app.widgets.drop_zone import DropZone, ALLOWED_EXTS
 from app.widgets.file_list import FileList
 from app.worker import (MODE_AI_PASTE, MODE_DIAGNOSE, MODE_FULL,
-                        MODE_PUNCTUATION, AiPasteWorker, ProcessWorker)
+                        MODE_PUNCTUATION, MODE_TOC_AUTO, MODE_TOC_MANUAL,
+                        AiPasteWorker, ProcessWorker)
 
 MODES = [
     (MODE_FULL, '智能一键处理', '标点修复 + 排版规范 + 样式清洗，一步到位'),
     (MODE_DIAGNOSE, '格式诊断', '仅分析文档问题，不修改文件内容'),
     (MODE_PUNCTUATION, '标点修复', '仅修复中英文标点混用，保留原有段落格式'),
     (MODE_AI_PASTE, 'AI 粘贴生成', '粘贴 AI 生成的文本或 Markdown，自动生成规范公文'),
+    (MODE_TOC_AUTO, '生成自动目录（域）', '在文首插入 Word 目录域，Word/WPS 打开后右键更新域即可自动生成页码'),
+    (MODE_TOC_MANUAL, '生成手动目录页', '扫描标题层级，在文首插入目录文本（页码需手动填入）'),
 ]
 
 
