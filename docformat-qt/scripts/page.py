@@ -190,10 +190,10 @@ def add_page_number(
                 set_font(run0, font_name, font_name, font_size, bold=False)
 
             if style == "dash":
-                run = para.add_run("\u2014 ")
+                run = para.add_run("\u2014\u00a0")
                 set_font(run, font_name, font_name, font_size, bold=False)
                 _add_field(para, " PAGE ")
-                run = para.add_run(" \u2014")
+                run = para.add_run("\u00a0\u2014")
                 set_font(run, font_name, font_name, font_size, bold=False)
             elif style == "page_text":
                 run = para.add_run("第 ")
