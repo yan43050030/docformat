@@ -40,6 +40,7 @@ class HomePage(QWidget):
         self.worker = None
         self._outputs = []          # 本轮成功输出的文件
         self._type_overrides = {}   # 预览中手动指定的段落类型 {路径: {序号: 类型}}
+        self._seal = False          # 是否加盖公章落款布局
         self.font_check_enabled = True   # 处理前检查排版字体是否安装（测试时可关闭）
         self._build()
         self.reload_presets()
@@ -345,10 +346,12 @@ class HomePage(QWidget):
         dlg = PreviewDialog(self.files, preset, self)
         if dlg.exec_() == PreviewDialog.Accepted:
             self._type_overrides = dlg.get_overrides()
+            self._seal = dlg.seal_check.isChecked()
             try:
                 self.start_process()
             finally:
                 self._type_overrides = {}
+                self._seal = False
 
     # ---------- 字体检查 ----------
     def _missing_fonts(self):
@@ -390,6 +393,12 @@ class HomePage(QWidget):
             return
         mode = self.current_mode()
         preset_name, custom = self.mgr.engine_args(self.mgr.active_key)
+        if self._seal:
+            import copy
+            if custom is None:
+                custom = copy.deepcopy(self.mgr.get(self.mgr.active_key))
+                preset_name = 'custom'
+            custom['gb_seal'] = True
         if mode in (MODE_FULL, MODE_AI_PASTE) and not self._confirm_fonts():
             return
 
