@@ -53,21 +53,26 @@ class DraftFormatWorker(QThread):
     logMessage = pyqtSignal(str, str)
     finishedWith = pyqtSignal(bool, str)
 
-    def __init__(self, text, out_path, preset_name, custom_settings, parent=None):
+    def __init__(self, text, out_path, preset_name, custom_settings,
+                 type_overrides=None, parent=None):
         super(DraftFormatWorker, self).__init__(parent)
         self.text = text
         self.out_path = out_path
         self.preset_name = preset_name
         self.custom_settings = custom_settings
+        self.type_overrides = type_overrides or {}
 
     def run(self):
         tmp_root = tempfile.mkdtemp(prefix='docformat_draft_')
         try:
+            import re
             from docx import Document
             tmp = os.path.join(tmp_root, 'draft.docx')
             doc = Document()
             for line in self.text.splitlines():
-                doc.add_paragraph(line)
+                # 剥掉模板标记前缀（标题:N: 或 标题:），确保排版引擎只看到纯净文字
+                clean = re.sub(r'^标题[:：]\d*[:：]\s*', '', line)
+                doc.add_paragraph(clean)
             doc.save(tmp)
 
             from scripts import punctuation
@@ -76,7 +81,8 @@ class DraftFormatWorker(QThread):
             punctuation.process_document(tmp, tmp2)
             format_document(tmp2, self.out_path,
                             preset_name=self.preset_name,
-                            custom_settings=self.custom_settings)
+                            custom_settings=self.custom_settings,
+                            type_overrides=self.type_overrides)
             self.logMessage.emit('success', '已生成: {}'.format(self.out_path))
             self.finishedWith.emit(True, self.out_path)
         except PermissionError:
@@ -314,7 +320,7 @@ class TemplateDraftPage(QWidget):
         """更新纯文本预览"""
         if not self.current_template_text:
             return
-        self.preview.setPlainText(_build_plain_text(self._current_rendered()))
+        self.preview.setPlainText(_build_plain_text(self._current_rendered())[0])
 
     # ---- 格式预览 HTML 渲染 ----
     # 字体回退链（与 preview_dialog.py 一致）
@@ -763,7 +769,7 @@ class TemplateDraftPage(QWidget):
                     "未填写：\n" + "、".join(unfilled) + "\n\n仍要生成吗？",
                     QMessageBox.Yes | QMessageBox.No) == QMessageBox.No:
                     return
-            plain = _build_plain_text(rendered)
+            plain, type_ov = _build_plain_text(rendered)
 
         title = "未命名"
         for line in plain.splitlines():
@@ -796,7 +802,7 @@ class TemplateDraftPage(QWidget):
         self.gen_btn.setText("正在生成并排版...")
         QApplication.processEvents()
 
-        self.worker = DraftFormatWorker(plain, out_path, preset_name, custom_settings)
+        self.worker = DraftFormatWorker(plain, out_path, preset_name, custom_settings, type_overrides=type_ov)
         self.worker.finishedWith.connect(self._on_format_done)
         self.worker.start()
 
