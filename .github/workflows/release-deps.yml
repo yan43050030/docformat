@@ -1,0 +1,142 @@
+name: Release Dependencies Bundle
+
+# 离线依赖应急包 — 独立于软件版本的单独发布
+# 只需发布一次，后续常规软件更新不动此包。
+#
+# 手动触发，在 Debian 10 容器内构建 DocFormatPro 二进制，
+# 提取所有运行时 .so 依赖，打包为架构特定的 tar.gz。
+#
+# 适用场景：麒麟 V10 / 统信 UOS 20 完全离线环境，缺少
+# Qt5 / xcb / fontconfig 等系统库时，用此包补齐。
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '依赖包版本号（如 1.0），将作为 deps-v<version> 标签发布'
+        required: true
+        default: '1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-deps:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+            arch_label: Intel/AMD/兆芯/海光
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            arch_label: 鲲鹏/飞腾
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build binary + extract deps in Debian 10 container
+        run: |
+          docker run --rm -v "$PWD":/work -w /work/docformat-qt debian:10 bash -euc '
+            echo "deb http://archive.debian.org/debian buster main" > /etc/apt/sources.list
+            apt-get -o Acquire::Check-Valid-Until=false update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              python3-pip python3-setuptools python3-wheel python3-pyqt5 python3-lxml binutils
+
+            pip3 install --no-cache-dir --upgrade "pip<24.1"
+            pip3 install --no-cache-dir "python-docx==0.8.11" "pyinstaller==5.13.2"
+
+            python3 smoke_test.py
+
+            python3 -m PyInstaller --noconfirm --clean --onefile --windowed \
+              --name DocFormatPro \
+              --collect-data docx \
+              --add-data "assets:assets" \
+              --add-data "templates:templates" \
+              --hidden-import scripts.formatter \
+              --hidden-import scripts.punctuation \
+              --hidden-import scripts.analyzer \
+              main.py
+
+            # 提取所有运行时依赖 .so
+            bash packaging/bundle_runtime_libs.sh dist/DocFormatPro /work/deps-out
+          '
+
+      - name: Upload deps artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DocFormatPro-deps-${{ matrix.arch }}
+          path: deps-out/DocFormatPro-deps-${{ matrix.arch }}.tar.gz
+
+  release:
+    needs: build-deps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: DocFormatPro-deps-*
+          merge-multiple: false
+          path: deps-artifacts
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p release-assets
+          find deps-artifacts -name "*.tar.gz" -exec cp {} release-assets/ \;
+          ls -lh release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: deps-v${{ inputs.version }}
+          name: DocFormat Pro 离线依赖包 v${{ inputs.version }}
+          files: release-assets/*.tar.gz
+          body: |
+            ## DocFormat Pro 离线运行时依赖包
+
+            **版本**: v${{ inputs.version }}
+            **构建环境**: Debian 10 (glibc 2.28)，兼容麒麟 V10 / 统信 UOS 20 及更新版本
+
+            ### 适用场景
+
+            麒麟 V10、统信 UOS 20 等国产 Linux 桌面系统处于**完全离线**环境，
+            缺少 Qt5 / xcb / fontconfig 等系统级 .so 库，导致 PyInstaller 打包
+            的 `DocFormatPro` 二进制无法启动。
+
+            **此包只需下载一次。后续 DocFormat Pro 软件更新不影响依赖包的有效性。**
+
+            ### 包含内容
+
+            每个 tar.gz 包含：
+            - `runtime/` — 运行时依赖的全部系统 .so 文件
+            - `install_deps_offline.sh` — 离线安装脚本
+
+            ### 使用方法
+
+            ```bash
+            # 1. 将依赖包和 DocFormatPro 二进制拷贝到目标机器
+            # 2. 解压依赖包
+            tar xzf DocFormatPro-deps-x86_64.tar.gz
+
+            # 3. 运行安装脚本（指定二进制所在目录）
+            bash DocFormatPro-deps-x86_64/install_deps_offline.sh /path/to/DocFormatPro/
+
+            # 4. 用生成的包装脚本启动
+            /path/to/DocFormatPro/DocFormatPro.sh
+            ```
+
+            ### 架构选择
+
+            | 架构 | 适用 CPU |
+            |---|---|
+            | `x86_64` | Intel / AMD / 兆芯 / 海光 |
+            | `arm64` | 鲲鹏 920 / 飞腾 2000 |
+
+            ### 注意事项
+
+            - 此依赖包**不能**解决 glibc 版本不兼容问题（glibc 是内核 ABI 边界，无法重分发）
+            - 目标系统 glibc 必须 ≥ 2.28（麒麟 V10 / UOS 20 均满足）
+            - 如果系统已通过 apt 安装了完整 Qt5 环境，通常不需要此包
+            - 依赖包与 DocFormat Pro 软件版本无关，升级软件无需重新下载依赖包
+
+            🤖 Generated with [Claude Code](https://claude.com/claude-code)
