@@ -373,42 +373,52 @@ class PresetsPage(QWidget):
         g.setHorizontalSpacing(12)
         g.setVerticalSpacing(8)
 
+        # 纸张大小
+        g.addWidget(QLabel("纸张大小"), 0, 0)
+        self.page_size_combo = _LockCombo()
+        for ps_label, ps_dims in [('A4 (210×297mm)', 'A4'), ('A3 (297×420mm)', 'A3'),
+                                   ('B5 (182×257mm)', 'B5'), ('16开 (195×270mm)', '16K'),
+                                   ('Letter (216×279mm)', 'Letter')]:
+            self.page_size_combo.addItem(ps_label, ps_dims)
+        self.page_size_combo.currentIndexChanged.connect(self._save_from_widgets)
+        g.addWidget(self.page_size_combo, 1, 0)
+
         self.margin_spins = {}
         for col, (key, label) in enumerate([('top', '上边距'), ('bottom', '下边距'),
                                             ('left', '左边距'), ('right', '右边距')]):
-            g.addWidget(QLabel(label + ' (cm)'), 0, col)
+            g.addWidget(QLabel(label + ' (cm)'), 2, col)
             sp = _spin(0.5, 10, 0.1)
             sp.valueChanged.connect(self._save_from_widgets)
             self.margin_spins[key] = sp
-            g.addWidget(sp, 1, col)
+            g.addWidget(sp, 3, col)
 
         self.pn_enabled = QCheckBox("启用页码")
         self.pn_enabled.stateChanged.connect(self._save_from_widgets)
-        g.addWidget(self.pn_enabled, 2, 0, 1, 2)
+        g.addWidget(self.pn_enabled, 4, 0, 1, 2)
 
-        g.addWidget(QLabel("页码字体"), 3, 0)
+        g.addWidget(QLabel("页码字体"), 5, 0)
         self.pn_font = _font_combo(CN_FONTS)
         self.pn_font.currentTextChanged.connect(self._save_from_widgets)
-        g.addWidget(self.pn_font, 4, 0)
+        g.addWidget(self.pn_font, 6, 0)
 
-        g.addWidget(QLabel("页码字号"), 3, 1)
+        g.addWidget(QLabel("页码字号"), 5, 1)
         self.pn_size = _size_combo()
         self.pn_size.currentIndexChanged.connect(self._save_from_widgets)
-        g.addWidget(self.pn_size, 4, 1)
+        g.addWidget(self.pn_size, 6, 1)
 
-        g.addWidget(QLabel("页码样式"), 3, 2)
+        g.addWidget(QLabel("页码样式"), 5, 2)
         self.pn_style = _LockCombo()
         for label, val in PN_STYLES:
             self.pn_style.addItem(label, val)
         self.pn_style.currentIndexChanged.connect(self._save_from_widgets)
-        g.addWidget(self.pn_style, 4, 2)
+        g.addWidget(self.pn_style, 6, 2)
 
-        g.addWidget(QLabel("页码位置"), 3, 3)
+        g.addWidget(QLabel("页码位置"), 5, 3)
         self.pn_pos = _LockCombo()
         for label, val in PN_POSITIONS:
             self.pn_pos.addItem(label, val)
         self.pn_pos.currentIndexChanged.connect(self._save_from_widgets)
-        g.addWidget(self.pn_pos, 4, 3)
+        g.addWidget(self.pn_pos, 6, 3)
 
         sec.set_body_layout(g)
         self._sections.append(sec)
@@ -551,6 +561,7 @@ class PresetsPage(QWidget):
         for k, sp in self.margin_spins.items():
             sp.setValue(float(page.get(k, 2.5)))
 
+        self._set_combo_data(self.page_size_combo, p.get('page_size', 'A4'))
         self.pn_enabled.setChecked(bool(p.get('page_number', False)))
         self.pn_font.setCurrentText(p.get('page_number_font', '宋体'))
         self._set_combo_data(self.pn_size, p.get('page_number_size', 14))
@@ -621,6 +632,7 @@ class PresetsPage(QWidget):
             return
         p = self.preset
         p['page'] = {k: sp.value() for k, sp in self.margin_spins.items()}
+        p['page_size'] = self.page_size_combo.currentData()
         p['page_number'] = self.pn_enabled.isChecked()
         p['page_number_font'] = self.pn_font.currentText()
         p['page_number_size'] = self.pn_size.currentData()
