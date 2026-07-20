@@ -87,6 +87,7 @@ def add_page_number(
     position="outside",
     offset_from_text_mm=7,
     replace_existing=True,
+    bold=False,
 ):
     """按自定义样式添加页码"""
 
@@ -157,20 +158,20 @@ def add_page_number(
             begin = OxmlElement('w:fldChar')
             begin.set(qn('w:fldCharType'), 'begin')
             begin_run._r.append(begin)
-            set_font(begin_run, font_name, font_name, font_size, bold=False)
+            set_font(begin_run, font_name, font_name, font_size, bold=bold)
 
             instruction_run = paragraph.add_run()
             instruction_text = OxmlElement('w:instrText')
             instruction_text.set(qn('xml:space'), 'preserve')
             instruction_text.text = instruction
             instruction_run._r.append(instruction_text)
-            set_font(instruction_run, font_name, font_name, font_size, bold=False)
+            set_font(instruction_run, font_name, font_name, font_size, bold=bold)
 
             end_run = paragraph.add_run()
             end = OxmlElement('w:fldChar')
             end.set(qn('w:fldCharType'), 'end')
             end_run._r.append(end)
-            set_font(end_run, font_name, font_name, font_size, bold=False)
+            set_font(end_run, font_name, font_name, font_size, bold=bold)
 
         def _build_footer_line(footer, align, leading_space=False, trailing_space=False):
             if footer.paragraphs:
@@ -187,31 +188,31 @@ def add_page_number(
 
             if leading_space:
                 run0 = para.add_run("\u3000")
-                set_font(run0, font_name, font_name, font_size, bold=False)
+                set_font(run0, font_name, font_name, font_size, bold=bold)
 
             if style == "dash":
                 run = para.add_run("\u2014\u00a0")
-                set_font(run, font_name, font_name, font_size, bold=False)
+                set_font(run, font_name, font_name, font_size, bold=bold)
                 _add_field(para, " PAGE ")
                 run = para.add_run("\u00a0\u2014")
-                set_font(run, font_name, font_name, font_size, bold=False)
+                set_font(run, font_name, font_name, font_size, bold=bold)
             elif style == "page_text":
                 run = para.add_run("第 ")
-                set_font(run, font_name, font_name, font_size, bold=False)
+                set_font(run, font_name, font_name, font_size, bold=bold)
                 _add_field(para, " PAGE ")
                 run = para.add_run(" 页")
-                set_font(run, font_name, font_name, font_size, bold=False)
+                set_font(run, font_name, font_name, font_size, bold=bold)
             elif style == "page_total":
                 _add_field(para, " PAGE ")
                 run = para.add_run(" / ")
-                set_font(run, font_name, font_name, font_size, bold=False)
+                set_font(run, font_name, font_name, font_size, bold=bold)
                 _add_field(para, " NUMPAGES ")
             else:
                 _add_field(para, " PAGE ")
 
             if trailing_space:
                 run6 = para.add_run("\u3000")
-                set_font(run6, font_name, font_name, font_size, bold=False)
+                set_font(run6, font_name, font_name, font_size, bold=bold)
 
         if position == "outside":
             _build_footer_line(odd_footer, WD_ALIGN_PARAGRAPH.RIGHT, trailing_space=True)

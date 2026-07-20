@@ -217,13 +217,14 @@ def _merge_preset_settings(base, overrides):
 PRESETS = {
     'official_gbk': {
         'name': '常用排版',
-        'deep_clean': False,
+        'deep_clean': True,
         'page_number': True,
         'page_number_font': '宋体',
         'page_number_size': 14,
         'page_number_style': 'dash',
         'page_number_position': 'center',
         'page_number_offset_mm': 7,
+        'page_number_bold': False,
         'replace_existing_page_number': True,
         'page': {'top': 3.8, 'bottom': 3.3, 'left': 2.8, 'right': 2.8},
         'page_size': 'A4',

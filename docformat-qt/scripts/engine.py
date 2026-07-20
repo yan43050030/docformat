@@ -614,6 +614,7 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
             position=preset.get('page_number_position', 'outside'),
             offset_from_text_mm=preset.get('page_number_offset_mm', 7),
             replace_existing=preset.get('replace_existing_page_number', True),
+            bold=preset.get('page_number_bold', False),
         )
     else:
         logger.info('5. Skipping page numbers...')

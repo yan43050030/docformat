@@ -394,7 +394,10 @@ class PresetsPage(QWidget):
 
         self.pn_enabled = QCheckBox("启用页码")
         self.pn_enabled.stateChanged.connect(self._save_from_widgets)
-        g.addWidget(self.pn_enabled, 4, 0, 1, 2)
+        g.addWidget(self.pn_enabled, 4, 0)
+        self.pn_bold = QCheckBox("页码加粗")
+        self.pn_bold.stateChanged.connect(self._save_from_widgets)
+        g.addWidget(self.pn_bold, 4, 1)
 
         g.addWidget(QLabel("页码字体"), 5, 0)
         self.pn_font = _font_combo(CN_FONTS)
@@ -563,6 +566,7 @@ class PresetsPage(QWidget):
 
         self._set_combo_data(self.page_size_combo, p.get('page_size', 'A4'))
         self.pn_enabled.setChecked(bool(p.get('page_number', False)))
+        self.pn_bold.setChecked(bool(p.get('page_number_bold', False)))
         self.pn_font.setCurrentText(p.get('page_number_font', '宋体'))
         self._set_combo_data(self.pn_size, p.get('page_number_size', 14))
         self._set_combo_data(self.pn_style, p.get('page_number_style', 'dash'))
@@ -634,6 +638,7 @@ class PresetsPage(QWidget):
         p['page'] = {k: sp.value() for k, sp in self.margin_spins.items()}
         p['page_size'] = self.page_size_combo.currentData()
         p['page_number'] = self.pn_enabled.isChecked()
+        p['page_number_bold'] = self.pn_bold.isChecked()
         p['page_number_font'] = self.pn_font.currentText()
         p['page_number_size'] = self.pn_size.currentData()
         p['page_number_style'] = self.pn_style.currentData()
