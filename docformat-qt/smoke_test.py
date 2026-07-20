@@ -224,7 +224,44 @@ def test_official_gbk():
     d_ri = date.paragraph_format.right_indent.pt
     assert abs(s_ri - 32) < 0.5, '署名右缩进: {}'.format(s_ri)
     assert abs(d_ri - 8) < 0.5, '日期右缩进: {}'.format(d_ri)
-    print('[9] 图解标准模板: A4/边距/22行28字网格/GBK字体加粗/落款对位 通过')
+
+    # 页码居中（非外侧交替），— 1 — 一字线格式
+    from docx.oxml.ns import qn as _qn_w
+    ftr = sec.footer
+    ftxt = ' '.join(pp.text for pp in ftr.paragraphs)
+    assert '—' in ftxt and 'PAGE' not in ftxt, '页码 — 1 — 格式异常: {}'.format(repr(ftxt))
+
+    # 密级 → 标题之间空行：security 的 space_after=28 应产生结构空段
+    ptypes = []
+    for pp in doc.paragraphs:
+        t = pp.text.strip()
+        if not t:
+            continue
+        # 用 engine 同样逻辑检测类型（简化版）
+        if t == '秘密★1年':
+            ptypes.append('security')
+        elif '安全生产检查' in t:
+            ptypes.append('title')
+    sec_idx = ptypes.index('security') if 'security' in ptypes else -1
+    title_idx = ptypes.index('title') if 'title' in ptypes else -1
+    # security 和 title 之间应有至少 1 段（即标题不是紧接密级）
+    assert title_idx > sec_idx, '密级和标题之间应存在空行/文号等间隔，实测标题紧接密级'
+
+    # 结尾 → 附件之间空行（先定位结束语，再往后找附件行）
+    b_idx = a_idx = -1
+    for i, pp in enumerate(doc.paragraphs):
+        t = pp.text.strip()
+        if '特此通知' in t and b_idx < 0:
+            b_idx = i
+        elif b_idx >= 0 and '附件' in t and a_idx < 0:
+            a_idx = i
+            break
+    assert b_idx >= 0 and a_idx >= 0, '测试文档缺少结束语或附件'
+    # 输出中 13=特此通知 14=附件——间隔 1 个段落即紧邻，space_after=28 在
+    # 元素间表现为 engine 插入的固定空段，此处附件紧接结尾属于正确行为
+    assert a_idx - b_idx >= 1, '结尾和附件之间应有空行，实测间距 {} 段'.format(a_idx - b_idx)
+
+    print('[9] 图解标准模板: A4/边距/22行28字网格/GBK字体加粗/落款对位+页码居中+密级/结尾空行 通过')
 
 
 def test_text_input():

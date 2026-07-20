@@ -222,7 +222,7 @@ PRESETS = {
         'page_number_font': '宋体',
         'page_number_size': 14,
         'page_number_style': 'dash',
-        'page_number_position': 'outside',
+        'page_number_position': 'center',
         'page_number_offset_mm': 7,
         'replace_existing_page_number': True,
         'page': {'top': 3.8, 'bottom': 3.3, 'left': 2.8, 'right': 2.8},
@@ -232,7 +232,7 @@ PRESETS = {
         'security': {
             'font_cn': '方正黑体_GBK', 'font_en': 'Times New Roman',
             'size': 16, 'bold': True, 'align': 'left', 'indent': 0,
-            'space_before': 0, 'space_after': 0,
+            'space_before': 0, 'space_after': 28,
         },
         'docnum': {
             'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
@@ -288,6 +288,7 @@ PRESETS = {
         'closing': {
             'font_cn': '方正仿宋_GBK', 'font_en': 'Times New Roman',
             'size': 16, 'bold': True, 'align': 'left', 'indent': 32,
+            'space_after': 28,
         },
     },
     'official': {
