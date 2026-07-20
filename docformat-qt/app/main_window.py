@@ -15,8 +15,8 @@ from app.pages.template_draft_page import TemplateDraftPage
 from app.pages.template_maker_page import TemplateMakerPage
 
 VERSION = '2.5.0'
-NAV_ITEMS = [('处理', 0), ('预设方案', 1), ('主题', 2), ('日志', 3),
-             ('模板起草', 4), ('模板制作', 5)]
+NAV_ITEMS = [('格式处理', 0), ('版式方案', 1), ('文书起草', 2), ('文书模板制作', 3),
+             ('主题', 4), ('日志', 5)]
 
 
 class MainWindow(QMainWindow):
@@ -90,12 +90,13 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.home_page = HomePage(self.mgr)
         self.presets_page = PresetsPage(self.mgr)
-        self.theme_page = ThemePage()
-        self.log_page = LogPage()
         self.template_draft_page = TemplateDraftPage(self.mgr)
         self.template_maker_page = TemplateMakerPage()
-        for page in [self.home_page, self.presets_page, self.theme_page, self.log_page,
-                     self.template_draft_page, self.template_maker_page]:
+        self.theme_page = ThemePage()
+        self.log_page = LogPage()
+        for page in [self.home_page, self.presets_page,
+                     self.template_draft_page, self.template_maker_page,
+                     self.theme_page, self.log_page]:
             self.stack.addWidget(page)
 
         body.addWidget(sidebar)
@@ -147,7 +148,7 @@ class MainWindow(QMainWindow):
             self.presets_page.reload()
         elif idx == 0:
             self.home_page.reload_presets()
-        elif idx == 4:
+        elif idx == 2:
             self.template_draft_page._load_template_list()
 
     def apply_theme(self, tid):
