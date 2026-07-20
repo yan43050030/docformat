@@ -9,6 +9,36 @@ from PyQt5.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
 from app.widgets.collapsible import CollapsibleSection
 from scripts.formatter import DEFAULT_DETECT_RULES
 
+# ---- 锁定机制：防止滚动页面时滚轮误触修改参数值 ----
+_wheel_locked = False
+
+
+def set_wheel_locked(locked):
+    global _wheel_locked
+    _wheel_locked = locked
+
+
+def is_wheel_locked():
+    return _wheel_locked
+
+
+class _LockCombo(QComboBox):
+    """带滚轮锁定的下拉框：锁定时滚轮事件向上传递，不改变选中项"""
+    def wheelEvent(self, event):
+        if _wheel_locked:
+            event.ignore()
+        else:
+            super().wheelEvent(event)
+
+
+class _LockSpin(QDoubleSpinBox):
+    """带滚轮锁定的数值框：锁定时滚轮事件向上传递，不改变数值"""
+    def wheelEvent(self, event):
+        if _wheel_locked:
+            event.ignore()
+        else:
+            super().wheelEvent(event)
+
 # 识别规则配置：(键, 名称, 白话说明, 常用方案[(方案名, 正则)])
 # 方案下拉让不懂正则的用户直接选；选「自定义」才需要写正则。
 RULE_FIELDS = [
@@ -94,21 +124,21 @@ PN_POSITIONS = [('外侧（单右双左）', 'outside'), ('居中', 'center'),
 
 
 def _font_combo(fonts, editable=True):
-    cb = QComboBox()
+    cb = _LockCombo()
     cb.addItems(fonts)
     cb.setEditable(editable)
     return cb
 
 
 def _size_combo():
-    cb = QComboBox()
+    cb = _LockCombo()
     for label, val in FONT_SIZES:
         cb.addItem(label, val)
     return cb
 
 
 def _spin(minv, maxv, step=1.0, decimals=1):
-    sp = QDoubleSpinBox()
+    sp = _LockSpin()
     sp.setRange(minv, maxv)
     sp.setSingleStep(step)
     sp.setDecimals(decimals)
@@ -164,6 +194,17 @@ class PresetsPage(QWidget):
                 self.rename_btn = btn
             btn.clicked.connect(slot)
             bar.addWidget(btn)
+
+        bar.addStretch()
+        self.btn_lock = QPushButton("🔒 参数已锁定")
+        self.btn_lock.setCheckable(True)
+        self.btn_lock.setChecked(True)
+        self.btn_lock.setCursor(Qt.PointingHandCursor)
+        self.btn_lock.setToolTip("锁定后滚轮不会误改参数值，点击解锁后可编辑")
+        self.btn_lock.toggled.connect(self._on_lock_toggled)
+        bar.addWidget(self.btn_lock)
+        set_wheel_locked(True)
+
         root.addWidget(bar_card)
 
         self.builtin_hint = QLabel("内置预设参数只读（名称可通过「重命名」修改），点击「复制」可生成参数可编辑的自定义模板")
@@ -212,7 +253,7 @@ class PresetsPage(QWidget):
             lab = QLabel(label)
             lab.setToolTip(tip)
 
-            combo = QComboBox()
+            combo = _LockCombo()
             for opt_label, opt_pattern in options:
                 combo.addItem(opt_label, opt_pattern)   # None = 默认规则
             combo.addItem('自定义…', '__custom__')
@@ -356,14 +397,14 @@ class PresetsPage(QWidget):
         g.addWidget(self.pn_size, 4, 1)
 
         g.addWidget(QLabel("页码样式"), 3, 2)
-        self.pn_style = QComboBox()
+        self.pn_style = _LockCombo()
         for label, val in PN_STYLES:
             self.pn_style.addItem(label, val)
         self.pn_style.currentIndexChanged.connect(self._save_from_widgets)
         g.addWidget(self.pn_style, 4, 2)
 
         g.addWidget(QLabel("页码位置"), 3, 3)
-        self.pn_pos = QComboBox()
+        self.pn_pos = _LockCombo()
         for label, val in PN_POSITIONS:
             self.pn_pos.addItem(label, val)
         self.pn_pos.currentIndexChanged.connect(self._save_from_widgets)
@@ -394,7 +435,7 @@ class PresetsPage(QWidget):
             g.addWidget(w['size'], 1, 2)
 
             g.addWidget(QLabel("对齐"), 0, 3)
-            w['align'] = QComboBox()
+            w['align'] = _LockCombo()
             for al, av in ALIGNS:
                 w['align'].addItem(al, av)
             g.addWidget(w['align'], 1, 3)
@@ -623,6 +664,15 @@ class PresetsPage(QWidget):
 
         self.mgr.update(self.current_key, p)
         self.presetsChanged.emit()
+
+    def _on_lock_toggled(self, checked):
+        set_wheel_locked(checked)
+        if checked:
+            self.btn_lock.setText("🔒 参数已锁定")
+            self.btn_lock.setToolTip("锁定后滚轮不会误改参数值，点击解锁后可编辑")
+        else:
+            self.btn_lock.setText("🔓 参数已解锁")
+            self.btn_lock.setToolTip("解锁状态，滚轮可调整参数值，点击锁定防误触")
 
     # ================= 工具条动作 =================
     def _new(self):
