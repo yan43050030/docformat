@@ -176,25 +176,31 @@ class HomePage(QWidget):
         self.revision_check = QCheckBox("以修订模式输出（改动在 Word 审阅中可见、可接受/拒绝）")
         right_col.addWidget(self.revision_check)
 
-        # 徽章分两行竖排，避免横向溢出遮挡
-        self.badge_page = QLabel()
-        self.badge_page.setProperty("badge", "true")
+        # 预设信息徽章：三行紧凑显示关键排版参数
+        self.badge_size = QLabel()
+        self.badge_size.setProperty("badge", "true")
+        self.badge_margin = QLabel()
+        self.badge_margin.setProperty("badge", "true")
         self.badge_body = QLabel()
         self.badge_body.setProperty("badgeAccent", "true")
-        self.badge_spacing = QLabel()
-        self.badge_spacing.setProperty("badge", "true")
-        badge_row1 = QHBoxLayout()
-        badge_row1.setSpacing(6)
-        badge_row1.addWidget(self.badge_page)
-        badge_row1.addStretch(1)
-        badge_row2 = QHBoxLayout()
-        badge_row2.setSpacing(6)
-        badge_row2.addWidget(self.badge_body)
-        badge_row2.addWidget(self.badge_spacing)
-        badge_row2.addStretch(1)
-        right_col.addSpacing(2)
-        right_col.addLayout(badge_row1)
-        right_col.addLayout(badge_row2)
+        self.badge_title = QLabel()
+        self.badge_title.setProperty("badge", "true")
+        self.badge_page_num = QLabel()
+        self.badge_page_num.setProperty("badge", "true")
+        self.badge_seal = QLabel()
+        self.badge_seal.setProperty("badge", "true")
+        for _row_widgets in [
+            [self.badge_size, self.badge_margin],
+            [self.badge_body, self.badge_title],
+            [self.badge_page_num, self.badge_seal],
+        ]:
+            row_lay = QHBoxLayout()
+            row_lay.setSpacing(6)
+            for w in _row_widgets:
+                row_lay.addWidget(w)
+            row_lay.addStretch(1)
+            right_col.addSpacing(2)
+            right_col.addLayout(row_lay)
         right_col.addStretch(1)
 
         cols.addLayout(left_col, 5)
@@ -266,12 +272,43 @@ class HomePage(QWidget):
         p = self.mgr.get(self.mgr.active_key)
         page = p.get('page', {})
         body = p.get('body', {})
-        self.badge_page.setText('边距 {}/{}/{}/{} cm'.format(
+        title = p.get('title', {})
+        sz = p.get('page_size', 'A4')
+        grid = p.get('grid', {})
+        pn = p.get('page_number', False)
+        seal = p.get('gb_seal', False)
+
+        # 行1: 页面规格 + 页边距
+        ginfo = '{}行{}字'.format(grid.get('lines_per_page', ''), grid.get('chars_per_line', '')) if grid else ''
+        self.badge_size.setText('{} {}'.format(sz, ginfo).strip())
+        self.badge_margin.setText('边距 {}/{}/{}/{} cm'.format(
             page.get('top', '-'), page.get('bottom', '-'),
             page.get('left', '-'), page.get('right', '-')))
-        self.badge_body.setText('{} {}pt'.format(body.get('font_cn', ''), body.get('size', '')))
-        ls = body.get('line_spacing')
-        self.badge_spacing.setText('行距 {}pt'.format(ls) if ls else '行距 默认')
+        # 行2: 正文字体 + 标题字体（正文用强调色徽章）
+        body_ls = body.get('line_spacing')
+        self.badge_body.setText('正文 {}{} {}pt 行距{}'.format(
+            body.get('font_cn', '?'), ' 加粗' if body.get('bold') else '',
+            body.get('size', '?'),
+            '{}pt'.format(body_ls) if body_ls else '默认',
+        ))
+        self.badge_title.setText('标题 {} {}pt{}'.format(
+            title.get('font_cn', '?'), title.get('size', '?'),
+            ' 加粗' if title.get('bold') else '',
+        ))
+        # 行3: 页码 + 落款
+        pn_txt = ''
+        if pn:
+            pn_txt = '页码 {} {}pt {} {}'.format(
+                p.get('page_number_font', '宋体'),
+                p.get('page_number_size', 14),
+                {'dash': '—1—', 'plain': '1', 'page_text': '第1页', 'page_total': '1/10'}.get(
+                    p.get('page_number_style', 'dash'), '—1—'),
+                {'outside': '外侧', 'center': '居中'}.get(p.get('page_number_position', 'center'), '')
+            )
+        else:
+            pn_txt = '页码 关闭'
+        self.badge_page_num.setText(pn_txt)
+        self.badge_seal.setText('落款 {}'.format('加盖公章' if seal else '无公章'))
 
     # ---------- 模式 ----------
     def current_mode(self):

@@ -673,9 +673,6 @@ class PresetsPage(QWidget):
         else:
             self.btn_lock.setText("🔓 滚轮可修改参数")
             self.btn_lock.setToolTip("滚轮可修改参数值，翻阅页面时请注意勿误触")
-        else:
-            self.btn_lock.setText("🔓 参数已解锁")
-            self.btn_lock.setToolTip("解锁状态，滚轮可调整参数值，点击锁定防误触")
 
     # ================= 工具条动作 =================
     def _new(self):
