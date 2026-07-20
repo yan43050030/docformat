@@ -531,17 +531,15 @@ class TemplateMakerPage(QWidget):
                 idx_map[i] = n
                 n += 1
         prev_type = None
-        prev_was_heading = False  # 前一行是否已标记为标题
         auto_lines = []
         for i, line in enumerate(lines):
             s = line.strip()
             if not s:
                 auto_lines.append(line)
-                prev_was_heading = False
                 continue
+            # 用户已手动标记的行直接保留，不做自动检测
             if s.startswith("标题"):
                 auto_lines.append(line)
-                prev_was_heading = True
                 prev_type = None
                 continue
             ai = idx_map.get(i)
@@ -550,18 +548,10 @@ class TemplateMakerPage(QWidget):
             level_map = {'heading1': 1, 'heading2': 2, 'heading3': 3, 'heading4': 4}
             if ptype == 'title':
                 auto_lines.append("标题: " + s)
-                prev_was_heading = True
             elif ptype in level_map:
-                # 如果前一行已经是标题，不自动升级——用户手动标记的标题块
-                # 内的"一、""二、"等可能是正文举例，连续跳过直到真正正文行
-                if prev_was_heading:
-                    auto_lines.append(line)
-                else:
-                    auto_lines.append("标题:{}: {}".format(level_map[ptype], s))
-                    prev_was_heading = True
+                auto_lines.append("标题:{}: {}".format(level_map[ptype], s))
             else:
                 auto_lines.append(line)
-                prev_was_heading = False
         body = "\n".join(auto_lines)
 
         # 组装模板内容
