@@ -44,7 +44,7 @@ DEFAULT_DETECT_RULES = {
     'attachment': r'^附件\d*([：:．.\s]|$)',
     'closing': '|'.join(_CLOSING_PATTERNS),
     'date': '|'.join(_DATE_PATTERNS),
-    'signature': r'(公司|局|委|部|厅|院|所|中心|办公室|集团|银行|学校|大学|医院'
+    'signature': r'(公司|局|委|部|厅|院|所|室|中心|办公室|集团|银行|学校|大学|医院'
                  r'|指挥部|领导小组|委员会|管理处|管委会)$',
 }
 

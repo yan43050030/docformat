@@ -166,6 +166,20 @@ def test_punct_edges():
     assert fix_text('本次比分为3:2。') == '本次比分为3:2。', '数字比分冒号不应替换'
     print('[7] 标点边界: 撇号/跨段引号/英文空格/比分 通过')
 
+def test_signature_closing():
+    """署名识别扩充：室/部结尾 + 结束语妥否请审示"""
+    from scripts.formatter import detect_para_type, DEFAULT_DETECT_RULES
+    rules = {k: v for k, v in DEFAULT_DETECT_RULES.items()}
+    # 署名：以室结尾
+    assert detect_para_type('调查室', 8, 12, None, ['a']*10, 8, rules=rules) == 'signature'
+    assert detect_para_type('监督室', 8, 12, None, ['a']*10, 8, rules=rules) == 'signature'
+    # 署名：以部结尾
+    assert detect_para_type('组织部', 8, 12, None, ['a']*10, 8, rules=rules) == 'signature'
+    assert detect_para_type('宣传部', 8, 12, None, ['a']*10, 8, rules=rules) == 'signature'
+    # 结束语：妥否，请审示。
+    assert detect_para_type('妥否，请审示。', 8, 12, None, ['a']*10, 8, rules=rules) == 'closing'
+    print('[7b] 署名/结束语扩充: 室/部/妥否请审示 通过')
+
 
 def test_type_overrides():
     from scripts.formatter import format_document
@@ -344,4 +358,5 @@ if __name__ == '__main__':
     test_text_input()
     test_builtin_rename()
     test_heading_split()
+    test_signature_closing()
     print('\n全部冒烟测试通过 ✓')
