@@ -134,12 +134,12 @@ class TemplateMakerPage(QWidget):
         mid = QHBoxLayout()
         self.btn_hole = QPushButton("① 挖空选中文字为占位符")
         self.btn_hole.clicked.connect(self._on_make_hole)
-        self.btn_title = QPushButton("② 标记选中行为标题")
-        self.btn_title.clicked.connect(self._on_mark_title)
+        self.btn_mark_level = QPushButton("② 标记选中行标题层级 ▾")
+        self.btn_mark_level.clicked.connect(self._on_mark_level_menu)
         self.btn_quick = QPushButton("③ 快捷插入")
         self.btn_quick.clicked.connect(lambda: self._show_quick_menu(self.btn_quick))
         mid.addWidget(self.btn_hole)
-        mid.addWidget(self.btn_title)
+        mid.addWidget(self.btn_mark_level)
         mid.addWidget(self.btn_quick)
         mid.addStretch()
         # 模板标签和工具条同行
@@ -289,15 +289,30 @@ class TemplateMakerPage(QWidget):
         QMessageBox.information(self, "已挖空",
             "已把所有「{}」替换为 {}".format(selected, placeholder))
 
-    def _on_mark_title(self):
+    def _on_mark_level_menu(self):
         cursor = self.editor.textCursor()
         cursor.select(QTextCursor.LineUnderCursor)
         line = cursor.selectedText().strip()
         if not line:
             return
-        if line.startswith("标题:") or line.startswith("标题："):
+        menu = QMenu(self)
+        for level, label in [(0, "主标题"), (1, "一级标题"), (2, "二级标题"), (3, "三级标题"), (4, "四级标题")]:
+            action = menu.addAction(label)
+            action.triggered.connect(lambda checked, l=level: self._mark_line_level(l))
+        menu.exec_(self.btn_mark_level.mapToGlobal(self.btn_mark_level.rect().bottomLeft()))
+
+    def _mark_line_level(self, level):
+        cursor = self.editor.textCursor()
+        cursor.select(QTextCursor.LineUnderCursor)
+        line = cursor.selectedText().strip()
+        if not line:
             return
-        cursor.insertText("标题: " + line)
+        # 去掉已有的标记前缀
+        clean = re.sub(r'^标题[:：]\d*[:：]\s*', '', line).strip()
+        if level == 0:
+            cursor.insertText("标题: " + clean)
+        else:
+            cursor.insertText("标题:{}: {}".format(level, clean))
 
     def _on_editor_context_menu(self, pos):
         """右键菜单：挖空选中文字 / 调整已有占位符"""
@@ -502,6 +517,41 @@ class TemplateMakerPage(QWidget):
         """执行保存（组装模板内容并写盘）"""
         body = self.editor.toPlainText().strip()
         name = self.name_edit.text().strip() or os.path.splitext(os.path.basename(path))[0]
+
+        # 自动检测标题层级（仅对未手动标记的行生效）
+        # 不影响排版引擎——只给模板系统加结构标记
+        from scripts.formatter import detect_para_type, DEFAULT_DETECT_RULES
+        rules = {k: v for k, v in DEFAULT_DETECT_RULES.items()}
+        lines = body.splitlines()
+        all_texts = [l.strip() for l in lines if l.strip() and not l.strip().startswith("标题")]
+        idx_map = {}
+        n = 0
+        for i, l in enumerate(lines):
+            if l.strip() and not l.strip().startswith("标题"):
+                idx_map[i] = n
+                n += 1
+        prev_type = None
+        auto_lines = []
+        for i, line in enumerate(lines):
+            s = line.strip()
+            if not s:
+                auto_lines.append(line)
+                continue
+            if s.startswith("标题"):
+                auto_lines.append(line)
+                prev_type = None
+                continue
+            ai = idx_map.get(i)
+            ptype = detect_para_type(s, i, len(lines), None, all_texts, ai, prev_type, rules=rules)
+            prev_type = ptype
+            level_map = {'heading1': 1, 'heading2': 2, 'heading3': 3, 'heading4': 4}
+            if ptype == 'title':
+                auto_lines.append("标题: " + s)
+            elif ptype in level_map:
+                auto_lines.append("标题:{}: {}".format(level_map[ptype], s))
+            else:
+                auto_lines.append(line)
+        body = "\n".join(auto_lines)
 
         # 组装模板内容
         parts = [body]

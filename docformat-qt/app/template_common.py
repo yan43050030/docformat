@@ -307,16 +307,28 @@ def parse_template(template_text):
                 meta[k.strip()] = v.strip()
 
     title, body = "", []
+    _level_mark = re.compile(r"^标题[:：]([1234])[:：]\s*")
     for line in body_part.strip().splitlines():
         s = line.strip()
         if not s:
             continue
-        if s.startswith("标题:") or s.startswith("标题："):
+        # 标题:1: / 标题:2: 等显式层级标记（非标准格式专用）
+        lm = _level_mark.match(s)
+        if lm:
+            level = int(lm.group(1))
+            text = s[lm.end():].strip()
+            tmap = {1: "h1", 2: "h2", 3: "h3", 4: "h4"}
+            body.append({"type": tmap.get(level, "body"), "text": text})
+        elif s.startswith("标题:") or s.startswith("标题："):
             title = re.split(r"[:：]", s, 1)[1].strip()
         elif re.match(r"^[一二三四五六七八九十]+、", s):
             body.append({"type": "h1", "text": s})
         elif re.match(r"^（[一二三四五六七八九十]+）", s):
             body.append({"type": "h2", "text": s})
+        elif re.match(r"^\d+\.\s*[^\d.\s]", s) and len(s) < 60:
+            body.append({"type": "h3", "text": s})
+        elif re.match(r"^（\d+）|^\(\d+\)", s) and len(s) < 60:
+            body.append({"type": "h4", "text": s})
         else:
             body.append({"type": "body", "text": s})
     return {"title": title, "body": body, "meta": meta}
