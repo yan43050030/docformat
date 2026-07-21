@@ -79,7 +79,10 @@ class PresetManager(object):
         items = []
         for k in BUILTIN_ORDER:
             if k in BUILTIN_PRESETS:
-                name = self.builtin_names.get(k) or BUILTIN_PRESETS[k].get('name', k)
+                cached = self.builtin_names.get(k, '')
+                code_name = BUILTIN_PRESETS[k].get('name', k)
+                # 缓存名与代码名一致→忽略缓存（升级后自动同步）
+                name = cached if cached and cached != code_name else code_name
                 items.append((k, name, True))
         for k in sorted(self.user.keys()):
             items.append((k, self.user[k].get('name', k), False))

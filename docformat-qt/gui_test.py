@@ -152,7 +152,7 @@ print('[9] 日志页记录处理过程 ✓')
 from app.preview_dialog import (PreviewDialog, render_after_html,
                                 _read_paragraphs, compute_types)
 preset_official = win.mgr.get('official')
-paras, _tables, _total = _read_paragraphs(SAMPLE)
+paras, _tables, _total, _auto_num = _read_paragraphs(SAMPLE)
 after_html = render_after_html(paras, preset_official)
 assert '密级' in after_html and '方正小标宋简体' in after_html, '预览 HTML 缺少类型标注/字体样式'
 assert '一级标题' in after_html, '预览未标注一级标题'
@@ -199,7 +199,7 @@ print('[11] 自定义识别规则编辑/持久化/生效 + 方案下拉 + 实时
 txt_path = os.path.join(SMOKE, 'preview.txt')
 with open(txt_path, 'w', encoding='utf-8') as f:
     f.write('关于测试预览的通知\n\n各部门：\n\n一、做好文本预览。\n')
-tp, ttables, ttotal = _read_paragraphs(txt_path)
+tp, ttables, ttotal, _an = _read_paragraphs(txt_path)
 assert any('关于测试预览' in t for t, _a in tp), 'txt 预览读取失败'
 txt_html = render_after_html(tp, preset_official)
 assert '一级标题' in txt_html, 'txt 预览未走类型识别'
