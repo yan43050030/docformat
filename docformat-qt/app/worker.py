@@ -264,6 +264,20 @@ class ProcessWorker(QThread):
                 tmp_dir = None
                 try:
                     work, tmp_dir = ensure_docx(path, self._log, session)
+                    # 自动转换 Word 自动编号为纯文字（导入时静默执行，无编号则跳过）
+                    if os.path.splitext(work)[1].lower() == '.docx':
+                        try:
+                            from scripts import auto_num
+                            if auto_num._has_auto_numbering(work):
+                                tmp2 = os.path.join(tempfile.mkdtemp(prefix='docformat_an_'), 'num.docx')
+                                ok, unconverted = auto_num.convert_auto_numbering(work, tmp2)
+                                if ok and os.path.exists(tmp2):
+                                    work = tmp2
+                                    if unconverted:
+                                        self._log('warning',
+                                            '{}: {} 段自动编号未能识别'.format(base, len(unconverted)))
+                        except Exception:
+                            pass
                     if self.mode == MODE_DIAGNOSE:
                         reports.append(self._diagnose(work, base))
                         self.fileFinished.emit(path, '')
