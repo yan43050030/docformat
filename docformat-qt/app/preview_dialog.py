@@ -56,6 +56,11 @@ def _css_font(name):
     return raw.replace('"', "'")
 
 
+def _css_font_for_en(name):
+    """英文字体直接输出（Times New Roman 等不需要回退链）"""
+    return "'{}'".format(name) if name else "'Times New Roman'"
+
+
 def _read_paragraphs(path):
     """返回 (段落列表[(text, alignment)], 表格数, 总段数)。
 
@@ -162,7 +167,9 @@ def render_after_html(paras, preset, overrides=None):
         fmt = preset.get(ptype if ptype in preset else 'body', preset.get('body', {}))
 
         style = [
-            'font-family:{}'.format(_css_font(fmt.get('font_cn', '仿宋_GB2312'))),
+            'font-family:{}, {}'.format(
+                _css_font_for_en(fmt.get('font_en', 'Times New Roman')),
+                _css_font(fmt.get('font_cn', '仿宋_GB2312'))),
             'font-size:{}pt'.format(fmt.get('size', 16)),
             'text-align:{}'.format(ALIGN_CSS.get(fmt.get('align', 'left'), 'left')),
         ]
