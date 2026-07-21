@@ -158,6 +158,15 @@ def format_paragraph(para, fmt, para_type, line_spacing_pt=28, first_line_bold=F
         space_before  - 段前间距(磅), 默认0
         space_after   - 段后间距(磅), 默认0
     """
+    # 组成人员名单：保持原格式不动，仅设缩进=0和行距
+    if para_type == 'roster':
+        pf = para.paragraph_format
+        pf.first_line_indent = Pt(0)
+        pf.left_indent = None
+        if fmt.get('line_spacing'):
+            pf.line_spacing = Pt(fmt['line_spacing'])
+        return
+
     _force_normal_style(para)
 
     if revision_mode:
