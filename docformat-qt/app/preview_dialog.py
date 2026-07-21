@@ -71,7 +71,7 @@ def _read_paragraphs(path):
     if lower.endswith(('.txt', '.md', '.markdown')):
         from app.worker import clean_markdown, read_text_file
         lines = clean_markdown(read_text_file(path))
-        paras = [(t, None) for t in lines[:MAX_PARAS]]
+        paras = [(t, None, '', 0) for t in lines[:MAX_PARAS]]
         return paras, 0, len(lines), False
     if not lower.endswith('.docx'):
         return None  # .doc/.wps: no auto-num info
@@ -83,7 +83,14 @@ def _read_paragraphs(path):
     has_auto_num = False
     for p in doc.paragraphs[:MAX_PARAS]:
         align = p.paragraph_format.alignment
-        paras.append((p.text, align))
+        font_cn = ''
+        font_size = 0
+        for r in p.runs:
+            if r.text.strip():
+                font_cn = r.font.name or ''
+                font_size = r.font.size.pt if r.font.size else 0
+                break
+        paras.append((p.text, align, font_cn, font_size))
         if not has_auto_num:
             pPr = p._element.find(_qn3('w:pPr'))
             if pPr is not None and pPr.find(_qn3('w:numPr')) is not None:
@@ -108,13 +115,23 @@ def _html_shell(body, base_size=12):
 
 def render_before_html(paras):
     parts = []
-    for text, align in paras:
+    for item in paras:
+        if len(item) == 4:
+            text, align, font_cn, font_size = item
+        else:
+            text, align = item[0], item[1]
+            font_cn, font_size = '', 0
         if not text.strip():
             parts.append('<p>&nbsp;</p>')
             continue
         a = 'center' if align is not None and 'CENTER' in str(align) else (
             'right' if align is not None and 'RIGHT' in str(align) else 'left')
-        parts.append('<p style="text-align:{}">{}</p>'.format(a, _esc(text)))
+        sty = 'text-align:{}'.format(a)
+        if font_cn:
+            sty += ";font-family:'{}'".format(font_cn)
+        if font_size:
+            sty += ';font-size:{}pt'.format(font_size)
+        parts.append('<p style="{}">{}</p>'.format(sty, _esc(text)))
     return _html_shell(''.join(parts))
 
 
@@ -125,7 +142,7 @@ def compute_types(paras, preset, overrides=None):
     """
     overrides = overrides or {}
     rules = _compile_rules(preset.get('detect_rules'))
-    texts = [t for t, _ in paras]
+    texts = [item[0] for item in paras]
     all_texts = [t.strip() for t in texts if t.strip()]
     idx_map = {}
     n = 0
@@ -137,7 +154,9 @@ def compute_types(paras, preset, overrides=None):
     result = []
     prev_type = None
     total = len(paras)
-    for i, (text, align) in enumerate(paras):
+    for i, item in enumerate(paras):
+        text = item[0]
+        align = item[1] if len(item) > 1 else None
         if not text.strip():
             result.append((None, None))
             continue
@@ -158,7 +177,8 @@ def render_after_html(paras, preset, overrides=None):
     types = compute_types(paras, preset, overrides)
 
     parts = []
-    for (text, _align), (ai, ptype) in zip(paras, types):
+    for item, (ai, ptype) in zip(paras, types):
+        text = item[0]
         if ptype is None:
             parts.append('<p>&nbsp;</p>')
             continue
@@ -423,6 +443,8 @@ class PreviewDialog(QDialog):
             notes.append('文档含 {} 个表格，预览不显示表格（实际处理时会规范表格格式）'.format(table_count))
         if total_paras > MAX_PARAS:
             notes.append('文档共 {} 段，仅预览前 {} 段'.format(total_paras, MAX_PARAS))
+        if has_auto_num:
+            notes.append('此文档含 Word 自动编号，导入时已自动转换为纯文字')
         self.notice.setText('；'.join(notes))
         self.notice.setVisible(bool(notes))
 
