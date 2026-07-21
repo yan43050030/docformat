@@ -5,6 +5,7 @@
 正文改成一级标题）；手动调整会在实际排版时生效。
 """
 import os
+import tempfile
 
 from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtGui import QCursor
@@ -75,6 +76,16 @@ def _read_paragraphs(path):
         return paras, 0, len(lines), False
     if not lower.endswith('.docx'):
         return None  # .doc/.wps: no auto-num info
+    # 预览前自动转换 Word 自动编号为文字
+    try:
+        from scripts import auto_num
+        if auto_num._has_auto_numbering(path):
+            tmp_an = os.path.join(tempfile.mkdtemp(prefix='docformat_pv_an_'), 'num.docx')
+            ok, _ = auto_num.convert_auto_numbering(path, tmp_an)
+            if ok and os.path.exists(tmp_an):
+                path = tmp_an
+    except Exception:
+        pass
     from docx import Document
     doc = Document(path)
     from docx.oxml.ns import qn as _qn3
