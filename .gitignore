@@ -30,3 +30,4 @@ docformat-pro/src-tauri/target/
 .DS_Store
 Thumbs.db
 .compare/
+_smoke*/
