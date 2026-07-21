@@ -427,13 +427,22 @@ class PreviewDialog(QDialog):
                 # .doc/.wps：先转换为临时 docx 再预览
                 result = _read_paragraphs(self._convert_for_preview(path))
         except Exception as e:
+            err_msg = str(e)
+            # 给出更具体的解决建议
+            hint = ''
+            if '未检测到' in err_msg or 'COM' in err_msg:
+                hint = '<p><b>可能原因：</b>WPS/Word 正在忙于其他任务（如打开了大文件），<br>或 COM 组件初始化失败。关闭所有 Office 窗口后重试。</p>'
+            elif 'Permission' in err_msg or '拒绝' in err_msg:
+                hint = '<p><b>可能原因：</b>临时目录无写入权限。<br>请以管理员身份运行或检查杀毒软件是否拦截。</p>'
             msg = _html_shell(
-                '<p>预览失败: {}</p>'
+                '<p style=\"color:#C0392B;\"><b>预览失败：</b>{}</p>'
+                '{}'
                 '<p>不影响实际处理，点击「开始排版」仍会正常转换并排版该文件。</p>'.format(
-                    _esc(str(e))))
+                    _esc(err_msg), hint))
             self.view_before.setHtml(msg)
             self.view_after.setHtml(msg)
-            self.notice.setVisible(False)
+            self.notice.setText('预览失败：{}'.format(err_msg[:80]))
+            self.notice.setVisible(True)
             return
         paras, table_count, total_paras, has_auto_num = result
         self._current_paras = paras
