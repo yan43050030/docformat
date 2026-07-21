@@ -67,17 +67,23 @@ def _read_paragraphs(path):
         from app.worker import clean_markdown, read_text_file
         lines = clean_markdown(read_text_file(path))
         paras = [(t, None) for t in lines[:MAX_PARAS]]
-        return paras, 0, len(lines)
+        return paras, 0, len(lines), False
     if not lower.endswith('.docx'):
-        return None
+        return None  # .doc/.wps: no auto-num info
     from docx import Document
     doc = Document(path)
+    from docx.oxml.ns import qn as _qn3
     total = len(doc.paragraphs)
     paras = []
+    has_auto_num = False
     for p in doc.paragraphs[:MAX_PARAS]:
         align = p.paragraph_format.alignment
         paras.append((p.text, align))
-    return paras, len(doc.tables), total
+        if not has_auto_num:
+            pPr = p._element.find(_qn3('w:pPr'))
+            if pPr is not None and pPr.find(_qn3('w:numPr')) is not None:
+                has_auto_num = True
+    return paras, len(doc.tables), total, has_auto_num
 
 
 def _html_shell(body, base_size=12):
@@ -370,7 +376,7 @@ class PreviewDialog(QDialog):
             self.view_after.setHtml(msg)
             self.notice.setVisible(False)
             return
-        paras, table_count, total_paras = result
+        paras, table_count, total_paras, has_auto_num = result
         self._current_paras = paras
 
         notes = []
