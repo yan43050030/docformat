@@ -625,10 +625,12 @@ class PresetsPage(QWidget):
         self.adv_first_bold = QCheckBox("正文段首句加粗（如「一是……」）")
         self.adv_bold_serial = QCheckBox("正文序号引导词加粗")
         self.adv_deep_clean = QCheckBox("深度清洗（清除颜色/下划线/斜体等杂样式）")
+        self.adv_widow = QCheckBox("孤行控制（落款署名和日期不分离到两页）")
         g.addWidget(self.adv_first_bold, 0, 0)
         g.addWidget(self.adv_bold_serial, 1, 0)
         g.addWidget(self.adv_deep_clean, 2, 0)
-        for wdg in [self.adv_first_bold, self.adv_bold_serial, self.adv_deep_clean]:
+        g.addWidget(self.adv_widow, 3, 0)
+        for wdg in [self.adv_first_bold, self.adv_bold_serial, self.adv_deep_clean, self.adv_widow]:
             wdg.stateChanged.connect(self._save_from_widgets)
         sec.set_body_layout(g)
         self._sections.append(sec)
@@ -707,6 +709,7 @@ class PresetsPage(QWidget):
         self.adv_first_bold.setChecked(bool(p.get('first_line_bold', False)))
         self.adv_bold_serial.setChecked(bool(p.get('bold_serial', True)))
         self.adv_deep_clean.setChecked(bool(p.get('deep_clean', False)))
+        self.adv_widow.setChecked(bool(p.get('widow_control', False)))
 
         img = p.get('image', {}) or {}
         self.img_enabled.setChecked(bool(img.get('auto_compress', False)))
@@ -807,6 +810,7 @@ class PresetsPage(QWidget):
         p['first_line_bold'] = self.adv_first_bold.isChecked()
         p['bold_serial'] = self.adv_bold_serial.isChecked()
         p['deep_clean'] = self.adv_deep_clean.isChecked()
+        p['widow_control'] = self.adv_widow.isChecked()
 
         if self.img_enabled.isChecked():
             p['image'] = {

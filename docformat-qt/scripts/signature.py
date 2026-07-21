@@ -57,11 +57,13 @@ def _apply_gb_signature_layout(typed_entries, preset):
         para.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         para.paragraph_format.right_indent = Pt(d_right * size_d)
         # 孤行控制：日期行本身不被分页断开
-        para.paragraph_format.keep_lines_together = True
+        if preset.get('widow_control', False):
+            para.paragraph_format.keep_lines_together = True
 
         for s in sigs:
             s.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.RIGHT
             s.paragraph_format.right_indent = Pt(s_right * size_s)
             # 孤行控制：署名与下一段（日期）绑定不分页
-            s.paragraph_format.keep_with_next = True
-            s.paragraph_format.keep_lines_together = True
+            if preset.get('widow_control', False):
+                s.paragraph_format.keep_with_next = True
+                s.paragraph_format.keep_lines_together = True
