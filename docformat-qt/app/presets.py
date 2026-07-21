@@ -59,6 +59,8 @@ class PresetManager(object):
                 if key and (key in self.user or key in BUILTIN_PRESETS):
                     self.active_key = key
             except Exception:
+                import traceback, sys
+                traceback.print_exc(file=sys.stderr)
                 self.user = {}
 
     def save(self):
