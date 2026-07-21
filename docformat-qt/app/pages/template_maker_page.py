@@ -98,6 +98,14 @@ class TemplateMakerPage(QWidget):
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 24, 28, 16)
+        outer.setSpacing(10)
+        _title = QLabel("文书模板制作")
+        _title.setProperty("h1", "true")
+        _sub = QLabel("载入脱密历史件 → 选中文字挖空为占位符 → 保存为可复用的起草模板")
+        _sub.setProperty("muted", "true")
+        outer.addWidget(_title)
+        outer.addWidget(_sub)
 
         # 顶部：载入 + 目录
         top = QHBoxLayout()
