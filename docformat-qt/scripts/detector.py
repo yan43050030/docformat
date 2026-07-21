@@ -233,11 +233,8 @@ def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=N
 
         if allow_signature_check:
             if _rules['signature'].search(text):
-                # 直接命中署名正则的，除全角句号结尾且超过 15 字外，都认定为署名
-                if re.search(r'[。]\s*$', text) and len(text) > 15:
-                    return 'body'
                 return 'signature'
-            if re.search(r'[！？.!?；;]\s*$', text):
+            if re.search(r'[。！？.!?；;]\s*$', text):
                 return 'body'
             if all_texts_index is not None:
                 remaining_texts = all_texts[all_texts_index + 1:]
