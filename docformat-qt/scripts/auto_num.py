@@ -127,27 +127,37 @@ def _parse_numbering(zf):
 
 
 def _convert_via_xml(input_path, output_path):
-    """解析 numbering.xml + 文档 XML，转换自动编号为纯文字"""
-    with zipfile.ZipFile(input_path, 'r') as zf:
-        definitions = _parse_numbering(zf)
-        if not definitions:
-            return False, set()
-        doc_xml = zf.read('word/document.xml').decode('utf-8')
-        # 修改后的 XML
-        modified, unconverted = _patch_document_xml(doc_xml, definitions)
-        # 重建 docx
-        import shutil
-        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as out:
-            for item in zf.infolist():
-                if item.filename == 'word/document.xml':
-                    out.writestr(item, modified.encode('utf-8'))
-                else:
-                    out.writestr(item, zf.read(item.filename))
-    return True, unconverted
+    """解析 numbering.xml + 文档 XML，转换自动编号为纯文字。异常时静默跳过。"""
+    try:
+        with zipfile.ZipFile(input_path, 'r') as zf:
+            definitions = _parse_numbering(zf)
+            if not definitions:
+                return False, set()
+            doc_xml = zf.read('word/document.xml').decode('utf-8')
+            modified, unconverted = _patch_document_xml(doc_xml, definitions)
+            if modified == doc_xml:
+                return False, set()
+            import shutil
+            with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as out:
+                for item in zf.infolist():
+                    if item.filename == 'word/document.xml':
+                        out.writestr(item, modified.encode('utf-8'))
+                    else:
+                        out.writestr(item, zf.read(item.filename))
+        return True, unconverted
+    except Exception:
+        return False, set()
 
 
 def _patch_document_xml(doc_xml, definitions):
-    """替换文档 XML 中的自动编号为文字"""
+    """替换文档 XML 中的自动编号为文字。异常时返回原文。"""
+    try:
+        return _patch_document_xml_impl(doc_xml, definitions)
+    except Exception:
+        return doc_xml, set()
+
+
+def _patch_document_xml_impl(doc_xml, definitions):
     import xml.etree.ElementTree as ET
     ns = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
     ET.register_namespace('', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main')
@@ -186,10 +196,6 @@ def _patch_document_xml(doc_xml, definitions):
         fmt_func, prefix, suffix = definitions[numId][ilvl]
         # 递增计数器
         c = counters.setdefault(numId, {})
-        # 检查是否有重新编号标记
-        lvl_restart = False
-        for _le in pPr.iter(ns + 'numPr'):
-            pass  # numPr 已在上面找到
         c[ilvl] = c.get(ilvl, 0) + 1
         # 重置更低层级
         for l in range(ilvl + 1, 10):
