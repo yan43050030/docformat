@@ -41,9 +41,10 @@ class DropZone(QFrame):
         lay.setSpacing(6)
         lay.setAlignment(Qt.AlignCenter)
 
-        self.icon = QLabel("⇪")
+        self.icon = QLabel()
         self.icon.setAlignment(Qt.AlignCenter)
-        self.icon.setStyleSheet("font-size: 30px; background: transparent;")
+        self.icon.setStyleSheet("background: transparent;")
+        self.set_icon_color('#8A8375')   # 启动默认色，主题应用后会重设
         self.title = QLabel("拖拽文件到此处，或点击选择")
         self.title.setObjectName("DropTitle")
         self.title.setAlignment(Qt.AlignCenter)
@@ -54,6 +55,11 @@ class DropZone(QFrame):
         lay.addWidget(self.icon)
         lay.addWidget(self.title)
         lay.addWidget(self.hint)
+
+    def set_icon_color(self, color):
+        """用程序绘制的图标替代字体字符（信创系统 emoji 字体不全）"""
+        from app.widgets.nav_icons import make_pixmap
+        self.icon.setPixmap(make_pixmap('drop', color, 44))
 
     def _set_drag_over(self, on):
         self.setProperty("dragOver", "true" if on else "false")

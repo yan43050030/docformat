@@ -131,7 +131,33 @@ QListWidget {{
     background: {card}; border: 1px solid {border}; border-radius: 8px; padding: 4px;
 }}
 QListWidget::item {{ padding: 6px 8px; border-radius: 6px; color: {ink}; }}
+QListWidget::item:hover {{ background: {bg_dark}; }}
 QListWidget::item:selected {{ background: {bg_dark}; color: {ink}; }}
+
+/* ---- 右键菜单 / 弹出菜单 ---- */
+QMenu {{
+    background: {card}; border: 1px solid {border}; border-radius: 8px;
+    color: {ink}; padding: 5px;
+}}
+QMenu::item {{ padding: 6px 26px 6px 14px; border-radius: 5px; }}
+QMenu::item:selected {{ background: {accent}; color: {accent_fg}; }}
+QMenu::separator {{ height: 1px; background: {border}; margin: 4px 8px; }}
+
+/* ---- 对话框 ---- */
+QDialog {{ background: {bg}; }}
+QMessageBox QLabel, QInputDialog QLabel {{ color: {ink}; }}
+
+/* ---- 处理模式卡片 ---- */
+QFrame[modeCard="true"] {{
+    background: {card}; border: 1px solid {border_medium}; border-radius: 10px;
+}}
+QFrame[modeCard="true"]:hover {{ border-color: {ink_muted}; background: {bg_dark}; }}
+QFrame[modeCard="true"][selected="true"] {{
+    border: 2px solid {accent}; background: {bg_dark};
+}}
+QLabel[modeCardTitle="true"] {{
+    font-size: 13px; font-weight: 600; color: {ink}; background: transparent;
+}}
 
 /* ---- 滚动区 ---- */
 QScrollArea {{ border: none; background: transparent; }}

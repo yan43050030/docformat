@@ -27,6 +27,7 @@ from app.presets import PresetManager, templates_path
 win = MainWindow()
 home = win.home_page
 home.font_check_enabled = False   # 测试容器没有方正字体，跳过缺字体确认弹窗
+home.set_mode('full')             # 重置模式记忆，保证测试从固定状态开始
 
 
 def wait_for(signal, timeout_ms=60000):
@@ -64,13 +65,9 @@ assert os.path.exists(out_expected), '输出文件未生成'
 print('[2] GUI 智能一键处理 → {} ✓'.format(os.path.basename(out_expected)))
 
 # ---------- 3. 诊断模式 ----------
-diag_btn = None
-for b in home.mode_group.buttons():
-    if b.property('modeId') == 'diagnose':
-        diag_btn = b
-        break
-diag_btn.setChecked(True)
-home._on_mode_changed(diag_btn)
+home.set_mode('diagnose')
+assert home.current_mode() == 'diagnose'
+assert home._mode_cards['diagnose'].property('selected') == 'true', '模式卡片未选中高亮'
 captured = []
 home._show_diagnose = lambda report: captured.append(report)   # 拦截弹窗
 home.start_process()
@@ -80,13 +77,7 @@ assert captured and '标点' in captured[0], '诊断报告未生成'
 print('[3] 格式诊断模式 → 报告含标点问题 ✓')
 
 # ---------- 4. AI 粘贴生成 ----------
-ai_btn = None
-for b in home.mode_group.buttons():
-    if b.property('modeId') == 'ai_paste':
-        ai_btn = b
-        break
-ai_btn.setChecked(True)
-home._on_mode_changed(ai_btn)
+home.set_mode('ai_paste')
 assert home.paste_card.isVisible() or True  # offscreen 下 visible 状态不可靠，直接测流程
 from app.worker import AiPasteWorker
 ai_out = os.path.join(SMOKE, 'ai_gui.docx')
@@ -237,5 +228,39 @@ print('[12] 逐文件状态标记 + 主题着色属性 ✓')
 from app.main_window import VERSION
 assert 'v' + VERSION in win.windowTitle(), '窗口标题未含版本号: {}'.format(win.windowTitle())
 print('[13] 窗口标题显示版本号 v{} ✓'.format(VERSION))
+
+# ---------- 12. v3.0 易用性 ----------
+# 快捷键已注册（6 个页面 + 打开/处理/帮助）
+assert len(win._shortcuts) == len(win.nav_group.buttons()) + 3, '快捷键数量: {}'.format(len(win._shortcuts))
+win.nav_to(2)
+assert win.stack.currentIndex() == 2, 'nav_to 未切页'
+win.nav_to(0)
+
+# 使用习惯记忆：改后缀 → editingFinished → 新实例可读回
+home.suffix_edit.setText('_v3test')
+home.suffix_edit.editingFinished.emit()
+from app.theme import settings as _settings
+assert _settings().value('home/suffix') == '_v3test', '后缀未持久化'
+home.suffix_edit.setText('_gui')
+home.suffix_edit.editingFinished.emit()
+
+# 预览同步滚动不抛异常
+dlg2 = PreviewDialog([SAMPLE], preset_official)
+app.processEvents()
+dlg2._sync_scroll(dlg2.view_before, dlg2.view_after)
+dlg2.reject()
+
+# 新模块可导入
+from app.help_dialog import HelpDialog
+from app.onboarding_dialog import OnboardingDialog
+from app.update_check import UpdateChecker, _version_tuple
+assert _version_tuple('v3.0.0') == (3, 0, 0)
+assert _version_tuple('v3.0.1') > _version_tuple('v3.0.0')
+
+# 白话错误映射
+from app.worker import friendly_error
+msg, _ = friendly_error(Exception('Package not found at xxx'))
+assert 'Word 文档' in msg, '错误白话化失败: {}'.format(msg)
+print('[14] v3.0 快捷键/习惯记忆/同步滚动/帮助引导/错误白话化 ✓')
 
 print('\nGUI 自动化测试全部通过 ✓')

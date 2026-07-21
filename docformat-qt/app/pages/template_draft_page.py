@@ -278,7 +278,15 @@ class TemplateDraftPage(QWidget):
 
         splitter.setSizes([240, 360, 420])
         outer = QVBoxLayout(self)
-        outer.addWidget(splitter)
+        outer.setContentsMargins(28, 24, 28, 16)
+        outer.setSpacing(10)
+        _title = QLabel("文书起草")
+        _title.setProperty("h1", "true")
+        _sub = QLabel("选模板 → 填字段 → 预览编辑 → 一键排版输出规范公文")
+        _sub.setProperty("muted", "true")
+        outer.addWidget(_title)
+        outer.addWidget(_sub)
+        outer.addWidget(splitter, 1)
 
     # ===== 预览模式切换 =====
     def _on_toggle_mode(self, checked):

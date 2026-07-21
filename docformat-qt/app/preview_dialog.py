@@ -192,6 +192,11 @@ class PreviewDialog(QDialog):
         super(PreviewDialog, self).__init__(parent)
         self.setWindowTitle("排版效果预览（尚未修改任何文件）")
         self.resize(1080, 720)
+        from app.theme import settings as _settings
+        _s = _settings()
+        geo = _s.value('preview/geometry')
+        if geo:
+            self.restoreGeometry(geo)
         self.files = files
         self.preset = preset
         # path -> {非空段序号: 类型}
@@ -240,13 +245,23 @@ class PreviewDialog(QDialog):
         root.addLayout(header)
 
         split = QSplitter(Qt.Horizontal)
+        self._splitter = split
         self.view_before = QTextBrowser()
         self.view_after = QTextBrowser()
         self.view_after.setOpenLinks(False)
         self.view_after.anchorClicked.connect(self._on_tag_clicked)
+        # 左右分栏同步滚动（按比例，两侧内容高度不同也能对齐大致位置）
+        self._sync_lock = False
+        self.view_before.verticalScrollBar().valueChanged.connect(
+            lambda _v: self._sync_scroll(self.view_before, self.view_after))
+        self.view_after.verticalScrollBar().valueChanged.connect(
+            lambda _v: self._sync_scroll(self.view_after, self.view_before))
         split.addWidget(self.view_before)
         split.addWidget(self.view_after)
         split.setSizes([500, 500])
+        _sp = _s.value('preview/splitter')
+        if _sp:
+            split.restoreState(_sp)
         root.addWidget(split, 1)
 
         btns = QHBoxLayout()
@@ -350,8 +365,25 @@ class PreviewDialog(QDialog):
         finally:
             QApplication.restoreOverrideCursor()
 
+    def _sync_scroll(self, src_view, dst_view):
+        if self._sync_lock:
+            return
+        self._sync_lock = True
+        try:
+            sb = src_view.verticalScrollBar()
+            db = dst_view.verticalScrollBar()
+            if sb.maximum() > 0:
+                db.setValue(int(round(db.maximum() * sb.value() / float(sb.maximum()))))
+        finally:
+            self._sync_lock = False
+
     def done(self, r):
         import shutil as _shutil
+        from app.theme import settings as _settings
+        _s = _settings()
+        _s.setValue('preview/geometry', self.saveGeometry())
+        if getattr(self, '_splitter', None) is not None:
+            _s.setValue('preview/splitter', self._splitter.saveState())
         for d in self._tmp_dirs:
             _shutil.rmtree(d, ignore_errors=True)
         self._tmp_dirs = []

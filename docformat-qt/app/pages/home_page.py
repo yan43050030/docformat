@@ -4,11 +4,10 @@ import os
 
 from PyQt5.QtCore import Qt, QUrl, pyqtSignal
 from PyQt5.QtGui import QDesktopServices
-from PyQt5.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog,
-                             QFrame, QHBoxLayout, QLabel, QLineEdit,
-                             QMessageBox, QPlainTextEdit, QProgressBar,
-                             QPushButton, QRadioButton, QScrollArea,
-                             QVBoxLayout, QWidget)
+from PyQt5.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame,
+                             QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+                             QPlainTextEdit, QProgressBar, QPushButton,
+                             QScrollArea, QVBoxLayout, QWidget)
 
 from app.widgets.drop_zone import DropZone, ALLOWED_EXTS
 from app.widgets.file_list import FileList
@@ -32,6 +31,38 @@ def make_card():
     return card
 
 
+class ModeCard(QFrame):
+    """可点击的处理模式卡片（标题 + 一句话说明，选中高亮描边）"""
+    clicked = pyqtSignal(str)
+
+    def __init__(self, mid, title, desc, parent=None):
+        super(ModeCard, self).__init__(parent)
+        self.mid = mid
+        self.setProperty("modeCard", "true")
+        self.setProperty("selected", "false")
+        self.setProperty("modeId", mid)
+        self.setCursor(Qt.PointingHandCursor)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(3)
+        t = QLabel(title)
+        t.setProperty("modeCardTitle", "true")
+        d = QLabel(desc)
+        d.setProperty("muted", "true")
+        d.setWordWrap(True)
+        v.addWidget(t)
+        v.addWidget(d)
+
+    def set_selected(self, on):
+        self.setProperty("selected", "true" if on else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.mid)
+
+
 class HomePage(QWidget):
     logMessage = pyqtSignal(str, str)
     presetChanged = pyqtSignal(str)
@@ -47,6 +78,7 @@ class HomePage(QWidget):
         self.font_check_enabled = True   # 处理前检查排版字体是否安装（测试时可关闭）
         self._build()
         self.reload_presets()
+        self._restore_prefs()
 
     # ---------- UI ----------
     def _build(self):
@@ -138,20 +170,19 @@ class HomePage(QWidget):
         left_col.addWidget(mode_title)
         left_col.addSpacing(6)
 
-        self.mode_group = QButtonGroup(self)
-        for mid, label, desc in MODES:
-            rb = QRadioButton(label)
-            rb.setProperty("modeId", mid)
-            if mid == MODE_FULL:
-                rb.setChecked(True)
-            self.mode_group.addButton(rb)
-            d = QLabel(desc)
-            d.setProperty("muted", "true")
-            d.setWordWrap(True)
-            d.setContentsMargins(24, 0, 0, 8)
-            left_col.addWidget(rb)
-            left_col.addWidget(d)
-        self.mode_group.buttonClicked.connect(self._on_mode_changed)
+        from PyQt5.QtWidgets import QGridLayout
+        self._mode = MODE_FULL
+        self._mode_cards = {}
+        mode_grid = QGridLayout()
+        mode_grid.setHorizontalSpacing(10)
+        mode_grid.setVerticalSpacing(10)
+        for i, (mid, label, desc) in enumerate(MODES):
+            card = ModeCard(mid, label, desc)
+            card.clicked.connect(self.set_mode)
+            self._mode_cards[mid] = card
+            mode_grid.addWidget(card, i // 2, i % 2)
+        self._mode_cards[MODE_FULL].set_selected(True)
+        left_col.addLayout(mode_grid)
         left_col.addStretch(1)
 
         # 右列：预设 + 后缀 + 徽章（独立竖排）
@@ -251,6 +282,24 @@ class HomePage(QWidget):
         root.addWidget(hint)
         root.addStretch(1)
 
+    # ---------- 使用习惯记忆 ----------
+    def _restore_prefs(self):
+        from app.theme import settings
+        s = settings()
+        self.suffix_edit.setText(s.value('home/suffix', '_processed') or '_processed')
+        self.revision_check.setChecked(s.value('home/revision', False, type=bool))
+        mode = s.value('home/mode', MODE_FULL)
+        if mode in self._mode_cards and mode != self._mode:
+            self.set_mode(mode)
+        self.suffix_edit.editingFinished.connect(self._save_prefs)
+        self.revision_check.stateChanged.connect(self._save_prefs)
+
+    def _save_prefs(self, *_a):
+        from app.theme import settings
+        s = settings()
+        s.setValue('home/suffix', self.suffix_edit.text().strip() or '_processed')
+        s.setValue('home/revision', self.revision_check.isChecked())
+
     # ---------- 预设 ----------
     def reload_presets(self):
         current = self.mgr.active_key
@@ -315,10 +364,19 @@ class HomePage(QWidget):
 
     # ---------- 模式 ----------
     def current_mode(self):
-        btn = self.mode_group.checkedButton()
-        return btn.property("modeId") if btn else MODE_FULL
+        return self._mode
 
-    def _on_mode_changed(self, _btn):
+    def set_mode(self, mid):
+        if mid not in self._mode_cards:
+            return
+        self._mode = mid
+        for m, card in self._mode_cards.items():
+            card.set_selected(m == mid)
+        from app.theme import settings
+        settings().setValue('home/mode', mid)
+        self._on_mode_changed()
+
+    def _on_mode_changed(self, _btn=None):
         is_paste = self.current_mode() == MODE_AI_PASTE
         self.file_card.setVisible(not is_paste)
         self.paste_card.setVisible(is_paste)
@@ -539,9 +597,5 @@ class HomePage(QWidget):
         dlg = ReportDialog(report, self)
         if dlg.exec_() == ReportDialog.Accepted:
             # 一键转入智能修复：切换模式并立即处理同一批文件
-            for b in self.mode_group.buttons():
-                if b.property('modeId') == MODE_FULL:
-                    b.setChecked(True)
-                    self._on_mode_changed(b)
-                    break
+            self.set_mode(MODE_FULL)
             self.start_process()

@@ -19,6 +19,23 @@ MODE_TOC_MANUAL = 'toc_manual'
 _INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
 
 
+def friendly_error(e):
+    """把引擎/系统异常翻译成用户能看懂的提示，返回 (白话消息, 是否已含原文)"""
+    s = str(e)
+    if isinstance(e, PermissionError) or 'Errno 13' in s or 'Permission denied' in s:
+        return '无法写入输出文件，它可能正被 Word/WPS 打开，请关闭后重试', True
+    if isinstance(e, FileNotFoundError) or 'No such file' in s:
+        return '找不到文件，可能已被移动、重命名或删除', True
+    if 'Package not found' in s or 'not a zip file' in s or 'BadZipFile' in type(e).__name__:
+        return ('文件不是有效的 Word 文档或已损坏（若是老版 .doc 文件被改名为 .docx，'
+                '请改回 .doc 后再处理）'), True
+    if 'No space left' in s or 'Errno 28' in s:
+        return '磁盘空间不足，请清理后重试', True
+    if 'LibreOffice' in s or 'soffice' in s:
+        return s, True   # 转换链错误本身已是中文提示
+    return '处理出错：{}'.format(s), True
+
+
 def sanitize_suffix(suffix):
     """清理输出后缀中的非法文件名字符"""
     cleaned = _INVALID_FILENAME_CHARS.sub('', (suffix or '').strip())
@@ -306,15 +323,13 @@ class ProcessWorker(QThread):
                         self._log('success', '已完成: {} → {}'.format(base, os.path.basename(out)))
                         self.fileFinished.emit(path, out)
                     ok += 1
-                except PermissionError:
-                    fail += 1
-                    msg = '无法写入输出文件，它可能正被 Word/WPS 打开，请关闭后重试'
-                    self._log('error', '处理失败 {}: {}'.format(base, msg))
-                    self.fileFailed.emit(path, msg)
                 except Exception as e:
                     fail += 1
-                    self._log('error', '处理失败 {}: {}'.format(base, e))
-                    self.fileFailed.emit(path, str(e))
+                    msg, _ = friendly_error(e)
+                    self._log('error', '处理失败 {}: {}'.format(base, msg))
+                    if msg != str(e) and str(e) not in msg:
+                        self._log('info', '（技术细节：{}）'.format(e))
+                    self.fileFailed.emit(path, msg)
                 finally:
                     _cleanup_dir(tmp_dir)
                 self.progressChanged.emit(int((i + 1) * 100 / n) if n else 100)
@@ -405,12 +420,9 @@ class AiPasteWorker(QThread):
                             custom_settings=self.custom_settings)
             self.logMessage.emit('success', '已生成: {}'.format(self.out_path))
             self.finishedWith.emit(True, self.out_path)
-        except PermissionError:
-            msg = '无法写入输出文件，它可能正被 Word/WPS 打开，请关闭后重试'
+        except Exception as e:
+            msg, _ = friendly_error(e)
             self.logMessage.emit('error', '生成失败: {}'.format(msg))
             self.finishedWith.emit(False, msg)
-        except Exception as e:
-            self.logMessage.emit('error', '生成失败: {}'.format(e))
-            self.finishedWith.emit(False, str(e))
         finally:
             shutil.rmtree(tmp_root, ignore_errors=True)
