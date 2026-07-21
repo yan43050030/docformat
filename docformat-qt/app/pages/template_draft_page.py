@@ -40,12 +40,18 @@ from app.template_common import (
 
 
 def _build_plain_text(rendered):
-    """将渲染后的结构化 dict 拼成纯文本（注释已被 strip_comments 移除）"""
+    """将渲染后的结构化 dict 拼成纯文本，返回 (文本, 类型覆盖字典)"""
     lines = [rendered["title"], ""]
-    lines += [b["text"] for b in rendered["body"]]
+    overrides = {}
+    type_map = {"h1": "heading1", "h2": "heading2", "h3": "heading3", "h4": "heading4"}
+    for b in rendered["body"]:
+        t = b.get("type", "body")
+        if t in type_map:
+            overrides[len([l for l in lines if l.strip()])] = type_map[t]
+        lines.append(b["text"])
     for k, v in rendered["meta"].items():
         lines += ["", "{}: {}".format(k, v)]
-    return "\n".join(lines)
+    return "\n".join(lines), overrides
 
 
 class DraftFormatWorker(QThread):

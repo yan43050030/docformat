@@ -146,9 +146,9 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
         else:
             logger.info(f'Preset: {preset.get("name", "自定义格式")}')
     elif preset_name not in PRESETS:
-        logger.error(f'Unknown preset: {preset_name}')
-        logger.error(f'Available: {", ".join(PRESETS.keys())}')
-        sys.exit(1)
+        raise ValueError(
+            "未知预设: {} (可用: {})".format(
+                preset_name, ", ".join(PRESETS.keys())))
     else:
         preset = PRESETS[preset_name]
         logger.info(f'Preset: {preset["name"]}')

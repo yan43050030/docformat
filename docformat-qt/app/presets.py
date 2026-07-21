@@ -71,7 +71,11 @@ class PresetManager(object):
         tmp = str(p) + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, str(p))
+        try:
+            os.replace(tmp, str(p))
+        except OSError:
+            import shutil
+            shutil.move(tmp, str(p))
 
     # ---------- 查询 ----------
     def list_all(self):
