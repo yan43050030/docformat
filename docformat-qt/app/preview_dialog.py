@@ -76,7 +76,7 @@ def _read_paragraphs(path):
         return paras, 0, len(lines), False
     if not lower.endswith('.docx'):
         return None  # .doc/.wps: no auto-num info
-    # 预览前自动转换 Word 自动编号为文字（临时文件自动清理）
+    # 预览前自动转换 Word 自动编号为文字（临时文件用完即删）
     _an_tmp = None
     try:
         from scripts import auto_num
@@ -88,30 +88,33 @@ def _read_paragraphs(path):
             if ok and os.path.exists(_an_tmp):
                 path = _an_tmp
     except Exception:
+        pass
+    try:
+        from docx import Document
+        doc = Document(path)
+        from docx.oxml.ns import qn as _qn3
+        total = len(doc.paragraphs)
+        paras = []
+        has_auto_num = False
+        for p in doc.paragraphs[:MAX_PARAS]:
+            align = p.paragraph_format.alignment
+            font_cn = ''
+            font_size = 0
+            for r in p.runs:
+                if r.text.strip():
+                    font_cn = r.font.name or ''
+                    font_size = r.font.size.pt if r.font.size else 0
+                    break
+            paras.append((p.text, align, font_cn, font_size))
+            if not has_auto_num:
+                pPr = p._element.find(_qn3('w:pPr'))
+                if pPr is not None and pPr.find(_qn3('w:numPr')) is not None:
+                    has_auto_num = True
+        return paras, len(doc.tables), total, has_auto_num
+    finally:
         if _an_tmp:
             try: os.unlink(_an_tmp)
             except Exception: pass
-    from docx import Document
-    doc = Document(path)
-    from docx.oxml.ns import qn as _qn3
-    total = len(doc.paragraphs)
-    paras = []
-    has_auto_num = False
-    for p in doc.paragraphs[:MAX_PARAS]:
-        align = p.paragraph_format.alignment
-        font_cn = ''
-        font_size = 0
-        for r in p.runs:
-            if r.text.strip():
-                font_cn = r.font.name or ''
-                font_size = r.font.size.pt if r.font.size else 0
-                break
-        paras.append((p.text, align, font_cn, font_size))
-        if not has_auto_num:
-            pPr = p._element.find(_qn3('w:pPr'))
-            if pPr is not None and pPr.find(_qn3('w:numPr')) is not None:
-                has_auto_num = True
-    return paras, len(doc.tables), total, has_auto_num
 
 
 def _html_shell(body, base_size=12):
