@@ -76,16 +76,21 @@ def _read_paragraphs(path):
         return paras, 0, len(lines), False
     if not lower.endswith('.docx'):
         return None  # .doc/.wps: no auto-num info
-    # 预览前自动转换 Word 自动编号为文字
+    # 预览前自动转换 Word 自动编号为文字（临时文件自动清理）
+    _an_tmp = None
     try:
         from scripts import auto_num
         if auto_num._has_auto_numbering(path):
-            tmp_an = os.path.join(tempfile.mkdtemp(prefix='docformat_pv_an_'), 'num.docx')
-            ok, _ = auto_num.convert_auto_numbering(path, tmp_an)
-            if ok and os.path.exists(tmp_an):
-                path = tmp_an
+            import tempfile as _tf
+            _an_fd, _an_tmp = _tf.mkstemp(suffix='.docx', prefix='docformat_pv_an_')
+            os.close(_an_fd)
+            ok, _ = auto_num.convert_auto_numbering(path, _an_tmp)
+            if ok and os.path.exists(_an_tmp):
+                path = _an_tmp
     except Exception:
-        pass
+        if _an_tmp:
+            try: os.unlink(_an_tmp)
+            except Exception: pass
     from docx import Document
     doc = Document(path)
     from docx.oxml.ns import qn as _qn3
