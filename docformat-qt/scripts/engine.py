@@ -99,7 +99,8 @@ def _ensure_structural_blank_lines(doc, line_spacing_pt=28, rules=None, type_ove
         needs_blank = (
             (prev_para_type == 'title' and para_type not in ('title', 'docnum')) or
             (prev_para_type == 'docnum' and para_type != 'docnum') or
-            (para_type == 'signature' and prev_para_type not in (None, 'signature', 'date'))
+            (para_type == 'signature' and prev_para_type not in (None, 'signature', 'date')) or
+            (para_type == 'attachment' and prev_para_type not in (None, 'attachment'))
         )
         if not needs_blank:
             continue
@@ -280,7 +281,12 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
 
     for i, para in enumerate(doc.paragraphs):
         try:
-            text = para.text.strip()
+            raw = para.text
+            # 清洗前导空白（半角空格、全角空格、Tab），防止首行缩进加倍
+            cleaned = raw.lstrip('\x20　\t')
+            if cleaned != raw:
+                para.text = cleaned
+            text = cleaned.strip()
             if not text:
                 if _is_structural_blank(para):
                     _format_structural_blank_paragraph(para, body_line_spacing)

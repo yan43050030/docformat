@@ -158,7 +158,14 @@ def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=N
 
     # ===== 附件块延续识别 =====
     if prev_para_type == 'attachment':
+        # 编号延续（2.XXX / 3、XXX）
         if re.match(r'^\s*\d{1,2}[.、]\s*\S', text):
+            return 'attachment'
+        # 换行延续：无编号的较长纯文本行（>15字），且不匹配署名/日期/结束语
+        if (len(text) > 15
+                and not _rules['signature'].search(text)
+                and not _is_date_text(text, date_patterns)
+                and not any(pattern.match(text) for pattern in closing_patterns)):
             return 'attachment'
 
     # ===== 一级标题："一、" "二、" 等 =====
@@ -226,8 +233,11 @@ def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=N
 
         if allow_signature_check:
             if _rules['signature'].search(text):
+                # 直接命中署名正则的，除全角句号结尾且超过 15 字外，都认定为署名
+                if re.search(r'[。]\s*$', text) and len(text) > 15:
+                    return 'body'
                 return 'signature'
-            if re.search(r'[。！？.!?；;]\s*$', text):
+            if re.search(r'[！？.!?；;]\s*$', text):
                 return 'body'
             if all_texts_index is not None:
                 remaining_texts = all_texts[all_texts_index + 1:]

@@ -119,7 +119,7 @@ def add_page_number(
         )
         has_non_page_content = any(has_content and not has_page for has_content, has_page in states)
         has_existing_page = any(has_page for _has_content, has_page in states)
-        if has_non_page_content:
+        if not replace_existing and has_non_page_content:
             logger.warning("页脚含有非页码内容，为避免覆盖已跳过页码重设")
             return
         if has_existing_page and not replace_existing:
