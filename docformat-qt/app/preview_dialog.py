@@ -51,7 +51,9 @@ _CSS_FONT_FALLBACK = {
 
 
 def _css_font(name):
-    return _CSS_FONT_FALLBACK.get(name, '"{}"'.format(name))
+    raw = _CSS_FONT_FALLBACK.get(name, '"{}"'.format(name))
+    # 用单引号包裹字体名，避免与 HTML style="..." 的双引号冲突
+    return raw.replace('"', "'")
 
 
 def _read_paragraphs(path):
