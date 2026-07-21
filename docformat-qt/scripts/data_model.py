@@ -218,6 +218,7 @@ PRESETS = {
     'official_gbk': {
         'name': '常用排版',
         'deep_clean': True,
+        'widow_control': True,
         'page_number': True,
         'page_number_font': '宋体',
         'page_number_size': 14,
