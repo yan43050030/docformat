@@ -594,7 +594,15 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
                 if not (isinstance(next_block, Paragraph) and not next_block.text.strip()):
                     _insert_paragraph_after_table(table, text="")
 
-    # 4.5 图片处理
+    # 4.5 中文禁则处理（标点不溢出、遵循中文换行规则）
+    _progress(74, 100, '应用中文排版规则...')
+    try:
+        from .east_asian_typography import apply_chinese_line_break_rules as _apply_cn_rules
+        _apply_cn_rules(doc)
+    except ImportError:
+        pass
+
+    # 4.6 图片处理
     image_cfg_dict = preset.get('image', {})
     if image_cfg_dict:
         logger.info('4.5. Processing images...')
