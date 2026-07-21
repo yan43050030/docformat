@@ -191,7 +191,7 @@ txt_path = os.path.join(SMOKE, 'preview.txt')
 with open(txt_path, 'w', encoding='utf-8') as f:
     f.write('关于测试预览的通知\n\n各部门：\n\n一、做好文本预览。\n')
 tp, ttables, ttotal, _an = _read_paragraphs(txt_path)
-assert any('关于测试预览' in t for t, _a in tp), 'txt 预览读取失败'
+assert any('关于测试预览' in item[0] for item in tp), 'txt 预览读取失败'
 txt_html = render_after_html(tp, preset_official)
 assert '一级标题' in txt_html, 'txt 预览未走类型识别'
 print('[11b] txt/md 文件预览 ✓')
