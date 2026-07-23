@@ -60,6 +60,7 @@ from .paragraph import (
     _format_structural_blank_paragraph,
     _format_empty_paragraphs,
     deep_clean_document,
+    sanitize_document,
 )
 
 # ── 检测器 ──

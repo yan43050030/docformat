@@ -166,6 +166,37 @@ def test_punct_edges():
     assert fix_text('本次比分为3:2。') == '本次比分为3:2。', '数字比分冒号不应替换'
     print('[7] 标点边界: 撇号/跨段引号/英文空格/比分 通过')
 
+def test_wps_broken_jc():
+    """WPS/老 Word 残缺 <w:jc>（缺 w:val）不再导致排版崩溃"""
+    from docx import Document
+    from docx.oxml import OxmlElement
+    from scripts.formatter import format_document, sanitize_document
+    d = Document()
+    d.add_paragraph('关于测试的通知')
+    d.add_paragraph('各单位：')
+    para = d.add_paragraph('正文内容。')
+    para._p.get_or_add_pPr().append(OxmlElement('w:jc'))  # 残缺对齐元素
+    d.add_paragraph('某某办公室')
+    d.add_paragraph('2026年7月22日')
+    jc_in = os.path.join(OUT_DIR, 'wps_jc.docx')
+    d.save(jc_in)
+    # sanitize 计数 > 0
+    d2 = Document(jc_in)
+    assert sanitize_document(d2) >= 1, 'sanitize 未修复残缺 w:jc'
+    # 全流程排版不抛异常
+    out = os.path.join(OUT_DIR, 'wps_jc_out.docx')
+    format_document(jc_in, out, preset_name='official_gbk')
+    assert os.path.exists(out)
+    print('[7c] WPS 残缺 w:jc 兼容: sanitize + 排版不崩 通过')
+
+
+def test_auto_num_chinese():
+    """自动编号中文数字过 10 正确（十一/十二），起始值生效"""
+    from scripts.auto_num import _to_chinese
+    assert _to_chinese(11) == '十一' and _to_chinese(20) == '二十' and _to_chinese(99) == '九十九'
+    print('[7d] 自动编号中文数字 11/20/99 通过')
+
+
 def test_signature_closing():
     """署名识别扩充：室/部结尾 + 结束语妥否请审示"""
     from scripts.formatter import detect_para_type, DEFAULT_DETECT_RULES
@@ -375,5 +406,7 @@ if __name__ == '__main__':
     test_text_input()
     test_builtin_rename()
     test_heading_split()
+    test_wps_broken_jc()
+    test_auto_num_chinese()
     test_signature_closing()
     print('\n全部冒烟测试通过 ✓')

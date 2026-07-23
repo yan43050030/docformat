@@ -41,6 +41,7 @@ from .paragraph import (
     _format_empty_paragraphs, _compact_empty_paragraph,
     _is_structural_blank, deep_clean_document,
     _keep_first_sentence_runs, _append_body_run,
+    sanitize_document,
 )
 from .detector import (
     detect_para_type, _compile_rules, _build_text_context,
@@ -163,6 +164,10 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
     bold_serial = preset.get('bold_serial', bold_serial)
 
     doc = Document(input_path)
+
+    # v3.0.4: 先修复 WPS/老 Word 残缺元素（缺 w:val 的 <w:jc> 等），
+    # 否则后续读取 paragraph_format.alignment 会抛 InvalidXmlError
+    sanitize_document(doc)
 
     # v1.8.0: 强力清洗模式
     if preset.get('deep_clean', False):

@@ -62,16 +62,60 @@ def _convert_via_word_com(input_path, output_path):
 # 非 Windows: 解析 numbering.xml
 # ============================================================
 
+def _to_chinese(n):
+    """1..9999 阿拉伯数字 → 中文（公文常见范围）：11→十一, 20→二十, 105→一百零五"""
+    if n <= 0:
+        return str(n)
+    digits = '零一二三四五六七八九'
+    units = ['', '十', '百', '千']
+    if n < 10:
+        return digits[n]
+    if n <= 99:                      # 10..99：十一、二十、二十三
+        tens, ones = divmod(n, 10)
+        s = ('' if tens == 1 else digits[tens]) + '十'
+        return s + (digits[ones] if ones else '')
+    if n > 9999:
+        return str(n)
+    s = ''
+    prev_zero = False
+    for i in range(3, -1, -1):
+        d = (n // (10 ** i)) % 10
+        if d == 0:
+            prev_zero = True
+        else:
+            if prev_zero and s:
+                s += '零'
+            s += digits[d] + units[i]
+            prev_zero = False
+    return s
+
+
+def _to_upper_roman(n):
+    if not (1 <= n <= 3999):
+        return str(n)
+    vals = [(1000,'M'),(900,'CM'),(500,'D'),(400,'CD'),(100,'C'),(90,'XC'),
+            (50,'L'),(40,'XL'),(10,'X'),(9,'IX'),(5,'V'),(4,'IV'),(1,'I')]
+    out = ''
+    for v, sym in vals:
+        while n >= v:
+            out += sym; n -= v
+    return out
+
+
 # Word 编号格式 → python 映射
 _NUMFMT_MAP = {
     'decimal':           lambda n: str(n),
-    'chineseCounting':   lambda n: '一二三四五六七八九十百千万'[n-1] if 1 <= n <= 10 else str(n),
-    'chineseCountingThousand': lambda n: str(n),  # 简化
+    'decimalZero':       lambda n: '{:02d}'.format(n),
+    'chineseCounting':   _to_chinese,
+    'chineseCountingThousand': _to_chinese,
+    'ideographTraditional':    _to_chinese,
+    'ideographDigital':  _to_chinese,
     'upperLetter':       lambda n: chr(64 + n) if 1 <= n <= 26 else str(n),
     'lowerLetter':       lambda n: chr(96 + n) if 1 <= n <= 26 else str(n),
-    'upperRoman':        lambda n: str(n),
-    'lowerRoman':        lambda n: str(n),
-    'japaneseCounting':  lambda n: str(n),
+    'upperRoman':        _to_upper_roman,
+    'lowerRoman':        lambda n: _to_upper_roman(n).lower(),
+    'japaneseCounting':  _to_chinese,
+    'taiwaneseCounting': _to_chinese,
 }
 
 # 编号前后缀映射（常见的 Word 列表模板）
@@ -103,12 +147,26 @@ def _parse_numbering(zf):
             fmt_val = fmt_tag.get(ns + 'val') if fmt_tag is not None else 'decimal'
             lvl_text = lvl.find(ns + 'lvlText')
             lvl_text_val = lvl_text.get(ns + 'val') if lvl_text is not None else '%1'
+            start_tag = lvl.find(ns + 'start')
+            try:
+                start = int(start_tag.get(ns + 'val')) if start_tag is not None else 1
+            except (TypeError, ValueError):
+                start = 1
+            # 只保留本级占位符 %k（k=ilvl+1）周围的前后缀；把其它级别的
+            # 占位符（%1.%2 里的 %1）连同分隔符一并作为前缀，得到如 "1." 里的
+            # 前缀部分。lvlText 形如 "%1."→前缀'' 后缀'.'；"%1.%2."→前缀'' 后缀'.'
             prefix, suffix = '', ''
             if lvl_text_val:
-                parts = lvl_text_val.split('%1', 1)
-                prefix = parts[0] if parts else ''
-                suffix = parts[1] if len(parts) > 1 else ''
-            levels[ilvl] = (fmt_val, prefix, suffix)
+                cur = '%{}'.format(ilvl + 1)
+                if cur in lvl_text_val:
+                    parts = lvl_text_val.split(cur, 1)
+                    prefix = re.sub(r'%\d+', '', parts[0])
+                    suffix = re.sub(r'%\d+', '', parts[1]) if len(parts) > 1 else ''
+                else:
+                    parts = lvl_text_val.split('%1', 1)
+                    prefix = parts[0] if parts else ''
+                    suffix = re.sub(r'%\d+', '', parts[1]) if len(parts) > 1 else ''
+            levels[ilvl] = (fmt_val, prefix, suffix, start)
         if an_id is not None:
             abstract[an_id] = levels
     # 编号实例（num）→ 引用 abstractNum
@@ -119,9 +177,11 @@ def _parse_numbering(zf):
             ref_id = ref.get(ns + 'val')
             if ref_id and ref_id in abstract:
                 result = {}
-                for ilvl, (fmt, prefix, suffix) in abstract[ref_id].items():
+                for ilvl, lvldef in abstract[ref_id].items():
+                    fmt, prefix, suffix = lvldef[0], lvldef[1], lvldef[2]
+                    start = lvldef[3] if len(lvldef) > 3 else 1
                     fmt_func = _NUMFMT_MAP.get(fmt, lambda n: str(n))
-                    result[ilvl] = (fmt_func, prefix, suffix)
+                    result[ilvl] = (fmt_func, prefix, suffix, start)
                 definitions[num_id] = result
     return definitions
 
@@ -193,13 +253,18 @@ def _patch_document_xml_impl(doc_xml, definitions):
             para_idx += 1
             continue
 
-        fmt_func, prefix, suffix = definitions[numId][ilvl]
-        # 递增计数器
+        lvldef = definitions[numId][ilvl]
+        fmt_func, prefix, suffix = lvldef[0], lvldef[1], lvldef[2]
+        start = lvldef[3] if len(lvldef) > 3 else 1
+        # 递增计数器（首次出现按 start 起始值）
         c = counters.setdefault(numId, {})
-        c[ilvl] = c.get(ilvl, 0) + 1
-        # 重置更低层级
+        if ilvl not in c:
+            c[ilvl] = start
+        else:
+            c[ilvl] = c[ilvl] + 1
+        # 重置更低层级（下次出现时从各自 start 开始）
         for l in range(ilvl + 1, 10):
-            c[l] = 0
+            c.pop(l, None)
         number = c[ilvl]
         text = prefix + fmt_func(number) + suffix + ' '
 

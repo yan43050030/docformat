@@ -384,7 +384,9 @@ class ProcessWorker(QThread):
     def _diagnose(self, work, display_name):
         from docx import Document
         from scripts import analyzer
+        from scripts.formatter import sanitize_document
         doc = Document(work)
+        sanitize_document(doc)   # WPS 残缺 <w:jc> 兼容，诊断读 alignment 不崩
         results = {
             'punctuation': analyzer.analyze_punctuation(doc),
             'numbering': analyzer.analyze_numbering(doc),

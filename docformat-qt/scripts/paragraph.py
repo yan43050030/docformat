@@ -18,6 +18,64 @@ from .font import set_font, _force_normal_style, _add_ppr_change
 
 logger = logging.getLogger('docformat.paragraph')
 
+# python-docx 读取这些"简单类型"元素时，缺少必填属性会抛 InvalidXmlError。
+# WPS / 老版 Word 导出的文档里常见残缺的 <w:jc/>（缺 w:val），一旦访问
+# paragraph_format.alignment 就崩溃。这里在读取任何对齐前先修掉。
+# 键 = 元素标签，值 = 必填属性名。
+_REQUIRED_VAL_ELEMENTS = {
+    'w:jc': 'w:val',            # 对齐
+    'w:textAlignment': 'w:val',  # 垂直文本对齐
+}
+
+
+def sanitize_document(doc):
+    """修复 WPS/老 Word 导出文档里缺必填属性的元素，避免 python-docx 读取时崩溃。
+
+    做法：遍历文档 XML（正文、样式表、页眉页脚），对缺 w:val 的
+    <w:jc>/<w:textAlignment> 补一个安全默认值（left/auto），保留元素结构。
+    返回修复的元素个数。
+    """
+    fixed = 0
+
+    def _fix_tree(root):
+        nonlocal fixed
+        if root is None:
+            return
+        for tag, attr in _REQUIRED_VAL_ELEMENTS.items():
+            for el in root.iter(qn(tag)):
+                if el.get(qn(attr)) is None:
+                    # w:jc 默认按 left（无对齐信息可保留时的自然默认）
+                    el.set(qn(attr), 'both' if tag == 'w:textAlignment' else 'left')
+                    fixed += 1
+
+    # 正文
+    try:
+        _fix_tree(doc.element.body)
+    except Exception:
+        pass
+    # 样式表
+    try:
+        _fix_tree(doc.styles.element)
+    except Exception:
+        pass
+    # 页眉页脚（含奇偶页、首页）
+    try:
+        for section in doc.sections:
+            for part_attr in ('header', 'even_page_header', 'first_page_header',
+                              'footer', 'even_page_footer', 'first_page_footer'):
+                try:
+                    part = getattr(section, part_attr, None)
+                    if part is not None and part.paragraphs:
+                        _fix_tree(part._element)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    if fixed:
+        logger.info('sanitize: 修复 %d 个缺属性元素（WPS 兼容）', fixed)
+    return fixed
+
 
 def _set_paragraph_spacing_points(para, before_pt=0, after_pt=0):
     """Set paragraph spacing in points and clear line-based spacing leftovers."""
