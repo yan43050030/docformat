@@ -289,7 +289,8 @@ class ProcessWorker(QThread):
                             if auto_num._has_auto_numbering(work):
                                 _an_dir = tempfile.mkdtemp(prefix='docformat_an_')
                                 tmp2 = os.path.join(_an_dir, 'num.docx')
-                                ok, unconverted = auto_num.convert_auto_numbering(work, tmp2)
+                                ok, unconverted = auto_num.convert_auto_numbering(
+                                    work, tmp2, log=self._log)
                                 if ok and os.path.exists(tmp2):
                                     work = tmp2
                                     if unconverted:
@@ -387,6 +388,20 @@ class ProcessWorker(QThread):
         from scripts.formatter import sanitize_document
         doc = Document(work)
         sanitize_document(doc)   # WPS 残缺 <w:jc> 兼容，诊断读 alignment 不崩
+
+        # 自动编号提示：告诉用户本文档含 Word 自动编号，处理时会转成文字
+        auto_num_note = ''
+        try:
+            from scripts import auto_num
+            if auto_num._has_auto_numbering(work):
+                from docx.oxml.ns import qn as _qn
+                cnt = sum(1 for p in doc.paragraphs
+                          if p._element.find(_qn('w:pPr')) is not None
+                          and p._element.find(_qn('w:pPr')).find(_qn('w:numPr')) is not None)
+                auto_num_note = ('本文档含 {} 段 Word 自动编号（如"一、""1."由软件自动生成），'
+                                 '处理时会转换为纯文字，请核对转换后的编号是否正确。'.format(cnt))
+        except Exception:
+            pass
         results = {
             'punctuation': analyzer.analyze_punctuation(doc),
             'numbering': analyzer.analyze_numbering(doc),
@@ -394,6 +409,8 @@ class ProcessWorker(QThread):
             'font': analyzer.analyze_font(doc),
         }
         report = build_diagnose_report(display_name, results)
+        if auto_num_note:
+            report += '\n  【自动编号】' + auto_num_note
         self._log('info', '诊断完成: {}'.format(display_name))
         return report
 

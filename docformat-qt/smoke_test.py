@@ -197,6 +197,19 @@ def test_auto_num_chinese():
     print('[7d] 自动编号中文数字 11/20/99 通过')
 
 
+def test_redaction():
+    """日志脱敏：文件名/路径/用户名不明文，同名一致"""
+    from app.redact import redact_text, mask_home
+    r = redact_text('正在处理: 涉密测试.docx')
+    assert '涉密测试' not in r and '.docx' in r and '文档-' in r
+    r2 = redact_text('处理失败 C:' + chr(92) + 'Users' + chr(92) + '王五' + chr(92)
+                     + '秘密' + chr(92) + '报告.docx: 被占用')
+    assert '王五' not in r2 and '秘密' not in r2
+    assert '张三' not in mask_home('/home/张三/x') and '/home/***' in mask_home('/home/张三/x')
+    assert redact_text('测试.docx') == redact_text('测试.docx')  # 同名一致
+    print('[7e] 日志脱敏: 文件名/路径/用户名 通过')
+
+
 def test_signature_closing():
     """署名识别扩充：室/部结尾 + 结束语妥否请审示"""
     from scripts.formatter import detect_para_type, DEFAULT_DETECT_RULES
@@ -408,5 +421,6 @@ if __name__ == '__main__':
     test_heading_split()
     test_wps_broken_jc()
     test_auto_num_chinese()
+    test_redaction()
     test_signature_closing()
     print('\n全部冒烟测试通过 ✓')

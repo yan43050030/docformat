@@ -210,6 +210,9 @@ class HomePage(QWidget):
         self.revision_check = QCheckBox("以修订模式输出（改动在 Word 审阅中可见、可接受/拒绝）")
         right_col.addWidget(self.revision_check)
 
+        self.autoopen_check = QCheckBox("处理完成后自动打开输出文件")
+        right_col.addWidget(self.autoopen_check)
+
         # 预设信息徽章：三行紧凑显示关键排版参数
         self.badge_size = QLabel()
         self.badge_size.setProperty("badge", "true")
@@ -288,6 +291,8 @@ class HomePage(QWidget):
         s = settings()
         self.suffix_edit.setText(s.value('home/suffix', '_processed') or '_processed')
         self.revision_check.setChecked(s.value('home/revision', False, type=bool))
+        self.autoopen_check.setChecked(s.value('home/auto_open', False, type=bool))
+        self.autoopen_check.stateChanged.connect(self._save_prefs)
         mode = s.value('home/mode', MODE_FULL)
         if mode in self._mode_cards and mode != self._mode:
             self.set_mode(mode)
@@ -299,6 +304,7 @@ class HomePage(QWidget):
         s = settings()
         s.setValue('home/suffix', self.suffix_edit.text().strip() or '_processed')
         s.setValue('home/revision', self.revision_check.isChecked())
+        s.setValue('home/auto_open', self.autoopen_check.isChecked())
 
     # ---------- 预设 ----------
     def reload_presets(self):
@@ -553,6 +559,16 @@ class HomePage(QWidget):
         target = os.path.dirname(self._outputs[-1]) or '.'
         QDesktopServices.openUrl(QUrl.fromLocalFile(target))
 
+    def _auto_open_outputs(self):
+        """处理完成后按设置自动打开：单文件开文件本身，多文件开所在文件夹"""
+        if not self.autoopen_check.isChecked() or not self._outputs:
+            return
+        if len(self._outputs) == 1:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self._outputs[0]))
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(
+                os.path.dirname(self._outputs[-1]) or '.'))
+
     def cancel_process(self):
         if self.worker is not None and isinstance(self.worker, ProcessWorker):
             self.worker.cancel()
@@ -578,6 +594,7 @@ class HomePage(QWidget):
         self.logMessage.emit('info', '全部处理完成：成功 {}，失败 {}'.format(ok, fail))
         self.worker = None
         self._update_action_state()
+        self._auto_open_outputs()
 
     def _on_ai_done(self, success, payload):
         self._set_busy(False)
@@ -586,6 +603,7 @@ class HomePage(QWidget):
             self.status_label.setText("已生成: {}".format(os.path.basename(payload)))
             self._outputs = [payload]
             self.open_out_btn.setVisible(True)
+            self._auto_open_outputs()
             QMessageBox.information(self, "生成成功", "公文已生成：\n{}".format(payload))
         else:
             QMessageBox.warning(self, "生成失败", payload)

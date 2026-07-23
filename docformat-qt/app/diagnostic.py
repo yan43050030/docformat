@@ -83,9 +83,14 @@ def collect_system_info():
         except Exception:
             pass
 
-    # ── 当前工作目录 ──
-    info.append(("工作目录", os.getcwd()))
-    info.append(("用户目录", os.path.expanduser("~")))
+    # ── 当前工作目录 ── (用户名段脱敏，避免泄露人名/涉密目录)
+    try:
+        from app.redact import mask_home
+    except Exception:
+        def mask_home(p):
+            return p
+    info.append(("工作目录", mask_home(os.getcwd())))
+    info.append(("用户目录", mask_home(os.path.expanduser("~"))))
 
     # ── 磁盘空间 ──
     disk_info = _disk_usage(os.path.expanduser("~"))

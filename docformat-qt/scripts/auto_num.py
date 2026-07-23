@@ -25,34 +25,68 @@ def _has_auto_numbering(docx_path):
 # Windows: Word COM 转换
 # ============================================================
 
-def _convert_via_word_com(input_path, output_path):
-    """用 Word COM 把自动编号转为纯文字，失败时返回 False"""
+# 依次尝试的 COM 应用（Word 优先；失败自动改用 WPS，WPS 兼容同一套 VBA API）
+_AUTONUM_COM_CANDIDATES = [
+    ('Word.Application', 'Microsoft Word'),
+    ('Kwps.Application', 'WPS'),
+    ('wps.Application', 'WPS'),
+]
+
+
+def _convert_via_word_com(input_path, output_path, reasons=None):
+    """用 Office COM 把自动编号转为纯文字。
+
+    Word 失败自动尝试 WPS。全部失败返回 False；reasons(list) 收集每个应用的
+    失败原因，供上层记入日志（便于诊断你机器上 COM 为何失败）。
+    """
+    if reasons is None:
+        reasons = []
     try:
         import pythoncom
         pythoncom.CoInitialize()
-    except Exception:
+    except Exception as e:
+        reasons.append('COM 初始化失败: {}'.format(e))
         return False
     try:
-        try:
-            from win32com.client import Dispatch
-            word = Dispatch("Word.Application")
-            word.Visible = False
-            word.DisplayAlerts = False
+        from win32com.client import DispatchEx, Dispatch
+        for prog_id, name in _AUTONUM_COM_CANDIDATES:
+            app = None
             try:
-                doc = word.Documents.Open(input_path)
-                doc.Content.ListFormat.ConvertNumbersToText()
-                doc.SaveAs2(output_path, FileFormat=16)
-                doc.Close()
-                return True
-            finally:
                 try:
-                    word.Quit()
+                    app = DispatchEx(prog_id)
+                except Exception:
+                    app = Dispatch(prog_id)
+                try:
+                    app.Visible = False
                 except Exception:
                     pass
-        except Exception:
-            return False
+                try:
+                    app.DisplayAlerts = False
+                except Exception:
+                    pass
+                doc = app.Documents.Open(input_path)
+                try:
+                    doc.Content.ListFormat.ConvertNumbersToText()
+                    doc.SaveAs2(output_path, FileFormat=16)
+                    return True
+                finally:
+                    try:
+                        doc.Close(SaveChanges=False)
+                    except Exception:
+                        pass
+            except Exception as e:
+                reasons.append('{} 转换失败: {}'.format(name, e))
+                continue
+            finally:
+                if app is not None:
+                    try:
+                        app.Quit()
+                    except Exception:
+                        pass
+        return False
     finally:
         try:
+            import pythoncom
             pythoncom.CoUninitialize()
         except Exception:
             pass
@@ -290,19 +324,23 @@ def _patch_document_xml_impl(doc_xml, definitions):
 # 统一入口
 # ============================================================
 
-def convert_auto_numbering(input_path, output_path):
+def convert_auto_numbering(input_path, output_path, log=None):
     """把文档中所有自动编号转为纯文字。
 
+    log: 可选 callable(level, msg)，用于把 COM 失败原因等写入日志。
     返回: (success: bool, unconverted: set) — unconverted 是未能转换的段落索引（空表示全部成功）
     """
     if not _has_auto_numbering(input_path):
         return True, set()
 
     if sys.platform == 'win32':
-        ok = _convert_via_word_com(input_path, output_path)
+        reasons = []
+        ok = _convert_via_word_com(input_path, output_path, reasons)
         if ok:
             return True, set()
-        # COM 失败回退到 XML 方案
+        # COM 失败回退到 XML 方案，并把原因记入日志方便诊断
+        if log and reasons:
+            log('info', 'Office 自动编号转换未成功，改用内置解析。原因：' + '；'.join(reasons))
         ok2, unc = _convert_via_xml(input_path, output_path)
         return ok2, unc
     else:
