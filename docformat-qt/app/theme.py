@@ -42,18 +42,65 @@ def settings():
     return QSettings("DocFormatPro", "DocFormatPro")
 
 
-def current_theme_id():
-    tid = settings().value("theme", "paper")
+def _system_is_dark():
+    """粗略判断系统是否深色（用应用调色板窗口色亮度）"""
+    try:
+        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtGui import QPalette
+        app = QApplication.instance()
+        if app is not None:
+            return app.palette().color(QPalette.Window).lightness() < 128
+    except Exception:
+        pass
+    return False
+
+
+def resolve_theme_id(tid):
+    """把 'auto' 解析成实际主题；其它原样返回。"""
+    if tid == 'auto':
+        return 'dark' if _system_is_dark() else 'paper'
     return tid if tid in THEMES else 'paper'
+
+
+def raw_theme_id():
+    """返回存储的原始选择（可能是 'auto'）"""
+    tid = settings().value("theme", "paper")
+    return tid if (tid in THEMES or tid == 'auto') else 'paper'
+
+
+def current_theme_id():
+    return resolve_theme_id(raw_theme_id())
 
 
 def save_theme_id(tid):
     settings().setValue("theme", tid)
 
 
+def _indicator_qss(assets):
+    """用自绘图片美化复选框/单选/下拉箭头；无图片时返回空串（退化为原生）。"""
+    if not assets:
+        return ""
+    return """
+QCheckBox::indicator {{ width: 18px; height: 18px; }}
+QCheckBox::indicator:unchecked {{ image: url("{cb_off}"); }}
+QCheckBox::indicator:checked {{ image: url("{cb_on}"); }}
+QRadioButton::indicator {{ width: 18px; height: 18px; }}
+QRadioButton::indicator:unchecked {{ image: url("{radio_off}"); }}
+QRadioButton::indicator:checked {{ image: url("{radio_on}"); }}
+QComboBox::down-arrow {{ image: url("{chevron}"); width: 18px; height: 18px; }}
+""".format(**assets)
+
+
 def build_qss(tid):
     c = THEMES.get(tid, THEMES['paper'])
-    return """
+    # 自绘控件指示器（复选框/单选/下拉箭头），按主题缓存图片
+    try:
+        from app.widgets.qss_assets import ensure_assets
+        assets = ensure_assets(tid, c)
+    except Exception:
+        assets = None
+    ind = _indicator_qss(assets)
+    return ind + """
 QMainWindow, QWidget#Root {{ background: {bg}; }}
 QWidget {{ color: {ink}; font-size: 13px; }}
 
@@ -63,11 +110,14 @@ QLabel#Brand {{ font-size: 17px; font-weight: 700; color: {ink}; }}
 QLabel#BrandAccent {{ font-size: 17px; font-weight: 700; color: {accent}; }}
 QLabel#Version {{ color: {ink_muted}; font-size: 11px; }}
 QPushButton[navBtn="true"] {{
-    text-align: left; padding: 9px 14px; border: none; border-radius: 8px;
-    color: {ink_light}; background: transparent; font-size: 13px;
+    text-align: left; padding: 9px 12px; border: none; border-left: 3px solid transparent;
+    border-radius: 8px; color: {ink_light}; background: transparent; font-size: 13px;
 }}
 QPushButton[navBtn="true"]:hover {{ background: {bg_dark}; color: {ink}; }}
-QPushButton[navBtn="true"]:checked {{ background: {accent}; color: {accent_fg}; font-weight: 600; }}
+QPushButton[navBtn="true"]:checked {{
+    background: {bg_dark}; color: {accent}; border-left: 3px solid {accent};
+    border-top-left-radius: 4px; border-bottom-left-radius: 4px; font-weight: 600;
+}}
 
 /* ---- 卡片 ---- */
 QFrame[card="true"] {{ background: {card}; border: 1px solid {border}; border-radius: 12px; }}
@@ -93,9 +143,10 @@ QPushButton:hover {{ background: {bg_dark}; }}
 QPushButton:disabled {{ color: {ink_muted}; background: {bg}; border-color: {border}; }}
 QPushButton[primary="true"] {{
     background: {accent}; color: {accent_fg}; border: none; font-weight: 600;
-    padding: 10px 26px; font-size: 14px;
+    padding: 11px 30px; font-size: 14px; border-radius: 10px;
 }}
 QPushButton[primary="true"]:hover {{ background: {accent_hover}; }}
+QPushButton[primary="true"]:pressed {{ background: {accent_hover}; padding-top: 12px; }}
 QPushButton[primary="true"]:disabled {{ background: {border_medium}; color: {card}; }}
 QPushButton[danger="true"] {{ color: {error}; border-color: {error}; }}
 QPushButton[flat="true"] {{ border: none; background: transparent; color: {teal}; }}
@@ -112,8 +163,7 @@ QComboBox QAbstractItemView {{
     background: {card}; border: 1px solid {border}; color: {ink};
     selection-background-color: {accent}; selection-color: {accent_fg};
 }}
-QCheckBox, QRadioButton {{ color: {ink}; spacing: 7px; }}
-QRadioButton::indicator, QCheckBox::indicator {{ width: 18px; height: 18px; }}
+QCheckBox, QRadioButton {{ color: {ink}; spacing: 8px; }}
 QPlainTextEdit, QTextEdit {{
     background: {card}; border: 1px solid {border_medium}; border-radius: 8px; color: {ink};
     padding: 6px;
