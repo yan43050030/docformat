@@ -99,8 +99,9 @@ class LogPage(QWidget):
                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ret == QMessageBox.Yes:
             ok = file_logger.clear()
-            QMessageBox.information(self, "已清空" if ok else "提示",
-                                    "日志文件已删除" if ok else "没有可删除的日志文件")
+            from app.widgets.toast import Toast
+            Toast.show_message(self, "日志文件已删除" if ok else "没有可删除的日志文件",
+                               "success" if ok else "info")
 
     def _on_redact_toggle(self):
         if not self.redact_chk.isChecked():
@@ -125,6 +126,7 @@ class LogPage(QWidget):
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(self.view.toPlainText())
-            QMessageBox.information(self, "导出成功", "日志已保存到：\n" + path)
+            from app.widgets.toast import Toast
+            Toast.show_message(self, "日志已导出", "success")
         except Exception as e:
             QMessageBox.warning(self, "导出失败", str(e))

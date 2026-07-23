@@ -903,7 +903,8 @@ class PresetsPage(QWidget):
         try:
             imported = self.mgr.import_from(path)
             if imported:
-                QMessageBox.information(self, "导入成功", "已导入 {} 个模板".format(len(imported)))
+                from app.widgets.toast import Toast
+                Toast.show_message(self, "已导入 {} 个模板".format(len(imported)), "success")
                 self.reload()
                 self.presetsChanged.emit()
             else:
@@ -916,4 +917,5 @@ class PresetsPage(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "导出模板", name + ".json", "JSON (*.json)")
         if path:
             self.mgr.export_to(self.current_key, path)
-            QMessageBox.information(self, "导出成功", "模板已导出到：\n" + path)
+            from app.widgets.toast import Toast
+            Toast.show_message(self, "模板已导出", "success")

@@ -4,7 +4,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
                              QPushButton, QVBoxLayout, QWidget)
 
-from app.theme import THEMES, current_theme_id, save_theme_id
+from app.theme import THEMES, current_theme_id, raw_theme_id, save_theme_id
 
 
 class ThemePage(QWidget):
@@ -57,16 +57,33 @@ class ThemePage(QWidget):
             self._buttons[tid] = btn
             grid.addWidget(card, i // 2, i % 2)
         root.addLayout(grid)
+
+        # 跟随系统明暗
+        auto_row = QHBoxLayout()
+        self.auto_btn = QPushButton("🌓 跟随系统明暗（自动在纸质/暗夜间切换）")
+        self.auto_btn.setCursor(Qt.PointingHandCursor)
+        self.auto_btn.clicked.connect(lambda: self._select('auto'))
+        auto_row.addWidget(self.auto_btn)
+        auto_row.addStretch(1)
+        root.addLayout(auto_row)
+
         root.addStretch(1)
         self._refresh_checked()
 
     def _select(self, tid):
         save_theme_id(tid)
-        self.themeSelected.emit(tid)
+        from app.theme import resolve_theme_id
+        self.themeSelected.emit(resolve_theme_id(tid))
         self._refresh_checked()
 
     def _refresh_checked(self):
-        cur = current_theme_id()
+        cur = raw_theme_id()
+        if hasattr(self, 'auto_btn'):
+            is_auto = (cur == 'auto')
+            self.auto_btn.setText("✓ 已跟随系统" if is_auto else "🌓 跟随系统明暗（自动在纸质/暗夜间切换）")
+            self.auto_btn.setProperty("primary", "true" if is_auto else "false")
+            self.auto_btn.style().unpolish(self.auto_btn)
+            self.auto_btn.style().polish(self.auto_btn)
         for tid, btn in self._buttons.items():
             if tid == cur:
                 btn.setText("✓ 当前主题")

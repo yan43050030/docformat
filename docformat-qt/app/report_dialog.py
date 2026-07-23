@@ -56,6 +56,7 @@ class ReportDialog(QDialog):
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(self.report)
-            QMessageBox.information(self, "导出成功", "报告已保存到：\n" + path)
+            from app.widgets.toast import Toast
+            Toast.show_message(self, "报告已导出", "success")
         except Exception as e:
             QMessageBox.warning(self, "导出失败", str(e))

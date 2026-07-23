@@ -66,6 +66,7 @@ class ModeCard(QFrame):
 class HomePage(QWidget):
     logMessage = pyqtSignal(str, str)
     presetChanged = pyqtSignal(str)
+    filesChanged = pyqtSignal(int)
 
     def __init__(self, preset_mgr, parent=None):
         super(HomePage, self).__init__(parent)
@@ -265,11 +266,15 @@ class HomePage(QWidget):
         self.open_out_btn.clicked.connect(self.open_output_location)
         self.status_label = QLabel("")
         self.status_label.setProperty("muted", "true")
+        from app.widgets.spinner import Spinner
+        self.spinner = Spinner(16)
         ar.addWidget(self.process_btn)
         ar.addWidget(self.preview_btn)
         ar.addWidget(self.cancel_btn)
         ar.addWidget(self.open_out_btn)
         ar.addSpacing(10)
+        ar.addWidget(self.spinner)
+        ar.addSpacing(4)
         ar.addWidget(self.status_label)
         ar.addStretch(1)
         root.addWidget(action_row)
@@ -430,6 +435,7 @@ class HomePage(QWidget):
         self.drop_zone.setVisible(not has)
         if has:
             self.file_list.set_files(self.files)
+        self.filesChanged.emit(len(self.files))
         self._update_action_state()
 
     def _update_action_state(self):
@@ -579,6 +585,10 @@ class HomePage(QWidget):
         self.process_btn.setText("处理中..." if busy else "▶ 开始处理")
         self.cancel_btn.setVisible(busy and not indeterminate)
         self.cancel_btn.setEnabled(True)
+        if busy:
+            self.spinner.start()
+        else:
+            self.spinner.stop()
         self.progress.setVisible(busy)
         if indeterminate:
             self.progress.setRange(0, 0)

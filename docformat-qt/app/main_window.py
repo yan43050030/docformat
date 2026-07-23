@@ -20,7 +20,7 @@ from app.pages.log_page import LogPage
 from app.pages.template_draft_page import TemplateDraftPage
 from app.pages.template_maker_page import TemplateMakerPage
 
-VERSION = '3.1.0'
+VERSION = '3.2.0'
 NAV_ITEMS = [('格式处理', 0), ('版式方案', 1), ('文书起草', 2), ('文书模板制作', 3),
              ('主题', 4), ('日志', 5)]
 
@@ -133,6 +133,9 @@ class MainWindow(QMainWindow):
         self.update_label.setVisible(False)
         self.update_label.setCursor(Qt.PointingHandCursor)
         st.addWidget(self.update_label)
+        self.files_label = QLabel("")
+        self.files_label.setProperty("muted", "true")
+        st.addWidget(self.files_label)
         right = QLabel("原文件不会被覆盖")
         right.setProperty("muted", "true")
         st.addWidget(right)
@@ -144,6 +147,7 @@ class MainWindow(QMainWindow):
         # ---- 信号接线 ----
         self.home_page.logMessage.connect(self.log_page.append)
         self.home_page.presetChanged.connect(self._on_preset_changed)
+        self.home_page.filesChanged.connect(self._on_files_changed)
         self.presets_page.presetsChanged.connect(self._on_presets_mutated)
         self.theme_page.themeSelected.connect(self.apply_theme)
 
@@ -264,13 +268,19 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(build_qss(tid))
         c = THEMES.get(tid) or list(THEMES.values())[0]
         for btn, kind in zip(getattr(self, '_nav_buttons', []), NAV_ICON_KINDS):
-            btn.setIcon(make_icon(kind, c['ink_light'], c['accent_fg']))
+            btn.setIcon(make_icon(kind, c['ink_light'], c['accent']))
         drop_zone = getattr(getattr(self, 'home_page', None), 'drop_zone', None)
         if drop_zone is not None and hasattr(drop_zone, 'set_icon_color'):
             drop_zone.set_icon_color(c['ink_muted'])
+        spinner = getattr(getattr(self, 'home_page', None), 'spinner', None)
+        if spinner is not None:
+            spinner.set_color(c['accent'])
 
     def _on_preset_changed(self, _key):
         self._refresh_status()
+
+    def _on_files_changed(self, n):
+        self.files_label.setText("{} 个文件待处理  ·  ".format(n) if n else "")
 
     def _on_presets_mutated(self):
         self.home_page.reload_presets()

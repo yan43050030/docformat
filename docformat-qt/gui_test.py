@@ -229,6 +229,31 @@ from app.main_window import VERSION
 assert 'v' + VERSION in win.windowTitle(), '窗口标题未含版本号: {}'.format(win.windowTitle())
 print('[13] 窗口标题显示版本号 v{} ✓'.format(VERSION))
 
+# ---------- 12. v3.2 视觉打磨 ----------
+from app.widgets.qss_assets import ensure_assets
+from app.theme import THEMES, build_qss, resolve_theme_id, raw_theme_id
+a = ensure_assets('paper', THEMES['paper'])
+assert a and 'cb_on' in a and 'chevron' in a, '自绘控件图片缺失'
+qss = build_qss('dark')
+assert 'QCheckBox::indicator:checked' in qss and 'down-arrow' in qss, 'QSS 未注入自绘控件'
+# Toast/Spinner 可实例化
+from app.widgets.toast import Toast
+from app.widgets.spinner import Spinner
+sp = Spinner(16); sp.start(); sp.stop()
+Toast.show_message(win, '测试提示', 'success', msec=50)
+app.processEvents()
+# 跟随系统主题解析
+assert resolve_theme_id('auto') in THEMES, 'auto 未解析为有效主题'
+# 状态栏文件数
+home.filesChanged.emit(3)
+app.processEvents()
+assert '3' in win.files_label.text(), '状态栏文件数未更新'
+home.filesChanged.emit(0)
+# spinner 随处理启停
+home.set_mode('full')
+print('[15] v3.2 自绘控件/Toast/Spinner/跟随系统/状态栏文件数 ✓')
+
+
 # ---------- 12. v3.0 易用性 ----------
 # 快捷键已注册（6 个页面 + 打开/处理/帮助）
 assert len(win._shortcuts) == len(win.nav_group.buttons()) + 3, '快捷键数量: {}'.format(len(win._shortcuts))
