@@ -5,6 +5,7 @@
 正文改成一级标题）；手动调整会在实际排版时生效。
 """
 import os
+import re
 import tempfile
 
 from PyQt5.QtCore import Qt, QUrl
@@ -62,6 +63,32 @@ def _css_font_for_en(name):
     return "'{}'".format(name) if name else "'Times New Roman'"
 
 
+# 连续的 ASCII 字母/数字/常见西文符号（用英文字体渲染，与真实 docx 一致：
+# 引擎把 ASCII 设为 font_en，东亚字设为 font_cn）
+_EN_RUN_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z\.\-/:%()+，]*[0-9A-Za-z]|[0-9A-Za-z]")
+
+
+def _segment_font_html(text, font_en, font_cn):
+    """把文本按"西文数字段 vs 其它"切分，各自套正确字体。
+
+    Qt 富文本不做浏览器式逐字体回退，中英文混排时数字未必落到英文字体，
+    因此手动分段：数字/英文 → font_en(Times New Roman)，其余 → font_cn。
+    """
+    en_css = _css_font_for_en(font_en)
+    cn_css = _css_font(font_cn)
+    out = []
+    pos = 0
+    for m in _EN_RUN_RE.finditer(text):
+        if m.start() > pos:
+            seg = text[pos:m.start()]
+            out.append("<span style=\"font-family:{}\">{}</span>".format(cn_css, _esc(seg)))
+        out.append("<span style=\"font-family:{}\">{}</span>".format(en_css, _esc(m.group())))
+        pos = m.end()
+    if pos < len(text):
+        out.append("<span style=\"font-family:{}\">{}</span>".format(cn_css, _esc(text[pos:])))
+    return ''.join(out)
+
+
 def _read_paragraphs(path):
     """返回 (段落列表[(text, alignment)], 表格数, 总段数)。
 
@@ -92,6 +119,12 @@ def _read_paragraphs(path):
     try:
         from docx import Document
         doc = Document(path)
+        # 修复 WPS/老 Word 残缺 <w:jc>，否则读 alignment 会崩溃
+        try:
+            from scripts.formatter import sanitize_document
+            sanitize_document(doc)
+        except Exception:
+            pass
         from docx.oxml.ns import qn as _qn3
         total = len(doc.paragraphs)
         paras = []
@@ -206,9 +239,6 @@ def render_after_html(paras, preset, overrides=None):
         fmt = preset.get(ptype if ptype in preset else 'body', preset.get('body', {}))
 
         style = [
-            'font-family:{}, {}'.format(
-                _css_font_for_en(fmt.get('font_en', 'Times New Roman')),
-                _css_font(fmt.get('font_cn', '仿宋_GB2312'))),
             'font-size:{}pt'.format(fmt.get('size', 16)),
             'text-align:{}'.format(ALIGN_CSS.get(fmt.get('align', 'left'), 'left')),
         ]
@@ -221,11 +251,14 @@ def render_after_html(paras, preset, overrides=None):
         if fmt.get('bold'):
             style.append('font-weight:bold')
 
+        # 数字/英文用 font_en，中文用 font_cn，与真实 docx 输出一致
+        inner = _segment_font_html(
+            display, fmt.get('font_en', 'Times New Roman'), fmt.get('font_cn', '仿宋_GB2312'))
         tag = TYPE_LABELS.get(ptype, ptype)
         cls = 'tagx' if ai in overrides else 'tag'
         parts.append(
             '<p style="{}"><a class="{}" href="para:{}" title="点击修改此段类型">{}</a>{}</p>'.format(
-                '; '.join(style), cls, ai, tag, _esc(display)))
+                '; '.join(style), cls, ai, tag, inner))
     return _html_shell(''.join(parts))
 
 
