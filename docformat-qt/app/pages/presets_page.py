@@ -644,6 +644,17 @@ class PresetsPage(QWidget):
                                         "尽力避免拆词，可在预览里手动微调")
         self.adv_title_shape.currentIndexChanged.connect(self._save_from_widgets)
         g.addWidget(self.adv_title_shape, 4, 1)
+
+        self.adv_header = QCheckBox("识别版头要素（份号/紧急程度/签发人 + 红色分隔线）")
+        self.adv_record = QCheckBox("识别版记要素（抄送/印发机关 + 版记分隔线）")
+        self.adv_subtitle = QCheckBox("识别副标题（标题下方破折号/括号引起的居中行）")
+        self.adv_caption = QCheckBox("图/表题注居中（紧邻图片/表格的图N、表N题注行）")
+        g.addWidget(self.adv_header, 5, 0, 1, 2)
+        g.addWidget(self.adv_record, 6, 0, 1, 2)
+        g.addWidget(self.adv_subtitle, 7, 0, 1, 2)
+        g.addWidget(self.adv_caption, 8, 0, 1, 2)
+        for wdg in [self.adv_header, self.adv_record, self.adv_subtitle, self.adv_caption]:
+            wdg.stateChanged.connect(self._save_from_widgets)
         sec.set_body_layout(g)
         self._sections.append(sec)
         self.editor_lay.addWidget(sec)
@@ -725,6 +736,10 @@ class PresetsPage(QWidget):
         _ts = p.get('title_shape', 'none')
         _tsi = self.adv_title_shape.findData(_ts)
         self.adv_title_shape.setCurrentIndex(_tsi if _tsi >= 0 else 0)
+        self.adv_header.setChecked(bool(p.get('header_elements', False)))
+        self.adv_record.setChecked(bool(p.get('record_elements', False)))
+        self.adv_subtitle.setChecked(bool(p.get('subtitle_enabled', False)))
+        self.adv_caption.setChecked(bool(p.get('format_captions', False)))
 
         img = p.get('image', {}) or {}
         self.img_enabled.setChecked(bool(img.get('auto_compress', False)))
@@ -827,6 +842,10 @@ class PresetsPage(QWidget):
         p['deep_clean'] = self.adv_deep_clean.isChecked()
         p['widow_control'] = self.adv_widow.isChecked()
         p['title_shape'] = self.adv_title_shape.currentData()
+        p['header_elements'] = self.adv_header.isChecked()
+        p['record_elements'] = self.adv_record.isChecked()
+        p['subtitle_enabled'] = self.adv_subtitle.isChecked()
+        p['format_captions'] = self.adv_caption.isChecked()
 
         if self.img_enabled.isChecked():
             p['image'] = {

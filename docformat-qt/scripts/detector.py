@@ -112,20 +112,38 @@ def _standardize_date_text(text):
     return text
 
 
-def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=None, prev_para_type=None, rules=None):
+def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=None, prev_para_type=None, rules=None, flags=None):
     """检测段落类型
 
-    返回: 'title', 'recipient', 'heading1', 'heading2', 'heading3', 'heading4',
-          'body', 'signature', 'date', 'attachment', 'closing', 'security', 'docnum'
+    返回: 'title', 'subtitle', 'recipient', 'heading1'..4, 'body', 'signature',
+          'date', 'attachment', 'attachment_label', 'closing', 'security', 'docnum',
+          'copynum', 'urgency', 'signatory', 'cc', 'issuer'（后几类需 flags 开启）
+    flags: 可选 dict，控制默认关闭的版头/版记/副标题识别：
+           subtitle_enabled / header_elements / record_elements
     """
     text = text.strip()
     if not text:
         return 'empty'
 
+    flags = flags or {}
     _rules = rules if isinstance(rules, dict) and all(hasattr(v, 'match') for v in rules.values()) else _compile_rules(rules)
 
-    # ===== 密级标识检测 =====
     _early_idx = all_texts_index if all_texts_index is not None else index
+    _tot = len(all_texts) if all_texts else total
+
+    # ===== 版头要素（默认关闭，header_elements 开启后识别）=====
+    if flags.get('header_elements') and _early_idx < 8:
+        # 份号：纯数字行（通常 6 位），位于版头最前
+        if re.match(r'^\d{4,8}$', text):
+            return 'copynum'
+        # 紧急程度：特急/加急/平急
+        if re.match(r'^(特急|加急|平急|急件)$', text):
+            return 'urgency'
+        # 签发人：签发人：×××
+        if re.match(r'^签发人[：:]\s*\S', text):
+            return 'signatory'
+
+    # ===== 密级标识检测 =====
     if _early_idx < 3 and _rules['security'].match(text):
         return 'security'
 
@@ -135,6 +153,20 @@ def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=N
 
     closing_patterns = [_rules['closing']]
     date_patterns = [_rules['date']]
+
+    # ===== 副标题（默认关闭）：标题下方以破折号/括号引起的居中短行 =====
+    if flags.get('subtitle_enabled') and prev_para_type in ('title', 'subtitle'):
+        if re.match(r'^(——|--|－－|—|-)\s*\S', text) or re.match(r'^[（(].{2,40}[）)]$', text):
+            if len(text) < 50:
+                return 'subtitle'
+
+    # ===== 版记要素（默认关闭，record_elements 开启后识别）=====
+    if flags.get('record_elements'):
+        if re.match(r'^抄送[：:]', text):
+            return 'cc'
+        # 印发机关和印发日期：××× 印发 / ×××××年×月×日印发
+        if re.search(r'印发$', text) or re.search(r'印发\s*$', text):
+            return 'issuer'
 
     # ===== 标题续行检测 =====
     if prev_para_type == 'title':

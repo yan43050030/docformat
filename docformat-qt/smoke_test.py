@@ -229,6 +229,54 @@ def test_title_shape():
     print('[7h] 标题梯形回行 正/倒/不折 通过')
 
 
+def test_compliance():
+    """公文合规检查：对照预设报偏差、排版后改善、可配置开关"""
+    from scripts import compliance
+    from scripts.data_model import PRESETS
+    from scripts.formatter import format_document
+    d=Document()
+    d.add_paragraph('关于开展试点工作的通知'); d.add_paragraph('各单位：')
+    d.add_paragraph('这是一段足够长的正文用于抽样检查字体字号是否符合预设要求。')
+    d.add_paragraph('特此通知。'); d.add_paragraph('某某办公室'); d.add_paragraph('2026年7月24日')
+    src=os.path.join(OUT_DIR,'comp_in.docx'); d.save(src)
+    preset=PRESETS['official_gbk']
+    f0=compliance.check_compliance(Document(src),preset)
+    assert any(x['item']=='页边距' and x['level']=='warn' for x in f0), '应报边距偏差'
+    out=os.path.join(OUT_DIR,'comp_out.docx'); format_document(src,out,preset_name='official_gbk')
+    f1=compliance.check_compliance(Document(out),preset)
+    assert sum(1 for x in f1 if x['level']=='warn') < sum(1 for x in f0 if x['level']=='warn'), '排版后偏差应减少'
+    f2=compliance.check_compliance(Document(src),preset,options={'margins':False,'paper':False})
+    assert not any(x['item']=='页边距' for x in f2), '关闭后不查边距'
+    print('[7i] 公文合规检查 通过')
+
+
+def test_gb_header_record():
+    """版头红线/版记分隔线（flags 开启）+ 副标题识别"""
+    from docx.oxml.ns import qn
+    from scripts.formatter import format_document, detect_para_type, _compile_rules
+    from scripts.data_model import PRESETS
+    r=_compile_rules(None); at=['a']*20
+    f={'header_elements':True}
+    assert detect_para_type('000123',0,20,None,at,0,rules=r,flags=f)=='copynum'
+    assert detect_para_type('签发人：张三',2,20,None,at,2,rules=r,flags=f)=='signatory'
+    fr={'record_elements':True}
+    assert detect_para_type('抄送：市各部门。',18,20,None,at,18,rules=r,flags=fr)=='cc'
+    fs={'subtitle_enabled':True}
+    assert detect_para_type('——试点说明',1,20,None,at,1,rules=r,prev_para_type='title',flags=fs)=='subtitle'
+    d=Document()
+    for t in ['某政发〔2026〕5号','签发人：张三','关于试点的通知','各单位：','正文。',
+              '特此通知。','某办公室','2026年7月24日','抄送：市各部门。','某办公室2026年7月24日印发']:
+        d.add_paragraph(t)
+    src=os.path.join(OUT_DIR,'gb_in.docx'); d.save(src); out=os.path.join(OUT_DIR,'gb_out.docx')
+    preset=dict(PRESETS['official_gbk']); preset['header_elements']=True; preset['record_elements']=True
+    format_document(src,out,preset_name='custom',custom_settings=preset)
+    doc=Document(out)
+    sig=[p for p in doc.paragraphs if p.text.strip()=='签发人：张三'][0]
+    pPr=sig._p.find(qn('w:pPr')); b=pPr.find(qn('w:pBdr')) if pPr is not None else None
+    assert b is not None and b.find(qn('w:bottom')) is not None, '版头红线未加'
+    print('[7j] 版头红线/版记分隔线/副标题 通过')
+
+
 def test_image_protection():
     """含图段落保护：独占图片的空文字段落不被压成 1 磅裁掉图片（借鉴 Word-Formatter-Pro）"""
     import base64
@@ -479,6 +527,8 @@ if __name__ == '__main__':
     test_auto_num_chinese()
     test_attachment_label()
     test_title_shape()
+    test_compliance()
+    test_gb_header_record()
     test_image_protection()
     test_redaction()
     test_signature_closing()
