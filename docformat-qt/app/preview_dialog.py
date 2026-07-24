@@ -224,9 +224,24 @@ def compute_types(paras, preset, overrides=None):
     return result
 
 
-def render_after_html(paras, preset, overrides=None):
+def _preview_title_cpl(preset):
+    """预览用：估算标题每行可容纳的全角字数（版心宽 / 标题字号）"""
+    page = preset.get('page', {})
+    pw_cm = 21.0
+    left = page.get('left', 2.8)
+    right = page.get('right', 2.6)
+    usable_mm = (pw_cm - left - right) * 10
+    usable_pt = usable_mm / 0.3528
+    tsize = preset.get('title', {}).get('size', 22) or 22
+    return max(6, int(usable_pt / tsize))
+
+
+def render_after_html(paras, preset, overrides=None, title_shape=None):
     overrides = overrides or {}
     types = compute_types(paras, preset, overrides)
+    # 标题梯形：None=按模板；否则覆盖
+    shape = title_shape if title_shape is not None else preset.get('title_shape', 'none')
+    cpl = _preview_title_cpl(preset)
 
     parts = []
     for item, (ai, ptype) in zip(paras, types):
@@ -251,9 +266,17 @@ def render_after_html(paras, preset, overrides=None):
         if fmt.get('bold'):
             style.append('font-weight:bold')
 
-        # 数字/英文用 font_en，中文用 font_cn，与真实 docx 输出一致
-        inner = _segment_font_html(
-            display, fmt.get('font_en', 'Times New Roman'), fmt.get('font_cn', '仿宋_GB2312'))
+        # 标题梯形回行：预览里按所选形状折行显示
+        if ptype == 'title' and shape in ('trapezoid_down', 'trapezoid_up'):
+            from scripts.title_shape import split_title_lines
+            lines = split_title_lines(display, cpl, shape)
+            inner = '<br>'.join(_segment_font_html(
+                ln, fmt.get('font_en', 'Times New Roman'),
+                fmt.get('font_cn', '仿宋_GB2312')) for ln in lines)
+        else:
+            # 数字/英文用 font_en，中文用 font_cn，与真实 docx 输出一致
+            inner = _segment_font_html(
+                display, fmt.get('font_en', 'Times New Roman'), fmt.get('font_cn', '仿宋_GB2312'))
         tag = TYPE_LABELS.get(ptype, ptype)
         cls = 'tagx' if ai in overrides else 'tag'
         parts.append(
@@ -308,6 +331,22 @@ class PreviewDialog(QDialog):
 
         self.seal_check = QCheckBox("加盖公章（落款日期右空4字，署名居中于日期编排）")
         root.addWidget(self.seal_check)
+
+        # 标题梯形回行：预览里可选并即时预览、确认后应用（覆盖模板设置）
+        ts_row = QHBoxLayout()
+        ts_row.addWidget(QLabel("长标题回行："))
+        self.title_shape_combo = QComboBox()
+        for label, val in [('按模板设置', '__preset__'),
+                           ('不处理', 'none'),
+                           ('正梯形（上长下短）', 'trapezoid_down'),
+                           ('倒梯形（上短下长）', 'trapezoid_up')]:
+            self.title_shape_combo.addItem(label, val)
+        self.title_shape_combo.setToolTip("在此选择即在预览中应用；确认排版时按此设置生效，"
+                                          "不必修改模板")
+        self.title_shape_combo.currentIndexChanged.connect(self._render_after)
+        ts_row.addWidget(self.title_shape_combo)
+        ts_row.addStretch(1)
+        root.addLayout(ts_row)
 
         hint = QLabel("提示：点击右侧段落前的类型标签，可手动指定该段是标题/正文/附件等（红色标签=已手动指定）")
         hint.setProperty("muted", "true")
@@ -366,6 +405,11 @@ class PreviewDialog(QDialog):
         """返回 {文件路径: {非空段序号: 类型}}（仅含有调整的文件）"""
         return {p: dict(m) for p, m in self._overrides.items() if m}
 
+    def get_title_shape(self):
+        """返回预览里选择的标题梯形（None=按模板，不覆盖）"""
+        val = self.title_shape_combo.currentData()
+        return None if val == '__preset__' else val
+
     def _current_path(self):
         return self.file_combo.currentData()
 
@@ -414,7 +458,8 @@ class PreviewDialog(QDialog):
         ovr = self._overrides.get(path, {})
         bar = self.view_after.verticalScrollBar()
         pos = bar.value()
-        self.view_after.setHtml(render_after_html(self._current_paras, self.preset, ovr))
+        ts = self.get_title_shape() if hasattr(self, 'title_shape_combo') else None
+        self.view_after.setHtml(render_after_html(self._current_paras, self.preset, ovr, ts))
         bar.setValue(pos)
         self.reset_btn.setEnabled(bool(ovr))
 

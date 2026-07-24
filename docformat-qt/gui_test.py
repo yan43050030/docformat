@@ -253,6 +253,15 @@ home.filesChanged.emit(0)
 home.set_mode('full')
 print('[15] v3.2 自绘控件/Toast/Spinner/跟随系统/状态栏文件数 ✓')
 
+# ---------- 13. 预览标题梯形覆盖 ----------
+from app.preview_dialog import render_after_html as _raf
+_pp = dict(win.mgr.get('official_gbk')); _pp['title_shape']='none'
+_ps=[('关于进一步加强全市安全生产工作坚决防范遏制重特大事故的通知',None,'',0),('各单位：',None,'',0)]
+assert '<br>' not in _raf(_ps,_pp,None,None), '模板none不应折行'
+assert '<br>' in _raf(_ps,_pp,None,'trapezoid_down'), '预览选正梯形应折行'
+print('[16] 预览标题梯形选择即应用 ✓')
+
+
 
 # ---------- 12. v3.0 易用性 ----------
 # 快捷键已注册（6 个页面 + 打开/处理/帮助）

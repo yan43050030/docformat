@@ -75,6 +75,7 @@ class HomePage(QWidget):
         self.worker = None
         self._outputs = []          # 本轮成功输出的文件
         self._type_overrides = {}   # 预览中手动指定的段落类型 {路径: {序号: 类型}}
+        self._title_shape = None    # 预览中选择的标题梯形（覆盖模板）
         self._seal = False          # 是否加盖公章落款布局
         self.font_check_enabled = True   # 处理前检查排版字体是否安装（测试时可关闭）
         self._build()
@@ -457,11 +458,13 @@ class HomePage(QWidget):
         if dlg.exec_() == PreviewDialog.Accepted:
             self._type_overrides = dlg.get_overrides()
             self._seal = dlg.seal_check.isChecked()
+            self._title_shape = dlg.get_title_shape()
             try:
                 self.start_process()
             finally:
                 self._type_overrides = {}
                 self._seal = False
+                self._title_shape = None
 
     # ---------- 字体检查 ----------
     def _missing_fonts(self):
@@ -537,6 +540,7 @@ class HomePage(QWidget):
             self.files, mode, preset_name, custom, suffix,
             revision_mode=self.revision_check.isChecked(),
             type_overrides=self._type_overrides,
+            title_shape=self._title_shape,
             parent=self)
         self.worker.logMessage.connect(self.logMessage)
         self.worker.progressChanged.connect(self.progress.setValue)
