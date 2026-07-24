@@ -216,7 +216,7 @@ class ProcessWorker(QThread):
     allFinished = pyqtSignal(int, int)               # ok, fail
 
     def __init__(self, files, mode, preset_name, custom_settings, suffix,
-                 revision_mode=False, type_overrides=None, parent=None):
+                 revision_mode=False, type_overrides=None, title_shape=None, parent=None):
         super(ProcessWorker, self).__init__(parent)
         self.files = list(files)
         self.mode = mode
@@ -227,6 +227,7 @@ class ProcessWorker(QThread):
         # {文件路径: {非空段序号: 段落类型}}，来自预览中的手动调整
         self.type_overrides = {os.path.normpath(k): v
                                for k, v in (type_overrides or {}).items()}
+        self.title_shape = title_shape
         self._cancelled = False
 
     def cancel(self):
@@ -378,6 +379,7 @@ class ProcessWorker(QThread):
                 custom_settings=self.custom_settings,
                 revision_mode=self.revision_mode,
                 type_overrides=type_overrides,
+                title_shape=self.title_shape,
             )
         finally:
             _cleanup_dir(tmp_root)

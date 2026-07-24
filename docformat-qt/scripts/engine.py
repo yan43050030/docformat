@@ -120,8 +120,11 @@ def _ensure_structural_blank_lines(doc, line_spacing_pt=28, rules=None, type_ove
 
 def format_document(input_path, output_path, preset_name='official', progress_callback=None,
                     revision_mode=False, bold_serial=True, custom_settings=None,
-                    type_overrides=None):
+                    type_overrides=None, title_shape=None):
     """格式化文档
+
+    title_shape: 覆盖预设的标题梯形设置（'none'/'trapezoid_down'/'trapezoid_up'）；
+                 None 表示用预设值。预览里临时选择时通过此参数生效。
 
     Args:
         input_path: 源文件路径
@@ -387,8 +390,9 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
         _apply_gb_signature_layout(typed_entries, preset)
 
     # 标题梯形回行（可选，默认关闭）：title_shape = trapezoid_down/trapezoid_up
-    title_shape = preset.get('title_shape', 'none')
-    if title_shape in ('trapezoid_down', 'trapezoid_up'):
+    # 预览里临时选择通过 title_shape 参数覆盖预设值（预览选了就启用）
+    effective_shape = title_shape if title_shape is not None else preset.get('title_shape', 'none')
+    if effective_shape in ('trapezoid_down', 'trapezoid_up'):
         try:
             from .title_shape import apply_title_shape
             title_size = preset.get('title', {}).get('size', 22) or 22
@@ -398,7 +402,7 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
             cpl = max(6, int(usable_pt / title_size))   # 每行可容纳全角字数
             for para, ptype in typed_entries:
                 if ptype == 'title':
-                    apply_title_shape(para, cpl, title_shape)
+                    apply_title_shape(para, cpl, effective_shape)
         except Exception as e:
             logger.warning('标题梯形回行失败: %s', e)
 

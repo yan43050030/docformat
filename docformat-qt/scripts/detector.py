@@ -206,9 +206,15 @@ def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=N
                 return 'recipient'
 
     # ===== 附件标识行（独占一行的"附件""附件1""附件一"，无冒号无后续内容）=====
-    # 附件另起页后，"附件"及序号顶格黑体；与正文里的"附件：说明"(悬挂缩进) 区分
+    # 附件另起页后，"附件"及序号顶格黑体；与正文里的"附件1：说明"(悬挂缩进) 区分。
+    # 关键区分：带冒号/有后续内容 → 说明；纯"附件N" → 标识。
+    # 再加位置保险：仅文档中后段（非空段过 1/3 处）才认定为标识，避免正文
+    # 前部偶发的纯"附件N"被误判——正文末尾列附件通常带冒号，不受影响。
     if re.match(r'^附件\s*[一二三四五六七八九十\d]*\s*$', text):
-        return 'attachment_label'
+        _pos = all_texts_index if all_texts_index is not None else index
+        _tot = len(all_texts) if all_texts else total
+        if _tot and _pos >= _tot / 3.0:
+            return 'attachment_label'
 
     # ===== 附件说明行 =====
     if _rules['attachment'].match(text):
