@@ -247,7 +247,25 @@ def test_compliance():
     assert sum(1 for x in f1 if x['level']=='warn') < sum(1 for x in f0 if x['level']=='warn'), '排版后偏差应减少'
     f2=compliance.check_compliance(Document(src),preset,options={'margins':False,'paper':False})
     assert not any(x['item']=='页边距' for x in f2), '关闭后不查边距'
-    print('[7i] 公文合规检查 通过')
+    # 交互式修正：只对认可项动手，其余不动
+    from docx.shared import Cm
+    dfix=Document(); s=dfix.sections[0]
+    s.top_margin=Cm(1); s.bottom_margin=Cm(1); s.left_margin=Cm(1); s.right_margin=Cm(1)
+    s.page_width=Cm(20); s.page_height=Cm(28)
+    dfix.add_paragraph('关于开展某项工作的通知')
+    dfix.add_paragraph('这是一段足够长的正文用来抽样检查字体字号是否符合预设的要求内容。')
+    fsrc=os.path.join(OUT_DIR,'fix_in.docx'); dfix.save(fsrc)
+    ff=compliance.check_compliance(Document(fsrc),preset)
+    keys=[x['fix_key'] for x in ff if x.get('fix_key')]
+    assert 'margins' in keys and 'paper' in keys, '应识别出边距/纸张可修正'
+    # 只认可 margins，不认可 paper：修正后边距合规、纸张仍偏差
+    fout=os.path.join(OUT_DIR,'fix_out.docx')
+    applied=compliance.apply_compliance_fixes(fsrc,fout,preset,['margins'])
+    assert applied and any('页边距' in a for a in applied), '应返回修正说明'
+    fr=compliance.check_compliance(Document(fout),preset)
+    assert not any(x['item']=='页边距' and x['level']=='warn' for x in fr), '认可后边距应合规'
+    assert any(x['item']=='纸张' and x['level']=='warn' for x in fr), '未认可的纸张应保持偏差'
+    print('[7i] 公文合规检查 + 交互式修正 通过')
 
 
 def test_gb_header_record():

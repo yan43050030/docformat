@@ -18,7 +18,7 @@ from app.worker import (MODE_AI_PASTE, MODE_DIAGNOSE, MODE_FULL,
 MODES = [
     (MODE_FULL, '智能一键处理', '标点修复 + 排版规范 + 样式清洗，一步到位'),
     (MODE_DIAGNOSE, '格式诊断', '仅分析文档问题，不修改文件内容'),
-    (MODE_COMPLIANCE, '公文合规检查', '对照当前预设核对版式偏差，可选查哪些项，不修改文件'),
+    (MODE_COMPLIANCE, '公文合规检查', '对照当前预设核对版式偏差，勾选认可的问题即可自动修正、原文件不动'),
     (MODE_PUNCTUATION, '标点修复', '仅修复中英文标点混用，保留原有段落格式'),
     (MODE_AI_PASTE, 'AI 粘贴生成', '粘贴 AI 生成的文本或 Markdown，自动生成规范公文'),
     (MODE_TOC_AUTO, '生成自动目录（域）', '在文首插入 Word 目录域，Word/WPS 打开后右键更新域即可自动生成页码'),
@@ -557,6 +557,7 @@ class HomePage(QWidget):
         self.worker.logMessage.connect(self.logMessage)
         self.worker.progressChanged.connect(self.progress.setValue)
         self.worker.diagnoseReady.connect(self._show_diagnose)
+        self.worker.complianceReady.connect(self._show_compliance)
         self.worker.fileStarted.connect(self._on_file_started)
         self.worker.fileFinished.connect(self._on_file_finished)
         self.worker.fileFailed.connect(self._on_file_failed)
@@ -643,3 +644,47 @@ class HomePage(QWidget):
             # 一键转入智能修复：切换模式并立即处理同一批文件
             self.set_mode(MODE_FULL)
             self.start_process()
+
+    def _show_compliance(self, results):
+        # 日志里也留一份文字报告，便于回看
+        from scripts.compliance import format_compliance_report
+        for res in results:
+            self.logMessage.emit('info', '合规报告：\n' + format_compliance_report(
+                res.get('display', ''), res.get('findings', []), res.get('preset_name', '')))
+        from app.compliance_report_dialog import ComplianceReportDialog
+        dlg = ComplianceReportDialog(results, self)
+        if dlg.exec_() == ComplianceReportDialog.Accepted:
+            self._apply_compliance_fixes(dlg.selections())
+
+    def _apply_compliance_fixes(self, selections):
+        if not selections:
+            return
+        from scripts import compliance
+        from app.worker import output_path_for
+        from PyQt5.QtWidgets import QApplication
+        suffix = self.suffix_edit.text().strip() or '_processed'
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        outputs, errors = [], []
+        try:
+            for item in selections:
+                fin, keys = item['fix_input'], item['fix_keys']
+                out = output_path_for(fin, suffix)
+                try:
+                    applied = compliance.apply_compliance_fixes(fin, out, item['preset'], keys)
+                    outputs.append(out)
+                    self.logMessage.emit('success', '已修正 {} → {}'.format(
+                        item['display'], os.path.basename(out)))
+                    for line in applied:
+                        self.logMessage.emit('info', '  · ' + line)
+                except Exception as e:
+                    errors.append('{}: {}'.format(item['display'], e))
+                    self.logMessage.emit('error', '修正失败 {}: {}'.format(item['display'], e))
+        finally:
+            QApplication.restoreOverrideCursor()
+        if outputs:
+            self._outputs = outputs
+            self.open_out_btn.setVisible(True)
+            self.status_label.setText('合规修正完成：{} 个文件已另存'.format(len(outputs)))
+            self._auto_open_outputs()
+        if errors:
+            QMessageBox.warning(self, "部分修正失败", '\n'.join(errors))
