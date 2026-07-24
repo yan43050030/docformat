@@ -197,6 +197,30 @@ def test_auto_num_chinese():
     print('[7d] 自动编号中文数字 11/20/99 通过')
 
 
+def test_image_protection():
+    """含图段落保护：独占图片的空文字段落不被压成 1 磅裁掉图片（借鉴 Word-Formatter-Pro）"""
+    import base64
+    from docx.shared import Cm
+    from docx.oxml.ns import qn
+    from docx.enum.text import WD_LINE_SPACING
+    from scripts.formatter import format_document, paragraph_has_media
+    png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=')
+    ip = os.path.join(OUT_DIR, 't.png'); open(ip,'wb').write(png)
+    d = Document()
+    d.add_paragraph('关于测试的通知'); d.add_paragraph('各单位：')
+    d.add_paragraph().add_run().add_picture(ip, width=Cm(8), height=Cm(6))
+    d.add_paragraph('特此通知。')
+    src = os.path.join(OUT_DIR, 'img_in.docx'); d.save(src)
+    assert any(paragraph_has_media(p) for p in Document(src).paragraphs), '未检出含图段落'
+    out = os.path.join(OUT_DIR, 'img_out.docx')
+    format_document(src, out, preset_name='official_gbk')
+    for para in Document(out).paragraphs:
+        if para._p.find('.//'+qn('w:drawing')) is not None:
+            assert para.paragraph_format.line_spacing_rule != WD_LINE_SPACING.EXACTLY, \
+                '含图段落仍是固定行距，会裁图'
+    print('[7f] 含图段落保护: 不被裁图 通过')
+
+
 def test_redaction():
     """日志脱敏：文件名/路径/用户名不明文，同名一致"""
     from app.redact import redact_text, mask_home
@@ -421,6 +445,7 @@ if __name__ == '__main__':
     test_heading_split()
     test_wps_broken_jc()
     test_auto_num_chinese()
+    test_image_protection()
     test_redaction()
     test_signature_closing()
     print('\n全部冒烟测试通过 ✓')
