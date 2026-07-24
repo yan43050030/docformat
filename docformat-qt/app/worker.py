@@ -214,6 +214,7 @@ class ProcessWorker(QThread):
     fileFinished = pyqtSignal(str, str)              # input, output ('' = 无输出)
     fileFailed = pyqtSignal(str, str)                # input, error
     diagnoseReady = pyqtSignal(str)                  # 汇总报告
+    complianceReady = pyqtSignal(list)               # 结构化合规结果（可交互修正）
     allFinished = pyqtSignal(int, int)               # ok, fail
 
     def __init__(self, files, mode, preset_name, custom_settings, suffix,
@@ -230,6 +231,7 @@ class ProcessWorker(QThread):
                                for k, v in (type_overrides or {}).items()}
         self.title_shape = title_shape
         self.compliance_options = None
+        self._compliance_results = []
         self._cancelled = False
 
     def cancel(self):
@@ -272,6 +274,7 @@ class ProcessWorker(QThread):
 
         ok, fail = 0, 0
         reports = []
+        self._compliance_results = []
         n = len(self.files)
         try:
             for i, path in enumerate(self.files):
@@ -306,7 +309,7 @@ class ProcessWorker(QThread):
                         reports.append(self._diagnose(work, base))
                         self.fileFinished.emit(path, '')
                     elif self.mode == MODE_COMPLIANCE:
-                        reports.append(self._check_compliance(work, base))
+                        reports.append(self._check_compliance(work, base, path))
                         self.fileFinished.emit(path, '')
                     elif self.mode == MODE_PUNCTUATION:
                         out = output_path_for(path, self.suffix)
@@ -345,7 +348,12 @@ class ProcessWorker(QThread):
                     _cleanup_dir(_an_dir)
                 self.progressChanged.emit(int((i + 1) * 100 / n) if n else 100)
 
-            if self.mode in (MODE_DIAGNOSE, MODE_COMPLIANCE) and reports:
+            if self.mode == MODE_COMPLIANCE:
+                if self._compliance_results:
+                    self.complianceReady.emit(self._compliance_results)
+                elif reports:
+                    self.diagnoseReady.emit('\n\n'.join(reports))
+            elif self.mode == MODE_DIAGNOSE and reports:
                 self.diagnoseReady.emit('\n\n'.join(reports))
         finally:
             if session is not None:
@@ -423,7 +431,7 @@ class ProcessWorker(QThread):
 
 
 
-    def _check_compliance(self, work, display_name):
+    def _check_compliance(self, work, display_name, orig_path):
         from docx import Document
         from scripts.formatter import sanitize_document
         from scripts import compliance
@@ -436,6 +444,16 @@ class ProcessWorker(QThread):
             preset = PRESETS.get(self.preset_name, PRESETS['official_gbk'])
         findings = compliance.check_compliance(doc, preset, self.compliance_options)
         self._log('info', '合规检查完成: {}'.format(display_name))
+        # 自动修正只支持 .docx 原文件（.doc/.wps 需先另存为 docx）
+        fix_input = orig_path if orig_path.lower().endswith('.docx') else None
+        self._compliance_results.append({
+            'file': orig_path,
+            'display': display_name,
+            'findings': findings,
+            'preset': preset,
+            'preset_name': preset.get('name', ''),
+            'fix_input': fix_input,
+        })
         return compliance.format_compliance_report(display_name, findings, preset.get('name', ''))
 
 class AiPasteWorker(QThread):
