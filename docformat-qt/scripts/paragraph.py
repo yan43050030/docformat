@@ -96,6 +96,49 @@ def _set_paragraph_spacing_points(para, before_pt=0, after_pt=0):
     spacing.set(qn('w:after'), str(int(round(after_pt * 20))))
 
 
+_MEDIA_TAGS = ('w:drawing', 'w:pict', 'w:object', 'w:objectEmbed')
+
+
+def paragraph_has_media(para):
+    """段落是否含图片/图形/嵌入对象（inline 或浮动）。
+
+    含图段落若被设成固定行距，Word 会把高于行距的图片裁掉；空文字的独占
+    图片段落还会被当成空行压到 1 磅。需在排版时识别并保护。
+    """
+    p = para._p
+    for tag in _MEDIA_TAGS:
+        if p.find('.//' + qn(tag)) is not None:
+            return True
+    return False
+
+
+def protect_media_paragraph(para):
+    """保护含图段落：单倍行距（自动容纳图高、不裁图）、居中、不缩进、段前后清零。
+
+    不改动图片本身，也不强改文字 run 字体，避免破坏对象。
+    """
+    pf = para.paragraph_format
+    # 单倍行距让行高自动适配图片高度，绝不用 EXACTLY（会裁图）
+    pf.line_spacing_rule = WD_LINE_SPACING.SINGLE
+    pf.line_spacing = None
+    pf.first_line_indent = Pt(0)
+    pf.left_indent = Pt(0)
+    pf.right_indent = Pt(0)
+    _set_paragraph_spacing_points(para, 0, 0)
+    # 图片段落通常居中（题注/插图惯例）；若原本明确右/左对齐则尊重原样
+    if pf.alignment is None:
+        pf.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # 清掉可能残留的 firstLineChars，避免图片被推移
+    try:
+        pPr = para._p.find(qn('w:pPr'))
+        if pPr is not None:
+            ind = pPr.find(qn('w:ind'))
+            if ind is not None:
+                ind.attrib.pop(qn('w:firstLineChars'), None)
+    except Exception:
+        pass
+
+
 def _compact_empty_paragraph(para):
     """Clear spacing on empty paragraphs."""
     _set_paragraph_spacing_points(para, 0, 0)
@@ -130,9 +173,12 @@ def _format_structural_blank_paragraph(para, line_spacing_pt=28):
 
 
 def _format_empty_paragraphs(doc, structural_blank_ids, line_spacing_pt=28):
-    """格式化文档中所有空段落"""
+    """格式化文档中所有空段落（含图段落除外，避免裁图）"""
     for para in doc.paragraphs:
         if para.text.strip():
+            continue
+        if paragraph_has_media(para):
+            protect_media_paragraph(para)   # 独占图片的空文字段落：保护不压缩
             continue
         if _is_structural_blank(para):
             _format_structural_blank_paragraph(para, line_spacing_pt)

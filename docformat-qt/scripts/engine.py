@@ -41,7 +41,7 @@ from .paragraph import (
     _format_empty_paragraphs, _compact_empty_paragraph,
     _is_structural_blank, deep_clean_document,
     _keep_first_sentence_runs, _append_body_run,
-    sanitize_document,
+    sanitize_document, paragraph_has_media, protect_media_paragraph,
 )
 from .detector import (
     detect_para_type, _compile_rules, _build_text_context,
@@ -292,6 +292,10 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
             if cleaned != raw:
                 para.text = cleaned
             text = cleaned.strip()
+            # 含图片/嵌入对象的段落：保护，绝不按空行压缩或设固定行距（会裁图）
+            if paragraph_has_media(para):
+                protect_media_paragraph(para)
+                continue
             if not text:
                 if _is_structural_blank(para):
                     _format_structural_blank_paragraph(para, body_line_spacing)

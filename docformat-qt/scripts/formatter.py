@@ -61,6 +61,8 @@ from .paragraph import (
     _format_empty_paragraphs,
     deep_clean_document,
     sanitize_document,
+    paragraph_has_media,
+    protect_media_paragraph,
 )
 
 # ── 检测器 ──
