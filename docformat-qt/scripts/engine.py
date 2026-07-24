@@ -386,6 +386,22 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
     if preset.get('gb_signature_layout'):
         _apply_gb_signature_layout(typed_entries, preset)
 
+    # 标题梯形回行（可选，默认关闭）：title_shape = trapezoid_down/trapezoid_up
+    title_shape = preset.get('title_shape', 'none')
+    if title_shape in ('trapezoid_down', 'trapezoid_up'):
+        try:
+            from .title_shape import apply_title_shape
+            title_size = preset.get('title', {}).get('size', 22) or 22
+            sec0 = doc.sections[0]
+            pw = (sec0.page_width or Cm(21.0)).pt
+            usable_pt = pw - sec0.left_margin.pt - sec0.right_margin.pt
+            cpl = max(6, int(usable_pt / title_size))   # 每行可容纳全角字数
+            for para, ptype in typed_entries:
+                if ptype == 'title':
+                    apply_title_shape(para, cpl, title_shape)
+        except Exception as e:
+            logger.warning('标题梯形回行失败: %s', e)
+
     # 4. 处理表格
     logger.info('4. Formatting tables...')
     _progress(82, 100, '格式化表格...')

@@ -205,7 +205,12 @@ def detect_para_type(text, index, total, alignment, all_texts, all_texts_index=N
             else:
                 return 'recipient'
 
-    # ===== 附件行 =====
+    # ===== 附件标识行（独占一行的"附件""附件1""附件一"，无冒号无后续内容）=====
+    # 附件另起页后，"附件"及序号顶格黑体；与正文里的"附件：说明"(悬挂缩进) 区分
+    if re.match(r'^附件\s*[一二三四五六七八九十\d]*\s*$', text):
+        return 'attachment_label'
+
+    # ===== 附件说明行 =====
     if _rules['attachment'].match(text):
         return 'attachment'
 

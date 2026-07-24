@@ -632,6 +632,18 @@ class PresetsPage(QWidget):
         g.addWidget(self.adv_widow, 3, 0)
         for wdg in [self.adv_first_bold, self.adv_bold_serial, self.adv_deep_clean, self.adv_widow]:
             wdg.stateChanged.connect(self._save_from_widgets)
+
+        # 标题梯形回行（默认不处理）
+        g.addWidget(QLabel("长标题回行形状"), 4, 0)
+        self.adv_title_shape = _LockCombo()
+        for label, val in [('不处理（保持单行/原样）', 'none'),
+                           ('正梯形（上长下短）', 'trapezoid_down'),
+                           ('倒梯形（上短下长）', 'trapezoid_up')]:
+            self.adv_title_shape.addItem(label, val)
+        self.adv_title_shape.setToolTip("长标题超过一行时自动折成梯形；中文无词库，"
+                                        "尽力避免拆词，可在预览里手动微调")
+        self.adv_title_shape.currentIndexChanged.connect(self._save_from_widgets)
+        g.addWidget(self.adv_title_shape, 4, 1)
         sec.set_body_layout(g)
         self._sections.append(sec)
         self.editor_lay.addWidget(sec)
@@ -710,6 +722,9 @@ class PresetsPage(QWidget):
         self.adv_bold_serial.setChecked(bool(p.get('bold_serial', True)))
         self.adv_deep_clean.setChecked(bool(p.get('deep_clean', False)))
         self.adv_widow.setChecked(bool(p.get('widow_control', False)))
+        _ts = p.get('title_shape', 'none')
+        _tsi = self.adv_title_shape.findData(_ts)
+        self.adv_title_shape.setCurrentIndex(_tsi if _tsi >= 0 else 0)
 
         img = p.get('image', {}) or {}
         self.img_enabled.setChecked(bool(img.get('auto_compress', False)))
@@ -811,6 +826,7 @@ class PresetsPage(QWidget):
         p['bold_serial'] = self.adv_bold_serial.isChecked()
         p['deep_clean'] = self.adv_deep_clean.isChecked()
         p['widow_control'] = self.adv_widow.isChecked()
+        p['title_shape'] = self.adv_title_shape.currentData()
 
         if self.img_enabled.isChecked():
             p['image'] = {

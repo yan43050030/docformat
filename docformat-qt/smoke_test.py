@@ -197,6 +197,38 @@ def test_auto_num_chinese():
     print('[7d] 自动编号中文数字 11/20/99 通过')
 
 
+def test_attachment_label():
+    """附件标识行(顶格黑体) 与 附件说明(悬挂缩进) 区分"""
+    from docx.oxml.ns import qn
+    from scripts.formatter import format_document, detect_para_type, _compile_rules
+    r=_compile_rules(None)
+    assert detect_para_type('附件1',10,20,None,['a']*15,10,rules=r)=='attachment_label'
+    assert detect_para_type('附件：清单',10,20,None,['a']*15,10,rules=r)=='attachment'
+    d=Document()
+    d.add_paragraph('关于测试的通知'); d.add_paragraph('各单位：'); d.add_paragraph('正文。')
+    d.add_paragraph('附件：1.清单'); d.add_paragraph('附件1'); d.add_paragraph('组成人员名单')
+    src=os.path.join(OUT_DIR,'att_in.docx'); d.save(src)
+    out=os.path.join(OUT_DIR,'att_out.docx')
+    format_document(src,out,preset_name='official_gbk')
+    doc=Document(out)
+    lab=[p for p in doc.paragraphs if p.text.strip()=='附件1'][0]
+    ea=lab.runs[0]._element.rPr.rFonts.get(qn('w:eastAsia'))
+    assert ea=='方正黑体_GBK', '附件标识应黑体'
+    assert (lab.paragraph_format.left_indent is None or lab.paragraph_format.left_indent.pt==0), '附件标识应顶格'
+    print('[7g] 附件标识/说明 区分排版 通过')
+
+
+def test_title_shape():
+    """标题梯形回行：正梯形上长下短、倒梯形上短下长、短标题不折"""
+    from scripts.title_shape import split_title_lines
+    t='关于进一步加强全市安全生产工作坚决防范遏制重特大事故的通知'
+    dn=split_title_lines(t,20,'trapezoid_down'); up=split_title_lines(t,20,'trapezoid_up')
+    assert len(dn)>=2 and len(dn[0])>=len(dn[-1]), '正梯形应上长下短'
+    assert len(up)>=2 and len(up[0])<=len(up[-1]), '倒梯形应上短下长'
+    assert split_title_lines('关于测试的通知',20,'trapezoid_down')==['关于测试的通知']
+    print('[7h] 标题梯形回行 正/倒/不折 通过')
+
+
 def test_image_protection():
     """含图段落保护：独占图片的空文字段落不被压成 1 磅裁掉图片（借鉴 Word-Formatter-Pro）"""
     import base64
@@ -445,6 +477,8 @@ if __name__ == '__main__':
     test_heading_split()
     test_wps_broken_jc()
     test_auto_num_chinese()
+    test_attachment_label()
+    test_title_shape()
     test_image_protection()
     test_redaction()
     test_signature_closing()

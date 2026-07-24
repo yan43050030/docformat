@@ -415,3 +415,26 @@ PRESETS = {
         'closing': {'font_cn': '宋体', 'font_en': 'Times New Roman', 'size': 14, 'bold': False, 'align': 'left', 'indent': 28},
     },
 }
+
+
+# ── 附件标识行（GB/T 9704：附件另起页，"附件"及序号用三号黑体顶格）──
+# 与"附件说明"(attachment, 悬挂缩进) 区分；缺省时从各预设的一级标题(黑体族)派生
+def _ensure_attachment_label(presets):
+    for key, preset in presets.items():
+        if 'attachment_label' in preset:
+            continue
+        h1 = preset.get('heading1', {})
+        body = preset.get('body', {})
+        preset['attachment_label'] = {
+            'font_cn': h1.get('font_cn', '黑体'),
+            'font_en': h1.get('font_en', 'Times New Roman'),
+            'size': body.get('size', 16),
+            'bold': h1.get('bold', False),
+            'align': 'left',
+            'indent': 0,          # 顶格
+            'space_before': 0,
+            'space_after': 0,
+        }
+
+
+_ensure_attachment_label(PRESETS)
