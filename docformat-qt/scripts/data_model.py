@@ -437,4 +437,53 @@ def _ensure_attachment_label(presets):
         }
 
 
+def _ensure_extra_elements(presets):
+    """为各预设补齐副标题/版头/版记要素（缺省从相近要素派生）。
+
+    这些要素默认不参与识别（需 flags 开启），但样式先备好。
+    """
+    for key, preset in presets.items():
+        body = preset.get('body', {})
+        title = preset.get('title', {})
+        docnum = preset.get('docnum', body)
+        recipient = preset.get('recipient', body)
+        en = body.get('font_en', 'Times New Roman')
+        # 副标题：比主标题小一号、居中，仿宋
+        preset.setdefault('subtitle', {
+            'font_cn': body.get('font_cn', '仿宋_GB2312'), 'font_en': en,
+            'size': 18, 'bold': False, 'align': 'center', 'indent': 0,
+        })
+        # 份号：三号仿宋顶格
+        preset.setdefault('copynum', {
+            'font_cn': body.get('font_cn', '仿宋_GB2312'), 'font_en': en,
+            'size': body.get('size', 16), 'bold': False, 'align': 'left', 'indent': 0,
+        })
+        # 紧急程度：三号黑体顶格
+        preset.setdefault('urgency', {
+            'font_cn': preset.get('heading1', {}).get('font_cn', '黑体'), 'font_en': en,
+            'size': body.get('size', 16), 'bold': True, 'align': 'left', 'indent': 0,
+        })
+        # 签发人：同发文字号字体，右对齐
+        preset.setdefault('signatory', {
+            'font_cn': docnum.get('font_cn', '仿宋_GB2312'), 'font_en': en,
+            'size': docnum.get('size', 16), 'bold': False, 'align': 'right', 'indent': 0,
+        })
+        # 抄送机关：三号仿宋顶格
+        preset.setdefault('cc', {
+            'font_cn': recipient.get('font_cn', '仿宋_GB2312'), 'font_en': en,
+            'size': body.get('size', 16), 'bold': False, 'align': 'left', 'indent': 0,
+        })
+        # 印发机关和印发日期：三号仿宋两端对齐
+        preset.setdefault('issuer', {
+            'font_cn': body.get('font_cn', '仿宋_GB2312'), 'font_en': en,
+            'size': body.get('size', 16), 'bold': False, 'align': 'justify', 'indent': 0,
+        })
+        # 图/表题注：小四宋体居中
+        preset.setdefault('caption', {
+            'font_cn': '宋体', 'font_en': en,
+            'size': 12, 'bold': False, 'align': 'center', 'indent': 0,
+        })
+
+
 _ensure_attachment_label(PRESETS)
+_ensure_extra_elements(PRESETS)

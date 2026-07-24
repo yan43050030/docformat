@@ -14,6 +14,7 @@ MODE_PUNCTUATION = 'punctuation'
 MODE_AI_PASTE = 'ai_paste'
 MODE_TOC_AUTO = 'toc_auto'
 MODE_TOC_MANUAL = 'toc_manual'
+MODE_COMPLIANCE = 'compliance'
 
 # Windows/Linux 文件名中的非法字符
 _INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
@@ -228,6 +229,7 @@ class ProcessWorker(QThread):
         self.type_overrides = {os.path.normpath(k): v
                                for k, v in (type_overrides or {}).items()}
         self.title_shape = title_shape
+        self.compliance_options = None
         self._cancelled = False
 
     def cancel(self):
@@ -303,6 +305,9 @@ class ProcessWorker(QThread):
                     if self.mode == MODE_DIAGNOSE:
                         reports.append(self._diagnose(work, base))
                         self.fileFinished.emit(path, '')
+                    elif self.mode == MODE_COMPLIANCE:
+                        reports.append(self._check_compliance(work, base))
+                        self.fileFinished.emit(path, '')
                     elif self.mode == MODE_PUNCTUATION:
                         out = output_path_for(path, self.suffix)
                         from scripts import punctuation
@@ -340,7 +345,7 @@ class ProcessWorker(QThread):
                     _cleanup_dir(_an_dir)
                 self.progressChanged.emit(int((i + 1) * 100 / n) if n else 100)
 
-            if self.mode == MODE_DIAGNOSE and reports:
+            if self.mode in (MODE_DIAGNOSE, MODE_COMPLIANCE) and reports:
                 self.diagnoseReady.emit('\n\n'.join(reports))
         finally:
             if session is not None:
@@ -416,6 +421,22 @@ class ProcessWorker(QThread):
         self._log('info', '诊断完成: {}'.format(display_name))
         return report
 
+
+
+    def _check_compliance(self, work, display_name):
+        from docx import Document
+        from scripts.formatter import sanitize_document
+        from scripts import compliance
+        doc = Document(work)
+        sanitize_document(doc)
+        if self.custom_settings:
+            preset = self.custom_settings
+        else:
+            from scripts.data_model import PRESETS
+            preset = PRESETS.get(self.preset_name, PRESETS['official_gbk'])
+        findings = compliance.check_compliance(doc, preset, self.compliance_options)
+        self._log('info', '合规检查完成: {}'.format(display_name))
+        return compliance.format_compliance_report(display_name, findings, preset.get('name', ''))
 
 class AiPasteWorker(QThread):
     """AI 粘贴生成：文本 → 临时 docx → 排版引擎 → 输出"""

@@ -69,7 +69,7 @@ from .watermark import WatermarkConfig, apply_watermark, WATERMARK_PRESETS
 logger = logging.getLogger('docformat.engine')
 
 
-def _ensure_structural_blank_lines(doc, line_spacing_pt=28, rules=None, type_overrides=None):
+def _ensure_structural_blank_lines(doc, line_spacing_pt=28, rules=None, type_overrides=None, flags=None):
     """确保标题后、落款前的结构性空行"""
     all_texts, all_texts_idx_map = _build_text_context(doc)
     total_paras = len(doc.paragraphs)
@@ -89,7 +89,7 @@ def _ensure_structural_blank_lines(doc, line_spacing_pt=28, rules=None, type_ove
                 all_texts,
                 all_texts_index=ai,
                 prev_para_type=prev_para_type,
-                rules=rules
+                rules=rules, flags=flags
             )
         entries.append((para, para_type, prev_para_type))
         prev_para_type = para_type
@@ -269,8 +269,13 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
 
     _strip_autospacing_from_styles(doc)
     _active_rules = _compile_rules(preset.get('detect_rules'))
+    _detect_flags = {
+        'subtitle_enabled': bool(preset.get('subtitle_enabled')),
+        'header_elements': bool(preset.get('header_elements')),
+        'record_elements': bool(preset.get('record_elements')),
+    }
     structural_blank_ids = _ensure_structural_blank_lines(
-        doc, body_line_spacing, rules=_active_rules, type_overrides=type_overrides)
+        doc, body_line_spacing, rules=_active_rules, type_overrides=type_overrides, flags=_detect_flags)
     total_paras = len(doc.paragraphs)
     all_texts, all_texts_idx_map = _build_text_context(doc)
 
@@ -316,7 +321,7 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
                     all_texts,
                     all_texts_index=_ai,
                     prev_para_type=prev_para_type,
-                    rules=_active_rules
+                    rules=_active_rules, flags=_detect_flags
                 )
 
             if para_type == 'date':
@@ -382,7 +387,7 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
 
     # 格式化后复查结构空行
     structural_blank_ids.update(_ensure_structural_blank_lines(
-        doc, body_line_spacing, rules=_active_rules, type_overrides=type_overrides))
+        doc, body_line_spacing, rules=_active_rules, type_overrides=type_overrides, flags=_detect_flags))
     _format_empty_paragraphs(doc, structural_blank_ids, body_line_spacing)
 
     # 落款对位
@@ -405,6 +410,17 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
                     apply_title_shape(para, cpl, effective_shape)
         except Exception as e:
             logger.warning('标题梯形回行失败: %s', e)
+
+    # 版头红色分隔线 / 版记分隔线（默认关闭）
+    try:
+        if preset.get('header_elements'):
+            from .gb_extras import apply_header_separator
+            apply_header_separator(typed_entries)
+        if preset.get('record_elements'):
+            from .gb_extras import apply_record_separators
+            apply_record_separators(typed_entries)
+    except Exception as e:
+        logger.warning('版头/版记分隔线失败: %s', e)
 
     # 4. 处理表格
     logger.info('4. Formatting tables...')
@@ -447,6 +463,15 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
     tbl_first_line_indent = table_fmt.get('first_line_indent', 0)
 
     blocks = list(_iter_block_items(doc))
+
+    # 图/表题注居中（默认关闭，format_captions 开启）
+    if preset.get('format_captions'):
+        try:
+            from .gb_extras import apply_captions
+            apply_captions(blocks, preset)
+        except Exception as e:
+            logger.warning('题注处理失败: %s', e)
+
     for idx, block in enumerate(blocks):
         if not isinstance(block, Table):
             continue
