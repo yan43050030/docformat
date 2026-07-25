@@ -37,6 +37,18 @@ FONT_STEP = 0.5
 TWIPS_PER_CM = 566.93
 PT_PER_CM = 28.3465
 
+# 裁"末尾不打印的占位空白"时的目标宽度（占名义版心宽的比例）。
+#
+# 为什么要留这么大余量：真机 Word 里成文日期行按"全角字宽=字号"算只有
+# 16.05cm、版心 16.45cm，本该放得下，实际却折了行。原因出在空格——那一行的
+# 空白 run 用的是 CJK 字体（方正楷体_GBK），空格未必是半角宽；本机没有这些
+# 字体，无从测准。而**表格里**的正文实测是准的（拟办意见一行 Word 排 28 字、
+# 预览 27 字），所以不能为了这一行给全局加系数、把格子里的字号无谓缩小。
+#
+# 于是只在这里留余量：被裁的是末尾纯占位空白，本来就不显影，裁多了零代价，
+# 裁少了要赔一整页。0.75 的目标即使按"空格全是全角"的最悲观算法也放得下。
+TAIL_TRIM_RATIO = 0.75
+
 
 def _iter_cells(table):
     """产出表格里每个不重复的单元格。
@@ -75,13 +87,16 @@ def scan_fields(template_path):
     return names
 
 
-# 定宽字段：值短于占位符时补空格补足原宽度。
-# 套打里"年 月 日"三个字是**预印在纸上的固定位置**，模板用等宽的
-# {{年}}/{{月}}/{{日}} 占住那段空白。若直接把 {{月}}（4 个半角宽）换成
-# "7"（1 个半角宽），后面的"月"字就左移 3 个半角宽（14pt 下约 0.75cm），
-# 与纸上预印的"月"对不上。补足原宽后，无论一位数还是两位数，
-# 预印字符都纹丝不动；留空待手签时空白也原样保留。
-_FIXED_WIDTH_FIELDS = ('年', '月', '日')
+# 定宽字段 → 该字段的槽位宽度（全角宽）。
+# 套打里"年 月 日"三个字是**预印在纸上的固定位置**。若直接把占位符换成
+# "7"，后面的"月"字就跟着左移，与纸上预印的"月"对不上；一位数和两位数
+# 的月份还会落在不同位置。把值右对齐补空格到固定槽宽，数字紧贴其后的
+# 年/月/日，无论几位数预印字符都纹丝不动，留空待手签时空白也原样保留。
+#
+# 槽宽按数字本身该占的宽度定（年 4 个半角、月/日各 2 个半角），
+# **不是**按占位符 {{月}} 的字面宽度——那是标记的长度，不是纸上空白的
+# 宽度，照它补会补出一大段空档（用户反馈"年月日距离远"即出于此）。
+_FIXED_WIDTH_FIELDS = {'年': 2.0, '月': 1.0, '日': 1.0}
 
 # 需要梯形回行的字段（公文标题回行要求词意完整、排列对称）
 TITLE_FIELDS = ('标题', '题目')
@@ -110,7 +125,7 @@ def _replace_in_paragraph(para, values):
             key = m.group(1).strip()
             val = str(values.get(key, ''))
             if key in _FIXED_WIDTH_FIELDS:
-                return _pad_to_width(val, _text_width_units(m.group(0)))
+                return _pad_to_width(val, _FIXED_WIDTH_FIELDS[key])
             return val
         new = PLACEHOLDER_RE.sub(_sub, run.text)
         if new != run.text:
@@ -396,6 +411,64 @@ def _rebuild_lines(para, lines):
             run._r.append(OxmlElement('w:br'))
 
 
+
+
+def _run_prints(run):
+    """这个 run 会不会真的印到纸上：纯空白不印，白字是预印占位也不印。"""
+    if not run.text or not run.text.strip():
+        return False
+    color = run.font.color.rgb if run.font.color and run.font.color.rgb else None
+    return str(color) != 'FFFFFF'
+
+
+def trim_nonprinting_tail(doc, log=None):
+    """收窄"末尾纯占位空白"，让行放得下，返回收窄的段落数。
+
+    成文日期行长这样：`…11日[9 个空格][白色的 某地市某某单位的办公室制]`。
+    末尾这段既不打印（空格没内容、单位名是白字预印占位），又实实在在占宽度；
+    行一旦超出版心就折成两行，落款被顶到第二页——为一段根本不显影的文字
+    赔上一整页。
+
+    因此只裁**最后一个会打印的 run 之后**的纯空白 run：它们后面没有任何
+    黑字，裁掉不会让任何要打印的内容移位，套打对位分毫不受影响。
+    黑字之间的空格一个都不动——那些是把数字顶到预印空格里的，动了就打偏。
+    """
+    sec = doc.sections[0]
+    limit = ((sec.page_width.cm - sec.left_margin.cm - sec.right_margin.cm)
+             * TAIL_TRIM_RATIO)
+    n = 0
+    for para in doc.paragraphs:
+        if not para.text.strip():
+            continue
+        fs = _para_font_pt(para)
+        char_cm = fs / PT_PER_CM
+        if char_cm <= 0:
+            continue
+        runs = para.runs
+        last_print = -1
+        for i, r in enumerate(runs):
+            if _run_prints(r):
+                last_print = i
+        # last_print < 0 表示整行都不打印（日期全部留空待手签就是这种情况），
+        # 那整行的空白都可以裁——不裁的话这一行照样会折行占两行
+        changed = False
+        # 从最后往前裁尾部的纯空白 run
+        for r in reversed(runs[last_print + 1:]):
+            if _text_width_units(para.text.rstrip()) * char_cm <= limit:
+                break
+            if not r.text or r.text.strip():
+                continue
+            while r.text and _text_width_units(para.text.rstrip()) * char_cm > limit:
+                r.text = r.text[1:]
+                changed = True
+        if changed:
+            n += 1
+            if log:
+                log('info', '成文日期行末尾的占位空白已收窄，避免折行把落款顶到第二页'
+                            '（该处不打印，收窄不影响套打对位）')
+    return n
+
+
 def fit_one_page(doc, min_bottom_cm=0.6):
     """给套打表单留足分页余量：把下边距压到较小值。
 
@@ -550,16 +623,21 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
     # 整单就多占一行、可能被顶到第二页。这里只能告警不能自动收窄：
     # 那些空格是把"密级"等预印标签顶到纸上对应位置的，收窄会让黑字
     # 打偏。真正的解法是用户把内容写短些。
+    trim_nonprinting_tail(doc, log=log)
+
+    # 告警门槛用**名义**版心宽（另加 2% 容差），比排版计算用的 0.82 宽松得多：
+    # 排版留余量是内部的、代价只是字号小半档；告警是给人看的，
+    # 用同样紧的门槛会对"秘密★1年"这类完全正常的值天天报警，
+    # 反而把真正该看的提示淹掉。这里只在按最乐观的算法都放不下时才提醒。
     sec0 = doc.sections[0]
-    content_w = (sec0.page_width.cm - sec0.left_margin.cm - sec0.right_margin.cm)
+    content_w = ((sec0.page_width.cm - sec0.left_margin.cm - sec0.right_margin.cm)
+                 * 1.02)
     for p in doc.paragraphs:
         txt = p.text.rstrip()
         if not txt.strip():
             continue
         fs = _para_font_pt(p)
-        # 字宽是估算值（★、符号等未必正好一个全角宽），留 2% 容差，
-        # 免得刚过线一点就报警、把真正该看的提示淹掉
-        if _text_width_units(txt) * (fs / PT_PER_CM) > content_w * 1.02:
+        if _text_width_units(txt) * (fs / PT_PER_CM) > content_w:
             head = txt.strip()[:10]
             notes.append('【{}…】这一行超出版心宽度，会折成两行、整单可能多占一行，'
                          '建议精简该行内容'.format(head))

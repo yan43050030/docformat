@@ -1072,15 +1072,35 @@ def test_overprint():
     assert _white_pos(_d3) == _white_pos(_d1), '留空时预印的年/月/日位置变了'
 
     # ---- 成文日期行必须一行放得下：多出来的那一行会把整单顶到第二页 ----
-    # （模板原先这一行 38.5 全角宽 > 版心 33.3，自带模板就折行占两行）
+    # 实机曾出现"按名义字宽算 16.05cm < 版心 16.45cm 本该放得下，却折了行"，
+    # 原因是那一行的空白 run 用 CJK 字体、空格未必是半角。所以要按**悲观**
+    # 算法（CJK 字体里的空格算全角）也放得下，才算真的安全。
     _limit_u = (_pg['width_cm'] - _pg['left_cm'] - _pg['right_cm']) / (14 / op.PT_PER_CM)
+
+    def _pess_units(_para):
+        _u = 0.0
+        for _r in _para.runs:
+            _rp = _r._r.find(qn('w:rPr'))
+            _f = _rp.find(qn('w:rFonts')) if _rp is not None else None
+            _a = (_f.get(qn('w:ascii')) or '') if _f is not None else ''
+            _cjk = any(_x in _a for _x in ('楷体', '宋', '黑体', '仿宋'))
+            for _ch in _r.text:
+                _u += 1.0 if (ord(_ch) > 0x2E80 or (_ch == ' ' and _cjk)) else 0.5
+        return _u
+
     for _dp in (_d1, _d2, _d3):
-        _dt = [_p4.text.rstrip() for _p4 in Document(_dp).paragraphs
-               if '年' in _p4.text and '月' in _p4.text]
-        assert _dt, '找不到成文日期行'
-        assert op._text_width_units(_dt[-1]) <= _limit_u, \
-            '成文日期行宽 {:.1f} 超版心 {:.1f}，会多占一行'.format(
-                op._text_width_units(_dt[-1]), _limit_u)
+        _dps = [_p4 for _p4 in Document(_dp).paragraphs
+                if '年' in _p4.text and '月' in _p4.text]
+        assert _dps, '找不到成文日期行'
+        _dt = _dps[-1]
+        assert op._text_width_units(_dt.text.rstrip()) <= _limit_u, \
+            '成文日期行（乐观）宽 {:.1f} 超版心 {:.1f}'.format(
+                op._text_width_units(_dt.text.rstrip()), _limit_u)
+        assert _pess_units(_dt) <= _limit_u, \
+            '成文日期行（悲观）宽 {:.1f} 超版心 {:.1f}，实机可能折行'.format(
+                _pess_units(_dt), _limit_u)
+        # 裁的是末尾占位空白，白色单位名不能被一起删掉
+        assert '某地市' in _dt.text, '收窄把白色单位名也删了'
     # 值太长把某行撑出版心时要如实告警，而不是闷声折行
     _ov = os.path.join(OUT_DIR, 'overprint_wide.docx')
     _n2, _notes2 = op.fill_form(tpl, dict(base, 密级='绝密★长期特别提示补充说明'), _ov)
