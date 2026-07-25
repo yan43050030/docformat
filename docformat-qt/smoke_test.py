@@ -560,6 +560,91 @@ def test_exporter():
     print('[7n] 导出 PDF：路径避让 + 缺引擎时报错不崩 通过')
 
 
+def test_overprint():
+    """套打：字段扫描/填充保留几何/合并宽度/长文自适应/固定行不误缩"""
+    from docx.oxml.ns import qn
+    from scripts import overprint as op
+    tpl = os.path.join(os.path.dirname(__file__), 'templates', '套打', '文件送审单.docx')
+    assert os.path.exists(tpl), '自带套打模板缺失'
+
+    fields = op.scan_fields(tpl)
+    for need in ('标题', '拟办意见', '承办部门', '经办人', '电话', '密级', '年', '月', '日'):
+        assert need in fields, '缺少字段 {}：{}'.format(need, fields)
+
+    src = Document(tpl)
+    st = src.tables[0]
+    # 套打机制必须保留：白色文字占位 + 白色边框
+    tblPr = st._tbl.find(qn('w:tblPr'))
+    borders = tblPr.find(qn('w:tblBorders'))
+    assert borders is not None, '表格应有边框定义'
+    assert borders.find(qn('w:top')).get(qn('w:color')) == 'FFFFFF', \
+        '预印框线应为白色（不显影）'
+    whites = 0
+    for p in src.paragraphs:
+        for r in p.runs:
+            c = r.font.color.rgb if r.font.color and r.font.color.rgb else None
+            if str(c) == 'FFFFFF' and r.text.strip():
+                whites += 1
+    assert whites > 0, '模板应含白色占位文字'
+
+    # 合并单元格宽度按 gridSpan 累加（只读 tcW 会低估、导致误缩字号）
+    widths = {}
+    for cell in op._iter_cells(st):
+        widths[cell.text.strip()] = round(op._cell_width_cm(st, cell), 2)
+
+    def _w(prefix):
+        for k, v in widths.items():
+            if k.startswith(prefix):
+                return v
+        return 0
+    assert _w('领导批示') > 15, '整行合并单元格宽度应接近表宽: {}'.format(widths)
+    assert _w('承办部门') > 6, '跨两列的单元格宽度应累加: {}'.format(widths)
+    assert _w('标  题') < 3, '未合并的窄列不应被算宽: {}'.format(widths)
+
+    base = {'紧急程度': '特急', '密级': '秘密★1年', '标题': '关于报送年度总结的请示',
+            '承办部门': '办公室', '经办人': '张三', '电话': '12345678',
+            '文字校核': '李四', '年': '2026', '月': '7', '日': '25'}
+
+    def _fill(text, name):
+        v = dict(base); v['拟办意见'] = text
+        out = os.path.join(OUT_DIR, 'overprint_{}.docx'.format(name))
+        logs = []
+        n, notes = op.fill_form(tpl, v, out, log=lambda l, m: logs.append(m))
+        return out, n, notes, logs
+
+    # 短内容：不该缩任何字号（缩了反而与预印栏位错位）
+    out_s, n, notes, logs = _fill('因工作需要，拟报请领导审批。请审示。', 'short')
+    assert n == 11, '应填入 11 个字段: {}'.format(n)
+    assert not logs, '短内容不应触发缩放: {}'.format(logs)
+    assert not notes
+    doc = Document(out_s)
+    txt = '\n'.join(p.text for p in doc.paragraphs)
+    assert '秘密★1年' in txt and '2026' in txt, '顶部字段未填入'
+    assert '{{' not in txt, '仍有未替换的占位符'
+    # 几何必须原样保留
+    assert abs(doc.sections[0].top_margin.cm - src.sections[0].top_margin.cm) < 0.01, \
+        '页边距被改动，套打会错位'
+    dt = doc.tables[0]
+    for r0, r1 in zip(src.tables[0].rows, dt.rows):
+        assert op._row_height_cm(r0) == op._row_height_cm(r1), '行高被改动，套打会错位'
+
+    # 长内容：应缩字号；固定高度行(经办人所在行)不应被连带缩
+    out_l, _n, notes_l, logs_l = _fill('因某某事项需要进一步开展调查核实工作，' * 14, 'long')
+    assert any('拟办意见' in m for m in logs_l), '长内容应触发拟办意见缩放: {}'.format(logs_l)
+    assert not any('经 办 人' in m for m in logs_l), \
+        '固定高度行会裁切而非撑高，不应误缩: {}'.format(logs_l)
+
+    # 极长：缩到下限仍放不下应如实告警，而不是悄悄溢出
+    _o, _n2, notes_x, _l = _fill('因某某事项需要进一步开展调查核实工作，' * 30, 'huge')
+    assert notes_x and '过长' in notes_x[0], '极长内容应给出告警: {}'.format(notes_x)
+
+    # 行数估算：ASCII 按半角计，行尾空格不计
+    assert op.estimate_lines('中文' * 10, 14, 10.0) == op.estimate_lines(
+        '中文' * 10 + '   ', 14, 10.0), '行尾空格不应多算一行'
+    assert op.estimate_lines('abcd', 14, 10.0) == 1
+    print('[7o] 套打：字段/几何保留/合并宽度/长文自适应/固定行不误缩 通过')
+
+
 def test_gb_header_record():
     """版头红线/版记分隔线（flags 开启）+ 副标题识别"""
     from docx.oxml.ns import qn
@@ -842,6 +927,7 @@ if __name__ == '__main__':
     test_toc()
     test_compare()
     test_exporter()
+    test_overprint()
     test_gb_header_record()
     test_image_protection()
     test_redaction()

@@ -25,6 +25,7 @@ TOOLS = [
     (MODE_PDF, '导出 PDF', '用 Word/WPS 或 LibreOffice 导出，目录域会先更新为最终页码'),
     (MODE_TO_DOCX, '转为 docx', '把 .doc/.wps 老文档批量转成 .docx，不做排版改动'),
     ('compare', '版本比对', '选两个版本，输出改动对照件；有 Word/WPS 时用原生修订痕迹'),
+    ('overprint', '套打填写', '填内容打到预印红头纸上，位置与预印栏位严格对齐'),
 ]
 
 # 说明文字长度保持相近，卡片换行行数一致、高度整齐
@@ -658,6 +659,9 @@ class HomePage(QWidget):
         if tool_id == 'compare':
             self._run_compare()
             return
+        if tool_id == 'overprint':
+            self._run_overprint()
+            return
         if not self.files:
             QMessageBox.information(self, "提示", "请先选择要处理的文件")
             return
@@ -678,6 +682,19 @@ class HomePage(QWidget):
         self.logMessage.emit('info', '开始{}：{} 个文件'.format(label, len(self.files)))
         self._set_busy(True)
         self.worker.start()
+
+    def _run_overprint(self):
+        """套打填写：选模板 → 填字段 → 生成"""
+        from app.overprint_dialog import OverprintDialog
+        dlg = OverprintDialog(self)
+        if dlg.exec_() == OverprintDialog.Accepted:
+            out = getattr(dlg, 'result_path', None)
+            if out:
+                self._outputs = [out]
+                self.open_out_btn.setVisible(True)
+                self.status_label.setText('套打文件已生成：{}'.format(os.path.basename(out)))
+                self.logMessage.emit('success', '套打文件已生成：{}'.format(out))
+                self._auto_open_outputs()
 
     def _run_compare(self):
         """版本比对：另选两个文件，输出改动对照件"""

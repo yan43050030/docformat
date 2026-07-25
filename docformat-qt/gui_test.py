@@ -486,7 +486,7 @@ print('[19] 模式卡片 6 张等高无空位 + 目录合并为单一入口 ✓'
 # ---------- 17. 转换与工具行（不占模式网格，点击即执行）----------
 from app.pages.home_page import TOOLS as _TOOLS
 from app.worker import MODE_PDF as _MPDF, MODE_TO_DOCX as _MDOCX
-assert len(_TOOLS) == 3, '工具应有 3 个: {}'.format(len(_TOOLS))
+assert len(_TOOLS) == 4, '工具应有 4 个: {}'.format(len(_TOOLS))
 for _tid, _lbl, _tip in _TOOLS:
     assert _tid in home._tool_buttons, '缺少工具按钮 {}'.format(_tid)
     assert home._tool_buttons[_tid].toolTip(), '工具按钮应有说明: {}'.format(_tid)
@@ -505,7 +505,23 @@ home.run_tool(_MPDF)
 _r2 = wait_for(home.worker.allFinished)
 assert _r2 is not None, '导出 PDF 未正常结束'
 assert _r2[0] + _r2[1] == 1, '导出 PDF 应处理 1 个文件: {}'.format(_r2)
-print('[20] 转换与工具：3 个按钮独立于模式网格，转 docx/导出 PDF 均正常收尾 ✓')
+print('[20] 转换与工具：4 个按钮独立于模式网格，转 docx/导出 PDF 均正常收尾 ✓')
+
+# ---------- 18. 套打填写对话框 ----------
+from app.overprint_dialog import OverprintDialog as _OD
+assert 'overprint' in home._tool_buttons, '缺少套打填写入口'
+_od = _OD()
+try:
+    assert _od.tpl_combo.count() >= 1, '未发现自带套打模板'
+    _flds = list(_od._editors.keys())
+    for _n in ('标题', '拟办意见', '承办部门', '经办人', '电话'):
+        assert _n in _flds, '套打字段缺失 {}：{}'.format(_n, _flds)
+    from PyQt5.QtWidgets import QPlainTextEdit as _QPTE, QLineEdit as _QLE
+    assert isinstance(_od._editors['拟办意见'], _QPTE), '长文本字段应为多行输入'
+    assert isinstance(_od._editors['标题'], _QLE), '短字段应为单行输入'
+finally:
+    _od.reject()
+print('[21] 套打填写：模板发现 + 字段生成 + 长短字段区分 ✓')
 
 
 
