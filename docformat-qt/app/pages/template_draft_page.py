@@ -674,12 +674,32 @@ class TemplateDraftPage(QWidget):
 
         dbb = QDialogButtonBox()
         btn_add = QPushButton("添加目录")
+        btn_open = QPushButton("打开选中目录")
         btn_remove = QPushButton("移除选中")
         btn_close = QPushButton("关闭")
         dbb.addButton(btn_add, QDialogButtonBox.ActionRole)
+        dbb.addButton(btn_open, QDialogButtonBox.ActionRole)
         dbb.addButton(btn_remove, QDialogButtonBox.ActionRole)
         dbb.addButton(btn_close, QDialogButtonBox.AcceptRole)
         dlv.addWidget(dbb)
+
+        def do_open():
+            sel = dl_list.currentItem()
+            if sel is None:
+                if dl_list.count():
+                    sel = dl_list.item(0)
+                else:
+                    return
+            d = sel.data(Qt.UserRole)
+            from PyQt5.QtCore import QUrl
+            from PyQt5.QtGui import QDesktopServices
+            try:
+                os.makedirs(d, exist_ok=True)
+            except Exception:
+                pass
+            QDesktopServices.openUrl(QUrl.fromLocalFile(d))
+
+        btn_open.clicked.connect(do_open)
 
         def do_add():
             d = QFileDialog.getExistingDirectory(dlg, "选择模板目录", os.path.expanduser("~"))

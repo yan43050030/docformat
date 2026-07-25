@@ -718,6 +718,28 @@ def test_overprint():
     _empty = _re2.findall(r'<w:r>(?:(?!<w:t[ >]).)*?</w:r>', _x, _re2.S)
     assert not _empty, '模板残留 {} 个空 run'.format(len(_empty))
 
+    # 用户自带的模板可能残留空 run，填充时也应清掉（防御）
+    import shutil as _sh
+    dirty = os.path.join(OUT_DIR, 'overprint_dirty_tpl.docx')
+    _sh.copyfile(tpl, dirty)
+    _dd = Document(dirty)
+    from docx.oxml import OxmlElement as _OE
+    for _c in op._iter_cells(_dd.tables[0]):
+        for _p in _c.paragraphs:
+            if _p.runs:
+                _r = _OE('w:r'); _r.append(_OE('w:rPr')); _p.runs[0]._r.addnext(_r)
+    _dd.save(dirty)
+    _before = len(_re2.findall(r'<w:r>(?:(?!<w:t[ >]).)*?</w:r>',
+                               _zf.ZipFile(dirty).read('word/document.xml').decode('utf-8'),
+                               _re2.S))
+    assert _before, '注入空 run 失败，测试无效'
+    dclean = os.path.join(OUT_DIR, 'overprint_dirty_out.docx')
+    op.fill_form(dirty, {'标题': '关于某事项的请示', '拟办意见': '内容。'}, dclean)
+    _after = len(_re2.findall(r'<w:r>(?:(?!<w:t[ >]).)*?</w:r>',
+                              _zf.ZipFile(dclean).read('word/document.xml').decode('utf-8'),
+                              _re2.S))
+    assert _after == 0, '填充后仍残留 {} 个空 run'.format(_after)
+
     # --- 空值：经办人等留空供手写签字，应干净留白 ---
     import re as _re
     blank = dict(base); blank['拟办意见'] = '因工作需要，拟报请审批。'

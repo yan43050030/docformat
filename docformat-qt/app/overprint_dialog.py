@@ -54,6 +54,18 @@ class OverprintDialog(QDialog):
         add_btn.setToolTip("导入自己的套打模板 docx（含 {{字段名}} 占位符）")
         add_btn.clicked.connect(self._import_template)
         row.addWidget(add_btn)
+        self.edit_btn = QPushButton("修改模板…")
+        self.edit_btn.setCursor(Qt.PointingHandCursor)
+        self.edit_btn.setToolTip(
+            "在 Word/WPS 里打开模板修改，比如把白色的单位名改成你的真实单位名。\n"
+            "自带模板随软件安装、不可直接改，会先复制一份到你的模板目录再打开。")
+        self.edit_btn.clicked.connect(self._edit_template)
+        row.addWidget(self.edit_btn)
+        open_dir = QPushButton("模板目录")
+        open_dir.setCursor(Qt.PointingHandCursor)
+        open_dir.setToolTip("打开存放套打模板的文件夹")
+        open_dir.clicked.connect(self._open_template_dir)
+        row.addWidget(open_dir)
         root.addLayout(row)
 
         src_row = QHBoxLayout()
@@ -283,6 +295,82 @@ class OverprintDialog(QDialog):
             msg += "；未识别：{}（请手工补填）".format('、'.join(missing))
         self.status.setText(msg)
 
+    # ---------- 模板目录 / 修改模板 ----------
+    def _open_template_dir(self):
+        from PyQt5.QtCore import QUrl
+        from PyQt5.QtGui import QDesktopServices
+        d = overprint.user_overprint_dir()
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception as e:
+            QMessageBox.warning(self, "无法打开", str(e))
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(d))
+        self.status.setText("套打模板目录：{}".format(d))
+
+    def _edit_template(self):
+        """在 Word/WPS 里打开模板修改。
+
+        自带模板随软件安装（打包后在只读的临时目录里），不能直接改，
+        先复制一份到用户模板目录，之后修改的就是这份副本。
+        """
+        path = self._template_path
+        if not path or not os.path.exists(path):
+            QMessageBox.information(self, "提示", "请先选择套打模板")
+            return
+        bundled = os.path.normpath(overprint.bundled_overprint_dir())
+        is_bundled = os.path.normpath(os.path.dirname(path)) == bundled
+        if is_bundled:
+            ret = QMessageBox.question(
+                self, "自带模板不可直接修改",
+                "「{}」是软件自带模板，随软件安装、更新时会被覆盖。\n\n"
+                "现在复制一份到你的模板目录，之后修改这份副本？\n"
+                "（副本会出现在模板下拉里，自带的那份保持不变）".format(
+                    os.path.splitext(os.path.basename(path))[0]),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if ret != QMessageBox.Yes:
+                return
+            import shutil
+            d = overprint.user_overprint_dir()
+            os.makedirs(d, exist_ok=True)
+            stem, ext = os.path.splitext(os.path.basename(path))
+            dest = os.path.join(d, '{}（我的）{}'.format(stem, ext))
+            n = 2
+            while os.path.exists(dest):
+                dest = os.path.join(d, '{}（我的{}）{}'.format(stem, n, ext))
+                n += 1
+            try:
+                shutil.copyfile(path, dest)
+            except Exception as e:
+                QMessageBox.warning(self, "复制失败", str(e))
+                return
+            self._reload_templates(select=dest)
+            path = dest
+
+        from PyQt5.QtCore import QUrl
+        from PyQt5.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        QMessageBox.information(
+            self, "已打开模板",
+            "模板已用系统默认程序打开：\n{}\n\n"
+            "修改要点：\n"
+            "· 纸上已预印的内容（单位名、栏目名、表格线）保持**白色**——"
+            "它们只占位、不打印，改成你的真实单位名也不会印出来；\n"
+            "· 要填的位置写成 {{{{字段名}}}}，软件会据此生成填写栏；\n"
+            "· 不要改动页边距、行高、列宽，否则套打会错位。\n\n"
+            "改完保存，回到本窗口重新选一次模板即可生效。".format(path))
+
+    def _reload_templates(self, select=None):
+        self._templates = overprint.list_templates()
+        self.tpl_combo.blockSignals(True)
+        self.tpl_combo.clear()
+        for name, p, builtin in self._templates:
+            self.tpl_combo.addItem('{}{}'.format(name, '（自带）' if builtin else ''), p)
+        idx = self.tpl_combo.findData(select) if select else -1
+        self.tpl_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.tpl_combo.blockSignals(False)
+        self._load_fields()
+
     def _import_template(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "选择套打模板", "", "Word 文档 (*.docx)")
@@ -312,15 +400,7 @@ class OverprintDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "导入失败", str(e))
             return
-        self._templates = overprint.list_templates()
-        self.tpl_combo.blockSignals(True)
-        self.tpl_combo.clear()
-        for name, p, builtin in self._templates:
-            self.tpl_combo.addItem('{}{}'.format(name, '（自带）' if builtin else ''), p)
-        idx = self.tpl_combo.findData(dest)
-        self.tpl_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self.tpl_combo.blockSignals(False)
-        self._load_fields()
+        self._reload_templates(select=dest)
 
     # ---------- 生成 ----------
     def _generate(self):

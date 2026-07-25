@@ -337,6 +337,32 @@ def lock_row_heights(doc):
     return n
 
 
+# 承载结构（图片/换行/制表/域）的 run 不能当空 run 删掉
+_STRUCT_TAGS = ('w:drawing', 'w:pict', 'w:object', 'w:br', 'w:tab',
+                'w:fldChar', 'w:instrText', 'w:sym', 'w:cr')
+
+
+def strip_empty_runs(doc):
+    """删除既无文字、也不承载结构的空 run，返回删除个数。
+
+    把模板里的示例文字换成占位符时，多余的 run 会被清空却留在原地。
+    这些空壳在 Word 里通常不显示，但在部分版本/WPS 下可能带出多余标记，
+    且会让文件越积越乱，填充时统一清掉。
+    """
+    n = 0
+    for para, _cell in _iter_paragraphs(doc):
+        for run in list(para.runs):
+            if run.text:
+                continue
+            if any(run._r.find(qn(t)) is not None for t in _STRUCT_TAGS):
+                continue
+            parent = run._r.getparent()
+            if parent is not None:
+                parent.remove(run._r)
+                n += 1
+    return n
+
+
 def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False):
     """在内存 Document 上完成填充→自适应→锁高，返回 (已填数, 提示, 单元格报告)。
 
@@ -385,6 +411,10 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False):
                 'shrunk': bool(shrunk),
                 'overflow': bool(overflow),
             })
+
+    stripped = strip_empty_runs(doc)
+    if stripped and log:
+        log('info', '清理模板残留空标记 {} 处'.format(stripped))
 
     if lock_heights:
         locked = lock_row_heights(doc)

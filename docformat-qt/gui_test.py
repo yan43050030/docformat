@@ -615,6 +615,30 @@ finally:
     _od4.reject()
 print('[24] 套打预览：块顺序与真实文档一致（日期在表格后） ✓')
 
+# ---------- 22. 模板目录入口与"修改模板" ----------
+from scripts import overprint as _op2
+_od5 = _OD()
+try:
+    _btns = [b.text() for b in _od5.findChildren(type(_od5.edit_btn))]
+    for _need in ('修改模板…', '模板目录', '添加模板…'):
+        assert _need in _btns, '缺少按钮 {}：{}'.format(_need, _btns)
+    # 自带模板不可直接改：应能复制一份到用户目录
+    _cur = _od5._template_path
+    assert os.path.normpath(os.path.dirname(_cur)) == \
+        os.path.normpath(_op2.bundled_overprint_dir()), '默认应选中自带模板'
+    _ud = _op2.user_overprint_dir()
+    os.makedirs(_ud, exist_ok=True)
+    import shutil as _sh2
+    _copy = os.path.join(_ud, 'GUI测试副本.docx')
+    _sh2.copyfile(_cur, _copy)
+    _od5._reload_templates(select=_copy)
+    assert _od5._template_path == _copy, '重载后未选中副本'
+    assert _od5._editors, '副本应能扫出字段'
+    os.remove(_copy)
+finally:
+    _od5.reject()
+print('[25] 套打模板：目录入口 + 自带模板可复制为可改副本 ✓')
+
 
 
 # ---------- 12. v3.0 易用性 ----------
