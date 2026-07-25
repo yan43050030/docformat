@@ -611,9 +611,40 @@ try:
     _i_date = _txt.find('2026')
     assert _i_tbl > 0 and _i_date > 0, '预览缺少表格或日期'
     assert _i_date > _i_tbl, '成文日期应排在表格之后，与实际版面一致'
+
+    # 各栏宽度比例必须与模板一致。曾经把整张表画成一个 <table>：各行分栏
+    # 并不相同（标题行 2.67+13.83、承办行 6.77+9.73、批示行整行合并），
+    # Qt 把它们合成同一套列约束，标题栏被撑到 53%，与真实版面完全对不上。
+    from PyQt5.QtGui import QTextTable as _QTT
+    _doc = _od4.preview.document()
+    _doc.setTextWidth(880)
+    _lay = _doc.documentLayout()
+    _tables = []
+
+    def _walk(_f):
+        for _ch in _f.childFrames():
+            if isinstance(_ch, _QTT):
+                _tables.append(_ch)
+            _walk(_ch)
+    _walk(_doc.rootFrame())
+    _plan4 = _od4._last_plan
+    _exp = [[_c['width_cm'] for _c in _r['cells']]
+            for _b in _plan4['blocks'] if _b['kind'] == 'table' for _r in _b['rows']]
+    assert len(_tables) == len(_exp), '预览表格行数 {} ≠ 模板 {}'.format(
+        len(_tables), len(_exp))
+    for _t, _e in zip(_tables, _exp):
+        _ws = [_lay.blockBoundingRect(
+            _t.cellAt(0, _c).firstCursorPosition().block()).width()
+            for _c in range(_t.columns())]
+        _tot = sum(_ws) or 1.0
+        for _got, _want in zip(_ws, _e):
+            _got_pct = _got / _tot * 100.0
+            _want_pct = _want / sum(_e) * 100.0
+            assert abs(_got_pct - _want_pct) <= 3.0, \
+                '栏宽比例 {:.1f}% 应为 {:.1f}%'.format(_got_pct, _want_pct)
 finally:
     _od4.reject()
-print('[24] 套打预览：块顺序与真实文档一致（日期在表格后） ✓')
+print('[24] 套打预览：块顺序与真实文档一致（日期在表格后）+ 栏宽比例与模板一致 ✓')
 
 # ---------- 22. 模板目录入口与"修改模板" ----------
 from scripts import overprint as _op2

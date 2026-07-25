@@ -227,6 +227,7 @@ class OverprintDialog(QDialog):
             self.preview.setHtml('<body style="color:#888;font-family:SimSun">'
                                  '预览失败：{}</body>'.format(e))
             return
+        self._last_plan = plan
         pos = self.preview.verticalScrollBar().value()
         self.preview.setHtml(render_overprint_html(plan))
         self.preview.verticalScrollBar().setValue(pos)
@@ -487,12 +488,20 @@ def render_overprint_html(plan, scale=1.0):
     字号按自适应后的实际磅值缩放——"字变得特别小"在预览里肉眼可见。
     表格线按模板的 tblBorders 画：左右外框为 none 就不画，
     否则会凭空多出竖线、与真实版面对不上。
+
+    每一行单独画成一张一行的表：套打单里各行的分栏并不一致——标题行是
+    2.67+13.83，承办部门行是 6.77+9.73，领导批示行是整行合并的一格。
+    合在一张表里时 Qt 会把这些互相冲突的宽度合成同一套列约束（整行合并
+    的那格没有 colspan，被当成第一列的宽度），标题栏就被撑到半幅宽，
+    与真实版面完全对不上。逐行成表后各行只受自己的宽度约束。
+    宽度用百分比而非像素：Qt 富文本对像素宽度只当"建议值"，
+    内容稍长就会自行重新分配。
     """
     page = plan['page']
     cw = plan['content_w_cm']
     W = cw * _PX_PER_CM * scale
     parts = ['<div style="width:{:.0f}px;background:#FFF;'
-             'border:1px solid #D8D2C4;padding:6px 2px;">'.format(W)]
+             'border:1px solid #D8D2C4;padding:6px 0;">'.format(W)]
 
     LINE = '1px solid #D9534F'
     NONE = '0'
@@ -505,15 +514,17 @@ def render_overprint_html(plan, scale=1.0):
             continue
         b = blk.get('borders') or {}
         rows = blk['rows']
-        parts.append('<table cellspacing="0" cellpadding="0" '
-                     'style="width:{:.0f}px;border-collapse:collapse;margin:4px 0">'
-                     .format(W))
         for ri, row in enumerate(rows):
             h = row['height_cm'] * _PX_PER_CM * scale
-            parts.append('<tr>')
+            widths = [max(0.01, c.get('width_cm') or 0.01) for c in row['cells']]
+            total = sum(widths) or 1.0
+            parts.append(
+                '<table cellspacing="0" cellpadding="0" '
+                'style="width:{:.0f}px;border-collapse:collapse;margin:0">'
+                '<tr>'.format(W))
             n = len(row['cells'])
             for ci, c in enumerate(row['cells']):
-                w = c['width_cm'] * _PX_PER_CM * scale
+                w = widths[ci] / total * 100.0
                 top = LINE if (ri == 0 and b.get('top') != 'none') or \
                     (ri > 0 and b.get('insideH') != 'none') else NONE
                 bottom = LINE if (ri == len(rows) - 1 and b.get('bottom') != 'none') \
@@ -533,14 +544,13 @@ def render_overprint_html(plan, scale=1.0):
                                  c.get('orig_font_pt'), c.get('font_pt'),
                                  ' · 仍偏长' if c.get('overflow') else ''))
                 parts.append(
-                    '<td style="width:{:.0f}px;height:{:.0f}px;{}'
+                    '<td width="{:.2f}%" style="width:{:.2f}%;height:{:.0f}px;{}'
                     'border-top:{};border-bottom:{};border-left:{};border-right:{};'
-                    'vertical-align:top;padding:2px 3px;overflow:hidden;">'
+                    'vertical-align:top;padding:2px 3px;">'
                     '<div style="white-space:pre-wrap;line-height:1.25;">{}</div>{}</td>'
-                    .format(w, h, bg, top, bottom, left, right,
+                    .format(w, w, h, bg, top, bottom, left, right,
                             _segs_html(c['segs'], scale), badge))
-            parts.append('</tr>')
-        parts.append('</table>')
+            parts.append('</tr></table>')
     parts.append('</div>')
     return ('<html><body style="margin:6px;font-family:SimSun,serif;background:#F3F1EC">'
             + ''.join(parts) + '</body></html>')
