@@ -310,7 +310,31 @@ def autofit_cell(table, cell, warn=None):
     return True, final, not fits
 
 
-def fill_form(template_path, values, output_path, autofit=True, log=None):
+def lock_row_heights(doc):
+    """把所有已设高度的行改为固定高度（hRule=exact），返回锁定的行数。
+
+    套打的命门是几何绝对不能变。atLeast 行一旦内容超长，Word 会把行撑高、
+    下面所有内容整体下移，与预印栏位全部错位——这比文字被裁掉严重得多。
+    改成 exact 后 Word 物理上无法撑高，版面永远对得住预印纸；
+    配合自适应缩字号，正常内容都能放下，实在放不下会明确告警。
+    """
+    n = 0
+    for table in doc.tables:
+        for row in table.rows:
+            trPr = row._tr.find(qn('w:trPr'))
+            if trPr is None:
+                continue
+            he = trPr.find(qn('w:trHeight'))
+            if he is None:
+                continue
+            if he.get(qn('w:hRule')) != 'exact':
+                he.set(qn('w:hRule'), 'exact')
+                n += 1
+    return n
+
+
+def fill_form(template_path, values, output_path, autofit=True, log=None,
+              lock_heights=True):
     """按 values 填充套打模板并另存，返回 (已填字段数, 提示列表)。"""
     from docx import Document
     doc = Document(template_path)
@@ -337,6 +361,11 @@ def fill_form(template_path, values, output_path, autofit=True, log=None):
                     log('info', '套打自适应：{} 区字号调整为 {}pt{}'.format(
                         (cell.text.strip().splitlines() or [''])[0][:12],
                         size, '（仍偏长）' if overflow else ''))
+
+    if lock_heights:
+        locked = lock_row_heights(doc)
+        if locked and log:
+            log('info', '已锁定 {} 行为固定高度，保证与预印栏位对齐'.format(locked))
 
     doc.save(output_path)
     used = [k for k in values if k in filled and str(values.get(k, '')).strip()]

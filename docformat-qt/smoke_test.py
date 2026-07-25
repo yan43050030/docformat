@@ -615,7 +615,7 @@ def test_overprint():
     # 短内容：不该缩任何字号（缩了反而与预印栏位错位）
     out_s, n, notes, logs = _fill('因工作需要，拟报请领导审批。请审示。', 'short')
     assert n == 11, '应填入 11 个字段: {}'.format(n)
-    assert not logs, '短内容不应触发缩放: {}'.format(logs)
+    assert not [m for m in logs if '自适应' in m], '短内容不应触发缩放: {}'.format(logs)
     assert not notes
     doc = Document(out_s)
     txt = '\n'.join(p.text for p in doc.paragraphs)
@@ -626,7 +626,10 @@ def test_overprint():
         '页边距被改动，套打会错位'
     dt = doc.tables[0]
     for r0, r1 in zip(src.tables[0].rows, dt.rows):
-        assert op._row_height_cm(r0) == op._row_height_cm(r1), '行高被改动，套打会错位'
+        h0, _e0 = op._row_height_cm(r0)
+        h1, e1 = op._row_height_cm(r1)
+        assert h0 == h1, '行高数值被改动，套打会错位: {} vs {}'.format(h0, h1)
+        assert e1, '输出应把行锁为固定高度，否则长内容会把行撑高'
 
     # 长内容：应缩字号；固定高度行(经办人所在行)不应被连带缩
     out_l, _n, notes_l, logs_l = _fill('因某某事项需要进一步开展调查核实工作，' * 14, 'long')
@@ -692,7 +695,21 @@ def test_overprint():
                     log=lambda l, m: lg.append(m))
     assert any('自适应' in m for m in lg), '适配长文时应缩字号: {}'.format(lg)
 
-    print('[7o] 套打：填充/几何保留/自适应 + docx 适配/日期拆格/中文数字日期 通过')
+    # --- 标题栏/拟办意见栏不得被撑高：无论内容多长，几何必须恒定 ---
+    geos = []
+    for mult, tmult in ((1, 1), (16, 1), (40, 4)):
+        v = dict(base)
+        v['拟办意见'] = '因某某事项需要进一步开展调查核实工作。' * mult
+        v['标题'] = '关于开展某某专项检查工作的请示' * tmult
+        o = os.path.join(OUT_DIR, 'overprint_geo_{}.docx'.format(mult))
+        op.fill_form(tpl, v, o)
+        geos.append([op._row_height_cm(r) for r in Document(o).tables[0].rows])
+    assert geos[0] == geos[1] == geos[2], \
+        '内容长短改变了表格几何，套打会错位: {}'.format(geos)
+    assert all(exact for h, exact in geos[0]), \
+        '所有行都应锁为固定高度，否则会被内容撑高: {}'.format(geos[0])
+
+    print('[7o] 套打：填充/几何锁定/自适应 + docx 适配/日期拆格/中文数字日期 通过')
 
 
 def test_gb_header_record():
