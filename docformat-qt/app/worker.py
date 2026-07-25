@@ -465,6 +465,10 @@ class ProcessWorker(QThread):
             from scripts.data_model import PRESETS
             preset = PRESETS.get(self.preset_name, PRESETS['official_gbk'])
         findings = compliance.check_compliance(doc, preset, self.compliance_options)
+        try:
+            preview_model = compliance.build_preview_model(doc, preset)
+        except Exception:
+            preview_model = []
         self._log('info', '合规检查完成: {}'.format(display_name))
         # 自动修正只支持 .docx 原文件（.doc/.wps 需先另存为 docx）
         fix_input = orig_path if orig_path.lower().endswith('.docx') else None
@@ -475,6 +479,7 @@ class ProcessWorker(QThread):
             'preset': preset,
             'preset_name': preset.get('name', ''),
             'fix_input': fix_input,
+            'preview': preview_model,
         })
         return compliance.format_compliance_report(display_name, findings, preset.get('name', ''))
 

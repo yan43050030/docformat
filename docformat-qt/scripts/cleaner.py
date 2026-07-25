@@ -57,6 +57,37 @@ DEFAULT_CLEAN['fields'] = False          # 域固化不可逆，让用户显式�
 
 CLEAN_LABELS = {k: n for k, n, _d in CLEAN_ITEMS}
 
+# 排版流程里的默认自动清洗集合。
+# 只收"排版引擎覆盖不到、且在规范公文里没有正当用途"的结构性垃圾——
+# 它们不影响文字内容与语义，清掉零风险，却正是排版怪问题的主要来源。
+# 刻意排除：
+#   breaks/bookmarks/comments  会改变可见断行或破坏交叉引用、批注；
+#   revisions/fields           不可逆，涉及内容取舍；
+#   para_align                 是标题等类型的识别线索，清掉削弱自动识别；
+#   char_format/styles         排版时本就按类型重设，无需在此重复。
+AUTO_CLEAN_ITEMS = {
+    'char_spacing': True,      # 字符间距/缩放/位置/字距——"字挤一起"的元凶
+    'emphasis': True,          # 着重号、拼音指南
+    'empty_runs': True,        # 空 run 及其残留格式
+    'borders_shading': True,   # 段落边框与底纹
+    'frame': True,             # 文本框式段落，会脱离正常文流
+    'para_format': True,       # 制表位、字符数式缩进等（磅值由排版重设）
+    'whitespace': True,        # 制表符、全角空格、连续空格
+}
+
+
+def auto_clean_items(preset):
+    """排版流程用的清洗项：预设可用 auto_clean_items 覆盖，auto_clean=False 关闭。"""
+    if not preset.get('auto_clean', True):
+        return None
+    items = {k: False for k, _n, _d in CLEAN_ITEMS}
+    items.update(AUTO_CLEAN_ITEMS)
+    override = preset.get('auto_clean_items')
+    if isinstance(override, dict):
+        items.update(override)
+    items['para_align'] = False      # 永不在排版流程中清对齐
+    return items
+
 
 # ---------------- 工具 ----------------
 
@@ -119,10 +150,6 @@ def _clean_char_format(para, stat):
                     stat['char_format'] += 1
             except (ValueError, AttributeError):
                 continue
-        rpr = _rpr_of(run)
-        if rpr is not None:
-            # 字符底纹/边框也属字符直接格式
-            stat['char_format'] += _drop(rpr, 'w:shd') + _drop(rpr, 'w:bdr')
 
 
 def _clean_char_spacing(para, stat):
@@ -226,6 +253,12 @@ def _clean_styles(para, stat):
 
 
 def _clean_borders_shading(para, stat):
+    # 字符级边框底纹（rPr 里的 w:bdr/w:shd）——set_font 不会清，
+    # 排版后残留会让文字带着黄底/方框，是常见的"排版后还是花的"来源
+    for run in para.runs:
+        rpr = _rpr_of(run)
+        if rpr is not None:
+            stat['borders_shading'] += _drop(rpr, 'w:shd') + _drop(rpr, 'w:bdr')
     ppr = para._p.find(qn('w:pPr'))
     if ppr is None:
         return

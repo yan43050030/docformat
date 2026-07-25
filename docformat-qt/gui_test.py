@@ -315,6 +315,33 @@ from app.worker import MODE_CLEAN as _MC
 assert _MC in home._mode_cards, '格式清洗模式卡片缺失'
 print('[17] 预览格式清洗：全文/部分段落标记 + 独立清洗模式 ✓')
 
+# ---------- 15. 合规检查「现状 vs 修正后」对比预览 ----------
+from docx import Document as _Doc
+from scripts import compliance as _cmp
+from app.compliance_report_dialog import ComplianceReportDialog as _CRD
+_pre = win.mgr.get('official_gbk')
+_dd = _Doc(SAMPLE)
+_res = [{'display': 'sample.docx', 'preset_name': _pre.get('name', ''), 'preset': _pre,
+         'fix_input': SAMPLE,
+         'findings': _cmp.check_compliance(_dd, _pre),
+         'preview': _cmp.build_preview_model(_dd, _pre)}]
+_dlg = _CRD(_res)
+try:
+    assert _dlg.tabs.count() == 2, '应有「问题清单」「对比预览」两个标签页'
+    _dlg.tabs.setCurrentIndex(1)
+    app.processEvents()
+    _hb = _dlg.pv_before.toHtml()
+    assert 'fff6d8' in _hb.lower(), '现状侧应用黄底标出偏差段'
+    assert '0 段' in _dlg.pv_note.text(), '未勾选时不应有待修正段: {}'.format(_dlg.pv_note.text())
+    _before_after = _dlg.pv_after.toHtml()
+    _dlg.select_all.setChecked(True)
+    app.processEvents()
+    assert _dlg.pv_after.toHtml() != _before_after, '勾选后「修正后」侧应即时变化'
+    assert '方正' in _dlg.pv_after.toHtml(), '修正后侧应呈现预设字体'
+finally:
+    _dlg.reject()
+print('[18] 合规检查对比预览：现状/修正后随勾选联动 ✓')
+
 
 
 # ---------- 12. v3.0 易用性 ----------

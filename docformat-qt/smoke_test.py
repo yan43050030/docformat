@@ -381,7 +381,51 @@ def test_cleaner():
             '{}: 清洗+排版后不应有偏差'.format(label)
     assert seen['raw'] == seen['cleaned'], \
         '清洗改变了类型识别结果：{} vs {}'.format(seen['raw'], seen['cleaned'])
-    print('[7k] 格式清洗：全文/部分段落/不伤识别 通过')
+    # --- 4. 排版流程默认自动清洗：结构性垃圾不再残留（四个预设都要干净）---
+    d4 = Document()
+    d4.add_paragraph('关于开展某某试点工作的通知'); d4.add_paragraph('各有关单位：')
+    p4 = d4.add_paragraph(); r4 = p4.add_run('为深入贯彻落实上级决策部署，现就开展试点工作通知如下。')
+    rpr = r4._r.get_or_add_rPr()
+    for tag, val in (('w:spacing', '40'), ('w:w', '150'), ('w:position', '6'), ('w:kern', '20')):
+        e = OxmlElement(tag); e.set(qn('w:val'), val); rpr.append(e)
+    _em = OxmlElement('w:em'); _em.set(qn('w:val'), 'dot'); rpr.append(_em)
+    _rs = OxmlElement('w:shd'); _rs.set(qn('w:fill'), '00FF00'); rpr.append(_rs)
+    _rb = OxmlElement('w:bdr'); _rb.set(qn('w:val'), 'single'); rpr.append(_rb)
+    ppr = p4._p.get_or_add_pPr()
+    _pb = OxmlElement('w:pBdr'); _bt = OxmlElement('w:bottom')
+    _bt.set(qn('w:val'), 'single'); _bt.set(qn('w:sz'), '8'); _pb.append(_bt); ppr.append(_pb)
+    _ps = OxmlElement('w:shd'); _ps.set(qn('w:fill'), 'FFFF00'); ppr.append(_ps)
+    _fp = OxmlElement('w:framePr'); _fp.set(qn('w:w'), '2000'); ppr.append(_fp)
+    _tb = OxmlElement('w:tabs'); _t1 = OxmlElement('w:tab')
+    _t1.set(qn('w:val'), 'left'); _t1.set(qn('w:pos'), '420'); _tb.append(_t1); ppr.append(_tb)
+    d4.add_paragraph('特此通知。'); d4.add_paragraph('某某办公室'); d4.add_paragraph('2026年7月25日')
+    s4 = os.path.join(OUT_DIR, 'autoclean_in.docx'); d4.save(s4)
+    for pname in ('official_gbk', 'official', 'academic', 'legal'):
+        o4 = os.path.join(OUT_DIR, 'autoclean_{}.docx'.format(pname))
+        format_document(s4, o4, preset_name=pname)
+        tgt = [q for q in Document(o4).paragraphs if '贯彻落实' in q.text][0]
+        _rp = tgt.runs[0]._r.find(qn('w:rPr')); _pp = tgt._p.find(qn('w:pPr'))
+        left = [n for n, el, tg in (
+            ('w:spacing', _rp, 'w:spacing'), ('w:w', _rp, 'w:w'),
+            ('w:position', _rp, 'w:position'), ('w:kern', _rp, 'w:kern'),
+            ('w:em', _rp, 'w:em'), ('字符shd', _rp, 'w:shd'), ('字符bdr', _rp, 'w:bdr'),
+            ('w:pBdr', _pp, 'w:pBdr'), ('段落shd', _pp, 'w:shd'),
+            ('framePr', _pp, 'w:framePr'), ('w:tabs', _pp, 'w:tabs'))
+            if el is not None and el.find(qn(tg)) is not None]
+        assert not left, '{} 排版后仍残留结构性垃圾：{}'.format(pname, left)
+
+    # --- 5. 合规对比预览模型：现状/修正后按认可项变化 ---
+    from scripts.compliance import build_preview_model, preview_spec_after
+    dm = Document(os.path.join(OUT_DIR, 'comp_in.docx'))
+    model = build_preview_model(dm, PRESETS['official_gbk'])
+    assert model and any(e['bad'] for e in model), '预览模型应标出偏差'
+    be = [e for e in model if e['ptype'] == 'body' and 'size' in e['bad']][0]
+    assert preview_spec_after(be, [])['size'] == be['actual']['size'], '未认可不应改变'
+    assert preview_spec_after(be, ['para:body:size'])['size'] == be['expected']['size'], \
+        '认可后应用预设字号'
+    assert preview_spec_after(be, ['para:body:size'])['font'] == be['actual']['font'], \
+        '只认可字号不应连字体一起改'
+    print('[7k] 格式清洗：全文/部分段落/不伤识别/排版默认清洗+合规预览 通过')
 
 
 def test_gb_header_record():

@@ -10,9 +10,75 @@
 """
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel,
-                             QPushButton, QScrollArea, QVBoxLayout, QWidget)
+                             QPushButton, QScrollArea, QSplitter, QTabWidget,
+                             QTextBrowser, QVBoxLayout, QWidget)
 
-from scripts.compliance import TYPE_LABELS, fix_label
+from scripts.compliance import (ALIGN_LABELS, TYPE_LABELS, fix_label,
+                                preview_spec_after)
+
+_ALIGN_CSS = {'left': 'left', 'center': 'center', 'right': 'right',
+              'justify': 'justify'}
+
+
+def _render_preview_html(entries, fix_keys, side):
+    """渲染合规预览。side='before' 用实际格式，'after' 按已认可项修正后的格式。
+
+    偏差处用底色标出；'after' 侧只有被认可的项才会变，未认可的保持现状。
+    """
+    approved = set(fix_keys)
+    parts = []
+    for e in entries:
+        spec = e['actual'] if side == 'before' else preview_spec_after(e, approved)
+        style = []
+        size = spec.get('size') or 16
+        style.append('font-size:{}pt'.format(size))
+        style.append('text-align:{}'.format(
+            _ALIGN_CSS.get(spec.get('align') or 'justify', 'justify')))
+        ind = spec.get('indent') or 0
+        if ind:
+            style.append('text-indent:{}pt'.format(ind))
+        ls = spec.get('line_spacing')
+        if ls:
+            style.append('line-height:{}pt'.format(ls))
+        if spec.get('bold'):
+            style.append('font-weight:bold')
+        sb = spec.get('space_before') or 0
+        sa = spec.get('space_after') or 0
+        style.append('margin:{}pt 0 {}pt 0'.format(sb, sa))
+        font = spec.get('font')
+        if font:
+            style.append("font-family:'{}'".format(font))
+
+        # 改动标记：before 侧标出所有偏差；after 侧标出本次会被改的
+        if side == 'before':
+            mark = bool(e['bad'])
+        else:
+            mark = any('para:{}:{}'.format(e['ptype'], a) in approved for a in e['bad'])
+        if mark:
+            style.append('background-color:#FFF6D8')
+        cls = ' class="chg"' if mark else ''
+        tag = TYPE_LABELS.get(e['ptype'], e['ptype'])
+        desc = '{} {}pt{} {}'.format(
+            font or '未设置', round(size, 1) if size else '?',
+            ' 粗' if spec.get('bold') else '',
+            ALIGN_LABELS.get(spec.get('align'), '未设置'))
+        parts.append(
+            '<p{} style="{}"><span class="tag">{} · 第{}段</span>'
+            '<span class="meta">{}</span><br>{}</p>'.format(
+                cls, '; '.join(style), tag, e['index'], desc, _esc(e['text'])))
+    return ('<html><head><style>'
+            'body {{ font-family:"SimSun",serif; font-size:12pt; margin:10px; }}'
+            'p {{ white-space:pre-wrap; padding:2px 4px; }}'
+            'p.chg {{ background:#FFF6D8; border-left:3px solid #E0A800; }}'
+            '.tag {{ font-size:8pt; color:#666; background:#F0EDE6; '
+            'border:1px solid #D8D2C4; border-radius:3px; padding:0 4px; '
+            'margin-right:6px; }}'
+            '.meta {{ font-size:8pt; color:#999; }}'
+            '</style></head><body>{}</body></html>').format(''.join(parts))
+
+
+def _esc(text):
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
 def _group_of(finding):
@@ -50,6 +116,10 @@ class ComplianceReportDialog(QDialog):
         tip.setWordWrap(True)
         root.addWidget(tip)
 
+        self.tabs = QTabWidget()
+        root.addWidget(self.tabs, 1)
+
+        # --- 标签页 1：问题清单（勾选认可项）---
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         host = QWidget()
@@ -61,7 +131,11 @@ class ComplianceReportDialog(QDialog):
         for ri, res in enumerate(results):
             body.addWidget(self._build_file_block(ri, res))
         body.addStretch(1)
-        root.addWidget(scroll, 1)
+        self.tabs.addTab(scroll, "问题清单")
+
+        # --- 标签页 2：现状 vs 修正后 对比预览 ---
+        self.tabs.addTab(self._build_preview_tab(), "对比预览")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         btns = QHBoxLayout()
         self.select_all = QCheckBox("全选可修正项")
@@ -80,6 +154,93 @@ class ComplianceReportDialog(QDialog):
         btns.addWidget(close_btn)
         btns.addWidget(self.apply_btn)
         root.addLayout(btns)
+
+    # ---------- 对比预览 ----------
+    def _build_preview_tab(self):
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(4, 8, 4, 4)
+        v.setSpacing(6)
+
+        bar = QHBoxLayout()
+        bar.addWidget(QLabel("预览文件："))
+        from PyQt5.QtWidgets import QComboBox
+        self.pv_combo = QComboBox()
+        for ri, res in enumerate(self._results):
+            self.pv_combo.addItem(res.get('display', ''), ri)
+        self.pv_combo.currentIndexChanged.connect(self._render_preview)
+        bar.addWidget(self.pv_combo, 1)
+        self.pv_note = QLabel("")
+        self.pv_note.setProperty("muted", "true")
+        bar.addWidget(self.pv_note)
+        v.addLayout(bar)
+
+        head = QHBoxLayout()
+        hl = QLabel("现状（黄底=存在偏差）")
+        hl.setProperty("sectionTitle", "true")
+        hr = QLabel("修正后（黄底=本次会被改）")
+        hr.setProperty("sectionTitle", "true")
+        head.addWidget(hl, 1)
+        head.addWidget(hr, 1)
+        v.addLayout(head)
+
+        split = QSplitter(Qt.Horizontal)
+        self.pv_before = QTextBrowser()
+        self.pv_after = QTextBrowser()
+        self._pv_lock = False
+        self.pv_before.verticalScrollBar().valueChanged.connect(
+            lambda _x: self._sync_pv(self.pv_before, self.pv_after))
+        self.pv_after.verticalScrollBar().valueChanged.connect(
+            lambda _x: self._sync_pv(self.pv_after, self.pv_before))
+        split.addWidget(self.pv_before)
+        split.addWidget(self.pv_after)
+        split.setSizes([400, 400])
+        v.addWidget(split, 1)
+        return page
+
+    def _sync_pv(self, src, dst):
+        if self._pv_lock:
+            return
+        self._pv_lock = True
+        try:
+            sb, db = src.verticalScrollBar(), dst.verticalScrollBar()
+            ratio = sb.value() / float(sb.maximum()) if sb.maximum() else 0
+            db.setValue(int(ratio * db.maximum()))
+        finally:
+            self._pv_lock = False
+
+    def _on_tab_changed(self, idx):
+        if idx == 1:
+            self._render_preview()
+
+    def _render_preview(self, *_a):
+        if not hasattr(self, 'pv_combo'):
+            return
+        ri = self.pv_combo.currentData()
+        if ri is None:
+            return
+        res = self._results[ri]
+        entries = res.get('preview') or []
+        if not entries:
+            empty = ('<html><body style="font-family:SimSun;margin:14px;color:#888">'
+                     '此文件无可预览的段落</body></html>')
+            self.pv_before.setHtml(empty)
+            self.pv_after.setHtml(empty)
+            self.pv_note.setText('')
+            return
+        keys = [k for k, cb in self._boxes.get(ri, {}).items() if cb.isChecked()]
+        para_keys = [k for k in keys if k.startswith('para:')]
+        pos_b = self.pv_before.verticalScrollBar().value()
+        self.pv_before.setHtml(_render_preview_html(entries, para_keys, 'before'))
+        self.pv_after.setHtml(_render_preview_html(entries, para_keys, 'after'))
+        self.pv_before.verticalScrollBar().setValue(pos_b)
+        n_bad = sum(1 for e in entries if e['bad'])
+        n_fix = sum(1 for e in entries
+                    if any('para:{}:{}'.format(e['ptype'], a) in set(para_keys)
+                           for a in e['bad']))
+        doc_keys = [k for k in keys if not k.startswith('para:')]
+        extra = '；另有 {} 项页面/内容级修正（不在此预览）'.format(len(doc_keys)) if doc_keys else ''
+        self.pv_note.setText('{} 段有偏差，本次将修正 {} 段{}'.format(n_bad, n_fix, extra))
 
     # ---------- 构建 ----------
     def _build_file_block(self, ri, res):
@@ -207,6 +368,9 @@ class ComplianceReportDialog(QDialog):
     def _refresh_apply(self, *_a):
         self.apply_btn.setEnabled(any(
             cb.isChecked() for keys in self._boxes.values() for cb in keys.values()))
+        # 勾选变化即时反映到对比预览
+        if getattr(self, 'tabs', None) is not None and self.tabs.currentIndex() == 1:
+            self._render_preview()
 
     def _on_apply(self):
         if any(cb.isChecked() for keys in self._boxes.values() for cb in keys.values()):

@@ -181,11 +181,21 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
     if preset.get('deep_clean', False):
         deep_clean_document(doc)
 
-    # v4.2.0: 格式清洗（疑难杂症专用），可全文或仅选定段落。
+    # v4.2.1: 默认自动清洗结构性垃圾（字符缩放/着重号/边框底纹/framePr/
+    # 制表位/空 run 等）。这些排版引擎覆盖不到，却是排版怪问题的主要来源；
+    # deep_clean 只动字体和段落间距，而那些本就会被 format_paragraph 重设。
+    from .cleaner import (auto_clean_items, clean_document,
+                          format_clean_summary)
+    _auto_items = auto_clean_items(preset)
+    if _auto_items:
+        _auto_stat = clean_document(doc, items=_auto_items)
+        if _auto_stat:
+            logger.info('自动清洗：%s', format_clean_summary(_auto_stat))
+
+    # v4.2.0: 用户指定的格式清洗（疑难杂症专用），可全文或仅选定段落。
     # 放在类型识别之前执行，但强制不清对齐——排版引擎把对齐当作
     # 标题等类型的识别线索，清掉会削弱自动识别；排版时本就会按类型重设。
     if clean_spec:
-        from .cleaner import clean_document, format_clean_summary
         _scope = clean_spec.get('scope', 'all')
         _items = dict(clean_spec.get('items') or {})
         _items['para_align'] = False

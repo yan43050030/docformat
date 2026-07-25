@@ -745,6 +745,88 @@ def apply_compliance_fixes(input_path, output_path, preset, fix_keys):
     return applied
 
 
+def build_preview_model(doc, preset, max_paras=400):
+    """为"现状 vs 修正后"对比预览提供逐段数据。
+
+    返回 [{'index': 段号, 'text': 文字, 'ptype': 类型,
+           'actual': {属性: 值}, 'expected': {属性: 值},
+           'bad': {属性: True}}]
+    属性值是可直接用于渲染的规格字典（字体/字号/加粗/对齐/缩进/行距/段距）。
+    """
+    from .paragraph import paragraph_has_media
+    typed = _detect_types(doc, preset)
+    out = []
+    for idx, para, ptype in typed[:max_paras]:
+        fmt = preset.get(ptype)
+        if not isinstance(fmt, dict):
+            fmt = preset.get('body', {})
+        has_media = paragraph_has_media(para)
+        exp_ls = _expected_line_spacing(fmt)
+        got_b, got_a = _actual_spacing(para)
+        align_rev = {v: k for k, v in _ALIGN_MAP.items()}
+        actual = {
+            'font': _actual_font(para),
+            'size': _actual_size(para),
+            'bold': bool(_actual_bold(para)),
+            'align': align_rev.get(_actual_align(para)),
+            'indent': _actual_indent(para) or 0,
+            'line_spacing': _actual_line_spacing(para),
+            'space_before': got_b or 0,
+            'space_after': got_a or 0,
+        }
+        expected = {
+            'font': fmt.get('font_cn'),
+            'size': fmt.get('size'),
+            'bold': bool(fmt.get('bold', False)),
+            'align': fmt.get('align', 'justify'),
+            'indent': fmt.get('indent', 0) or 0,
+            'line_spacing': exp_ls,
+            'space_before': fmt.get('space_before', 0) or 0,
+            'space_after': fmt.get('space_after', 0) or 0,
+        }
+        bad = {}
+        if not has_media:
+            for attr in _PARA_ATTRS:
+                if ptype == 'roster' and attr not in _ROSTER_ATTRS:
+                    continue
+                res = _compare_attr(attr, fmt, para, ptype)
+                if res is not None and not res[0]:
+                    bad[attr] = True
+        out.append({
+            'index': idx, 'text': para.text.strip(), 'ptype': ptype,
+            'actual': actual, 'expected': expected, 'bad': bad,
+            'media': has_media,
+        })
+    return out
+
+
+# 段落级 fix_key 的属性 → 影响预览里的哪些渲染字段
+_ATTR_FIELDS = {
+    'font': ('font',),
+    'size': ('size',),
+    'bold': ('bold',),
+    'align': ('align',),
+    'indent': ('indent',),
+    'line_spacing': ('line_spacing',),
+    'spacing': ('space_before', 'space_after'),
+}
+
+
+def preview_spec_after(entry, fix_keys):
+    """按已认可的 fix_keys 算出该段"修正后"的渲染规格。"""
+    spec = dict(entry['actual'])
+    ptype = entry['ptype']
+    for key in fix_keys:
+        if not key.startswith('para:'):
+            continue
+        parts = key.split(':')
+        if len(parts) != 3 or parts[1] != ptype:
+            continue
+        for field in _ATTR_FIELDS.get(parts[2], ()):
+            spec[field] = entry['expected'].get(field)
+    return spec
+
+
 def format_compliance_report(filename, findings, preset_name=''):
     warns = [f for f in findings if f['level'] == 'warn']
     lines = ['◆ 公文合规性检查：{}'.format(filename)]
