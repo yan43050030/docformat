@@ -493,11 +493,18 @@ class HomePage(QWidget):
             self.preview_btn.setEnabled(False)
         else:
             self.process_btn.setEnabled(bool(self.files))
-            # 预览展示的是排版模拟效果，只对"智能一键处理"模式有意义
-            self.preview_btn.setEnabled(bool(self.files) and mode == MODE_FULL)
+            # 预览 = "看看会怎样，不改文件"：
+            # 智能一键 → 排版前后对比；合规检查 → 检查结果 + 修正对比
+            self.preview_btn.setEnabled(
+                bool(self.files) and mode in (MODE_FULL, MODE_COMPLIANCE))
+            self.preview_btn.setText(
+                "预览检查结果" if mode == MODE_COMPLIANCE else "预览对比")
 
     def open_preview(self):
         if not self.files:
+            return
+        if self.current_mode() == MODE_COMPLIANCE:
+            self._preview_compliance()
             return
         from app.preview_dialog import PreviewDialog
         preset = self.mgr.get(self.mgr.active_key)
@@ -636,6 +643,12 @@ class HomePage(QWidget):
         self.worker.allFinished.connect(self._on_all_done)
         self._set_busy(True)
         self.worker.start()
+
+    def _preview_compliance(self):
+        """合规检查的"预览"：直接跑检查并展示结果（本就不改文件）"""
+        if self.worker is not None and self.worker.isRunning():
+            return
+        self.start_process()
 
     # ---------- 转换与工具 ----------
     def run_tool(self, tool_id):

@@ -10,11 +10,14 @@
 """
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel,
-                             QPushButton, QScrollArea, QSplitter, QTabWidget,
+                             QPushButton, QScrollArea, QSplitter,
                              QTextBrowser, QVBoxLayout, QWidget)
 
 from scripts.compliance import (ALIGN_LABELS, TYPE_LABELS, fix_label,
                                 preview_spec_after)
+# 复用排版预览的中西文分段渲染：Qt 富文本不做逐字体回退，
+# 中英混排时数字会落到中文字体，必须手动切分才与真实 docx 一致
+from app.preview_dialog import _segment_font_html
 
 _ALIGN_CSS = {'left': 'left', 'center': 'center', 'right': 'right',
               'justify': 'justify'}
@@ -46,8 +49,9 @@ def _render_preview_html(entries, fix_keys, side):
         sa = spec.get('space_after') or 0
         style.append('margin:{}pt 0 {}pt 0'.format(sb, sa))
         font = spec.get('font')
-        if font:
-            style.append("font-family:'{}'".format(font))
+        font_en = spec.get('font_en') or 'Times New Roman'
+        # 正文按中西文分段套字体（数字/英文走 font_en），段落级不设 font-family
+        inner = _segment_font_html(e['text'], font_en, font or '宋体')
 
         # 改动标记：before 侧标出所有偏差；after 侧标出本次会被改的
         if side == 'before':
@@ -63,9 +67,10 @@ def _render_preview_html(entries, fix_keys, side):
             ' 粗' if spec.get('bold') else '',
             ALIGN_LABELS.get(spec.get('align'), '未设置'))
         parts.append(
-            '<p{} style="{}"><span class="tag">{} · 第{}段</span>'
+            '<p{} style="{}"><a name="p{}"></a>'
+            '<span class="tag">{} · 第{}段</span>'
             '<span class="meta">{}</span><br>{}</p>'.format(
-                cls, '; '.join(style), tag, e['index'], desc, _esc(e['text'])))
+                cls, '; '.join(style), e['index'], tag, e['index'], desc, inner))
     return ('<html><head><style>'
             'body {{ font-family:"SimSun",serif; font-size:12pt; margin:10px; }}'
             'p {{ white-space:pre-wrap; padding:2px 4px; }}'
@@ -109,17 +114,17 @@ class ComplianceReportDialog(QDialog):
         root.setContentsMargins(16, 14, 16, 12)
         root.setSpacing(8)
 
-        tip = QLabel("检查标准来自你当前选中的预设，段落项已逐段按识别类型核对。"
-                     "勾选你认可、希望自动修正的偏差，其余保持不动——"
-                     "修正结果会另存为新文件，原文件不改。")
+        tip = QLabel("上方勾选你认可、希望自动修正的偏差，下方即时显示改哪儿、改成什么样；"
+                     "未勾选的保持不动。点问题条目可跳到对应段落。"
+                     "修正结果另存为新文件，原文件不改。")
         tip.setProperty("muted", "true")
         tip.setWordWrap(True)
         root.addWidget(tip)
 
-        self.tabs = QTabWidget()
-        root.addWidget(self.tabs, 1)
+        # 问题清单与对比预览同屏：勾选时立刻看到改哪儿、改成什么样，
+        # 不用在标签页之间来回切
+        self.main_split = QSplitter(Qt.Vertical)
 
-        # --- 标签页 1：问题清单（勾选认可项）---
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         host = QWidget()
@@ -131,11 +136,12 @@ class ComplianceReportDialog(QDialog):
         for ri, res in enumerate(results):
             body.addWidget(self._build_file_block(ri, res))
         body.addStretch(1)
-        self.tabs.addTab(scroll, "问题清单")
-
-        # --- 标签页 2：现状 vs 修正后 对比预览 ---
-        self.tabs.addTab(self._build_preview_tab(), "对比预览")
-        self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.main_split.addWidget(scroll)
+        self.main_split.addWidget(self._build_preview_tab())
+        self.main_split.setStretchFactor(0, 3)
+        self.main_split.setStretchFactor(1, 4)
+        self.main_split.setSizes([300, 380])
+        root.addWidget(self.main_split, 1)
 
         btns = QHBoxLayout()
         self.select_all = QCheckBox("全选可修正项")
@@ -154,6 +160,8 @@ class ComplianceReportDialog(QDialog):
         btns.addWidget(close_btn)
         btns.addWidget(self.apply_btn)
         root.addLayout(btns)
+
+        self._render_preview()      # 打开即显示现状，无需先切换
 
     # ---------- 对比预览 ----------
     def _build_preview_tab(self):
@@ -209,9 +217,17 @@ class ComplianceReportDialog(QDialog):
         finally:
             self._pv_lock = False
 
-    def _on_tab_changed(self, idx):
-        if idx == 1:
-            self._render_preview()
+    def locate(self, ri, locations):
+        """点问题条目 → 预览跳到该问题所在段落"""
+        if not locations:
+            return
+        if hasattr(self, 'pv_combo'):
+            idx = self.pv_combo.findData(ri)
+            if idx >= 0 and idx != self.pv_combo.currentIndex():
+                self.pv_combo.setCurrentIndex(idx)
+        anchor = 'p{}'.format(locations[0])
+        for view in (self.pv_before, self.pv_after):
+            view.scrollToAnchor(anchor)
 
     def _render_preview(self, *_a):
         if not hasattr(self, 'pv_combo'):
@@ -308,9 +324,14 @@ class ComplianceReportDialog(QDialog):
         for f in items:
             fk = f.get('fix_key')
             text = '【{}】{}'.format(f['item'], f['detail'])
+            locs = f.get('locations') or []
             if fk and fixable:
                 cb = QCheckBox('✗ {}　→ 可自动{}'.format(text, fix_label(fk)))
                 cb.stateChanged.connect(self._refresh_apply)
+                if locs:
+                    cb.setToolTip('点击可跳到第 {} 段'.format(locs[0]))
+                    cb.clicked.connect(
+                        lambda _c=False, _ri=ri, _l=locs: self.locate(_ri, _l))
                 self._boxes[ri][fk] = cb
                 self._fixable_total += 1
                 group_boxes.append(cb)
@@ -368,8 +389,8 @@ class ComplianceReportDialog(QDialog):
     def _refresh_apply(self, *_a):
         self.apply_btn.setEnabled(any(
             cb.isChecked() for keys in self._boxes.values() for cb in keys.values()))
-        # 勾选变化即时反映到对比预览
-        if getattr(self, 'tabs', None) is not None and self.tabs.currentIndex() == 1:
+        # 勾选变化即时反映到下方对比预览（同屏，无需切换）
+        if hasattr(self, 'pv_before'):
             self._render_preview()
 
     def _on_apply(self):

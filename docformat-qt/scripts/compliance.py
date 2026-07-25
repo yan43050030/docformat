@@ -167,6 +167,17 @@ def _actual_font(para):
     return rpr.rFonts.get(qn('w:eastAsia'))
 
 
+def _actual_font_en(para):
+    """西文字体（数字/英文用），预览里数字要按它渲染才与真实输出一致"""
+    run = _first_run(para)
+    if run is None:
+        return None
+    rpr = run._element.rPr
+    if rpr is None or rpr.rFonts is None:
+        return None
+    return rpr.rFonts.get(qn('w:ascii'))
+
+
 def _actual_size(para):
     run = _first_run(para)
     if run is None or run.font.size is None:
@@ -766,6 +777,7 @@ def build_preview_model(doc, preset, max_paras=400):
         align_rev = {v: k for k, v in _ALIGN_MAP.items()}
         actual = {
             'font': _actual_font(para),
+            'font_en': _actual_font_en(para),
             'size': _actual_size(para),
             'bold': bool(_actual_bold(para)),
             'align': align_rev.get(_actual_align(para)),
@@ -776,6 +788,7 @@ def build_preview_model(doc, preset, max_paras=400):
         }
         expected = {
             'font': fmt.get('font_cn'),
+            'font_en': fmt.get('font_en', 'Times New Roman'),
             'size': fmt.get('size'),
             'bold': bool(fmt.get('bold', False)),
             'align': fmt.get('align', 'justify'),
@@ -802,7 +815,7 @@ def build_preview_model(doc, preset, max_paras=400):
 
 # 段落级 fix_key 的属性 → 影响预览里的哪些渲染字段
 _ATTR_FIELDS = {
-    'font': ('font',),
+    'font': ('font', 'font_en'),      # 中西文字体一起改，数字才跟着变
     'size': ('size',),
     'bold': ('bold',),
     'align': ('align',),

@@ -386,10 +386,9 @@ _res = [{'display': 'sample.docx', 'preset_name': _pre.get('name', ''), 'preset'
          'fix_input': SAMPLE,
          'findings': _cmp.check_compliance(_dd, _pre),
          'preview': _cmp.build_preview_model(_dd, _pre)}]
+_findings2 = _res[0]['findings']
 _dlg = _CRD(_res)
 try:
-    assert _dlg.tabs.count() == 2, '应有「问题清单」「对比预览」两个标签页'
-    _dlg.tabs.setCurrentIndex(1)
     app.processEvents()
     _hb = _dlg.pv_before.toHtml()
     assert 'fff6d8' in _hb.lower(), '现状侧应用黄底标出偏差段'
@@ -399,9 +398,36 @@ try:
     app.processEvents()
     assert _dlg.pv_after.toHtml() != _before_after, '勾选后「修正后」侧应即时变化'
     assert '方正' in _dlg.pv_after.toHtml(), '修正后侧应呈现预设字体'
+    # 数字必须走西文字体，不能落到中文字体（Qt 富文本不做逐字体回退）
+    assert 'Times New Roman' in _dlg.pv_after.toHtml(), \
+        '预览中数字/英文未套用西文字体'
+    # 问题条目可定位到段落，不抛异常
+    _loc = [f for f in _findings2 if f.get('locations')]
+    if _loc:
+        _dlg.locate(0, _loc[0]['locations'])
 finally:
     _dlg.reject()
-print('[18] 合规检查对比预览：现状/修正后随勾选联动 ✓')
+print('[18] 合规检查对比预览：现状/修正后联动 + 数字用西文字体 + 可定位 ✓')
+
+# ---------- 15b. 清单与预览同屏，且预览按钮在合规模式可用 ----------
+_dlg2 = _CRD(_res)
+try:
+    assert not hasattr(_dlg2, 'tabs'), '清单与预览应同屏，不再用标签页'
+    assert _dlg2.main_split.count() == 2, '应为「问题清单 + 对比预览」上下分栏'
+    assert len(_dlg2.pv_before.toPlainText()) > 20, '打开即应显示现状预览'
+finally:
+    _dlg2.reject()
+home.files = []
+home.add_files([SAMPLE])
+for _m, _want in (('full', True), ('compliance', True),
+                  ('clean', False), ('punctuation', False)):
+    home.set_mode(_m)
+    assert home.preview_btn.isEnabled() is _want, \
+        '{} 模式预览按钮可用性应为 {}'.format(_m, _want)
+home.set_mode('compliance')
+assert '检查结果' in home.preview_btn.text(), '合规模式预览按钮文案未适配'
+home.set_mode('full')
+print('[18b] 清单与预览同屏 + 合规模式预览按钮可用 ✓')
 
 # ---------- 16. 处理模式卡片布局 + 目录合并为单一入口 ----------
 from app.pages.home_page import MODES as _MODES
