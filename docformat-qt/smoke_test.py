@@ -642,7 +642,57 @@ def test_overprint():
     assert op.estimate_lines('中文' * 10, 14, 10.0) == op.estimate_lines(
         '中文' * 10 + '   ', 14, 10.0), '行尾空格不应多算一行'
     assert op.estimate_lines('abcd', 14, 10.0) == 1
-    print('[7o] 套打：字段/几何保留/合并宽度/长文自适应/固定行不误缩 通过')
+    # --- 从已有 docx 适配：往返还原 ---
+    rt = op.extract_values(out_s)
+    for k in ('标题', '拟办意见', '承办部门', '经办人', '电话', '密级', '紧急程度',
+              '文字校核', '年', '月', '日'):
+        assert rt.get(k) == base.get(k, '') or k == '拟办意见', \
+            '往返提取 {} 不一致: {} vs {}'.format(k, rt.get(k), base.get(k))
+
+    # --- 结构不同的普通段落式草稿也要能识别 ---
+    dr = Document()
+    for t in ['紧急程度：加急    密级：机密★3年',
+              '标题：关于开展某某专项检查工作的请示',
+              '拟办意见：',                       # 标签独占一段
+              '因某某专项工作需要，拟组织开展全面检查。请审示。',
+              '承办部门：监督检查室', '经办人：王五    电话：87654321',
+              '文字校核：赵六', '二〇二六年七月二十五日']:
+        dr.add_paragraph(t)
+    dsrc = os.path.join(OUT_DIR, 'overprint_draft.docx'); dr.save(dsrc)
+    dout = os.path.join(OUT_DIR, 'overprint_fitted.docx')
+    vals, dnotes = op.fit_document(dsrc, tpl, dout)
+    assert vals.get('紧急程度') == '加急', '同一行多字段应各自截断: {}'.format(vals)
+    assert vals.get('密级') == '机密★3年', '同一行第二个字段未识别: {}'.format(vals)
+    assert vals.get('标题') == '关于开展某某专项检查工作的请示'
+    assert '全面检查' in vals.get('拟办意见', ''), \
+        '标签独占一段时应向后收集正文: {}'.format(vals.get('拟办意见'))
+    assert vals.get('经办人') == '王五' and vals.get('电话') == '87654321'
+    # 日期必须拆成三格，整串塞一格会把版面顶歪
+    assert (vals.get('年'), vals.get('月'), vals.get('日')) == ('2026', '7', '25'), \
+        '中文数字日期未正确拆分: {}'.format(vals)
+    assert not [n for n in dnotes if '未能自动识别' in n], '应全部识别: {}'.format(dnotes)
+
+    # --- 日期各种写法 ---
+    assert op.parse_date('2026年7月25日') == ('2026', '7', '25')
+    assert op.parse_date('2026-07-25') == ('2026', '7', '25')
+    assert op.parse_date('2026.7.5') == ('2026', '7', '5')
+    assert op.parse_date('二〇二六年十二月三十一日') == ('2026', '12', '31')
+    assert op.parse_date('二〇二六年十月十一日') == ('2026', '10', '11')
+    assert op.parse_date('没有日期') is None
+
+    # --- 适配时文字过多同样会缩字号 ---
+    dr2 = Document()
+    dr2.add_paragraph('标题：关于某事项的请示')
+    dr2.add_paragraph('拟办意见：')
+    dr2.add_paragraph('因某某事项需要进一步开展调查核实工作。' * 16)
+    dr2.add_paragraph('2026年7月25日')
+    s2 = os.path.join(OUT_DIR, 'overprint_long_src.docx'); dr2.save(s2)
+    lg = []
+    op.fit_document(s2, tpl, os.path.join(OUT_DIR, 'overprint_long_fit.docx'),
+                    log=lambda l, m: lg.append(m))
+    assert any('自适应' in m for m in lg), '适配长文时应缩字号: {}'.format(lg)
+
+    print('[7o] 套打：填充/几何保留/自适应 + docx 适配/日期拆格/中文数字日期 通过')
 
 
 def test_gb_header_record():

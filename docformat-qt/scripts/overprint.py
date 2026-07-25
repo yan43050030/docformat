@@ -371,3 +371,230 @@ def list_templates():
             if name.lower().endswith('.docx') and not name.startswith('~$'):
                 out.append((os.path.splitext(name)[0], os.path.join(d, name), builtin))
     return out
+
+
+# ---------------- 从已有 docx 提取内容 ----------------
+
+import datetime
+
+# 字段的标签写法（同一字段可能写成多种样子，如"经办人"/"经 办 人"）
+_FIELD_LABELS = {
+    '紧急程度': ['紧急程度'],
+    '密级': ['密级', '密  级'],
+    '标题': ['标题', '标  题', '题目'],
+    '拟办意见': ['拟办意见', '拟办意见'],
+    '领导批示': ['领导批示'],
+    '承办部门': ['承办部门', '承办单位'],
+    '经办人': ['经办人', '经 办 人'],
+    '电话': ['电话', '联系电话'],
+    '文字校核': ['文字校核', '文字核校'],
+}
+
+# 允许标签里夹杂空格（"经 办 人：" 这类排版用的空格）
+def _label_pattern(label):
+    return r'\s*'.join(re.escape(ch) for ch in label if not ch.isspace())
+
+
+_DATE_PATTERNS = [
+    re.compile(r'(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日'),
+    re.compile(r'(\d{4})\s*[-./]\s*(\d{1,2})\s*[-./]\s*(\d{1,2})'),
+]
+
+_CN_DIGITS = {'〇': 0, '零': 0, '一': 1, '二': 2, '三': 3, '四': 4,
+              '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
+# 公文成文日期常写成中文数字：二〇二六年七月二十五日
+_CN_DATE_RE = re.compile(
+    r'([〇零一二三四五六七八九]{4})\s*年\s*([一二三四五六七八九十]{1,3})\s*月'
+    r'(?:\s*([一二三四五六七八九十]{1,3})\s*日)?')
+
+
+def _cn_year(text):
+    n = 0
+    for ch in text:
+        if ch not in _CN_DIGITS:
+            return None
+        n = n * 10 + _CN_DIGITS[ch]
+    return n
+
+
+def _cn_number(text):
+    """解析 一~三十一 这类中文数字（含十/十一/二十/二十五）"""
+    if not text:
+        return None
+    if text == '十':
+        return 10
+    if text.startswith('十'):                      # 十一 ~ 十九
+        rest = _CN_DIGITS.get(text[1:], None) if len(text) == 2 else None
+        return 10 + rest if rest is not None else None
+    if '十' in text:                                # 二十 / 二十五 / 三十一
+        head, _sep, tail = text.partition('十')
+        h = _CN_DIGITS.get(head)
+        if h is None:
+            return None
+        if not tail:
+            return h * 10
+        t = _CN_DIGITS.get(tail)
+        return h * 10 + t if t is not None else None
+    return _CN_DIGITS.get(text)
+
+
+def parse_date(text):
+    """从文本里抽出 (年, 月, 日) 字符串；抽不到返回 None。
+
+    套打模板里年/月/日是三个独立位置，必须拆开分别落位，
+    直接把"2026年6月25日"整串塞进"年"格会把后面全顶歪。
+    """
+    for pat in _DATE_PATTERNS:
+        m = pat.search(text or '')
+        if m:
+            return m.group(1), str(int(m.group(2))), str(int(m.group(3)))
+    m = _CN_DATE_RE.search(text or '')
+    if m:
+        y = _cn_year(m.group(1))
+        mo = _cn_number(m.group(2))
+        day = _cn_number(m.group(3)) if m.group(3) else None
+        if y and mo:
+            return str(y), str(mo), (str(day) if day else '')
+    return None
+
+
+def _blocks_of(doc):
+    """产出文档里所有文本块：(文本, 是否来自表格单元格, 单元格对象或None)"""
+    for p in doc.paragraphs:
+        yield p.text, False, None
+    for t in doc.tables:
+        for cell in _iter_cells(t):
+            yield cell.text, True, cell
+
+
+def _strip_placeholders(text):
+    return PLACEHOLDER_RE.sub('', text or '')
+
+
+def extract_values(source_path, fields=None):
+    """从一份已有 docx 里按标签抽取各字段内容。
+
+    适用于"同类表单的电子版"——不要求与模板结构完全一致，
+    按标签文字定位，兼容"承办部门：X"写在段落里或单元格里两种情况。
+    返回 {字段: 值}，抽不到的字段不出现在结果里。
+    """
+    from docx import Document
+    from .paragraph import sanitize_document
+    doc = Document(source_path)
+    sanitize_document(doc)
+
+    wanted = list(fields) if fields else list(_FIELD_LABELS.keys()) + ['年', '月', '日']
+    values = {}
+    blocks = [(_strip_placeholders(txt), in_cell, cell)
+              for txt, in_cell, cell in _blocks_of(doc)]
+
+    # --- 按标签抽取 ---
+    for field in wanted:
+        if field in ('年', '月', '日'):
+            continue
+        labels = _FIELD_LABELS.get(field, [field])
+        got = None
+        for label in labels:
+            pat = re.compile(_label_pattern(label) + r'\s*[：:]\s*(.*)', re.S)
+            for txt, _in_cell, _cell in blocks:
+                if not txt.strip():
+                    continue
+                m = pat.search(txt)
+                if not m:
+                    continue
+                val = m.group(1).strip()
+                # 截到下一个标签处，避免把同一行后面的"密级：X"一起吞掉
+                cut = len(val)
+                for other_labels in _FIELD_LABELS.values():
+                    for ol in other_labels:
+                        om = re.search(_label_pattern(ol) + r'\s*[：:]', val)
+                        if om and om.start() < cut:
+                            cut = om.start()
+                val = val[:cut].strip()
+                if val:
+                    got = val
+                    break
+            if got:
+                break
+        if got:
+            values[field] = got
+
+    # --- 标题：标签抽不到时，取"标题"标签相邻单元格 ---
+    if '标题' not in values:
+        cells = [(txt, cell) for txt, in_cell, cell in blocks if in_cell]
+        for i, (txt, _c) in enumerate(cells):
+            t = txt.strip()
+            if t in ('标题', '标  题', '题目') and i + 1 < len(cells):
+                cand = cells[i + 1][0].strip()
+                if cand:
+                    values['标题'] = re.sub(r'\s*\n\s*', '', cand)
+                break
+
+    # --- 长文本字段（拟办意见/领导批示）---
+    # 常见两种写法：标签与正文同块的不同段落；或标签独占一段、正文在后续段落。
+    # 后者若只在本块里找，会漏掉全部正文。
+    _all_labels = [l for ls in _FIELD_LABELS.values() for l in ls]
+
+    def _starts_with_label(text):
+        head = text.strip()[:12]
+        for lb in _all_labels:
+            if re.match(_label_pattern(lb) + r'\s*[：:]', head):
+                return True
+        return False
+
+    for field in ('拟办意见', '领导批示'):
+        if field not in wanted:
+            continue
+        if len(str(values.get(field, ''))) >= 4:
+            continue
+        for bi, (txt, _in_cell, _cell) in enumerate(blocks):
+            if field not in txt:
+                continue
+            after = txt.split(field, 1)[1]
+            after = re.sub(r'^\s*[：:]\s*', '', after).strip()
+            if len(after) >= 4:
+                values[field] = after
+                break
+            # 标签独占一段：往后收集，直到遇到下一个标签或日期行
+            collected = []
+            for nxt, _ic, _c in blocks[bi + 1:]:
+                t = nxt.strip()
+                if not t:
+                    continue
+                if _starts_with_label(t) or parse_date(t):
+                    break
+                collected.append(t)
+            if collected:
+                values[field] = '\n'.join(collected)
+            break
+
+    # --- 日期：拆成年/月/日三格，避免整串塞进一格把版面顶歪 ---
+    for txt, _in_cell, _cell in blocks:
+        d = parse_date(txt)
+        if d:
+            values['年'], values['月'], values['日'] = d
+            break
+
+    return {k: v for k, v in values.items() if k in wanted and str(v).strip()}
+
+
+def fit_document(source_path, template_path, output_path,
+                 overrides=None, autofit=True, log=None):
+    """把一份已有 docx 的内容适配到套打模板并输出。
+
+    overrides: 手工修正/补充的字段，优先级高于自动抽取的值。
+    返回 (提取到的值, 提示列表)。
+    """
+    fields = scan_fields(template_path)
+    values = extract_values(source_path, fields)
+    if overrides:
+        values.update({k: v for k, v in overrides.items() if str(v).strip()})
+    if log:
+        got = '、'.join('{}={}'.format(k, str(v)[:12]) for k, v in sorted(values.items()))
+        log('info', '套打适配：识别到 {} 个字段（{}）'.format(len(values), got or '无'))
+    _n, notes = fill_form(template_path, values, output_path,
+                          autofit=autofit, log=log)
+    missing = [f for f in fields if not str(values.get(f, '')).strip()]
+    if missing:
+        notes = list(notes) + ['未能自动识别：{}（可在对话框里手工补填）'.format('、'.join(missing))]
+    return values, notes

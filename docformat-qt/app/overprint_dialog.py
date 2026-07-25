@@ -51,6 +51,21 @@ class OverprintDialog(QDialog):
         row.addWidget(add_btn)
         root.addLayout(row)
 
+        src_row = QHBoxLayout()
+        pick = QPushButton("从 docx 导入内容…")
+        pick.setCursor(Qt.PointingHandCursor)
+        pick.setToolTip("选一份已有的送审单/草稿 docx，自动识别各部分内容填进下面的字段；\n"
+                        "日期会拆成年/月/日分别落位，识别不到的可手工补填")
+        pick.clicked.connect(self._import_content)
+        src_row.addWidget(pick)
+        clear = QPushButton("清空")
+        clear.setProperty("flat", "true")
+        clear.setCursor(Qt.PointingHandCursor)
+        clear.clicked.connect(self._clear_fields)
+        src_row.addWidget(clear)
+        src_row.addStretch(1)
+        root.addLayout(src_row)
+
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         root.addWidget(self.scroll, 1)
@@ -116,6 +131,46 @@ class OverprintDialog(QDialog):
             out[name] = (ed.toPlainText() if isinstance(ed, QPlainTextEdit)
                          else ed.text()).strip()
         return out
+
+    def _clear_fields(self):
+        for ed in self._editors.values():
+            if isinstance(ed, QPlainTextEdit):
+                ed.setPlainText('')
+            else:
+                ed.setText('')
+
+    def _import_content(self):
+        """从已有 docx 抽取内容填进字段（日期自动拆成年/月/日）"""
+        if not self._template_path:
+            QMessageBox.information(self, "提示", "请先选择套打模板")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择要适配的文档", "", "Word 文档 (*.docx);;所有文件 (*.*)")
+        if not path:
+            return
+        from PyQt5.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            values = overprint.extract_values(path, list(self._editors.keys()))
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "读取失败", str(e))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        for name, val in values.items():
+            ed = self._editors.get(name)
+            if ed is None:
+                continue
+            if isinstance(ed, QPlainTextEdit):
+                ed.setPlainText(val)
+            else:
+                ed.setText(val)
+        missing = [n for n in self._editors if not values.get(n)]
+        msg = "已识别 {} 个字段".format(len(values))
+        if missing:
+            msg += "；未识别：{}（请手工补填）".format('、'.join(missing))
+        self.status.setText(msg)
 
     def _import_template(self):
         path, _ = QFileDialog.getOpenFileName(

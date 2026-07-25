@@ -519,9 +519,29 @@ try:
     from PyQt5.QtWidgets import QPlainTextEdit as _QPTE, QLineEdit as _QLE
     assert isinstance(_od._editors['拟办意见'], _QPTE), '长文本字段应为多行输入'
     assert isinstance(_od._editors['标题'], _QLE), '短字段应为单行输入'
+    # 从已有 docx 导入内容：字段自动填好，日期拆成年/月/日
+    from docx import Document as _D2
+    from scripts import overprint as _op
+    _dr = _D2()
+    for _t in ['紧急程度：加急    密级：机密★3年',
+               '标题：关于开展某某专项检查的请示', '拟办意见：',
+               '因工作需要拟组织开展全面检查。请审示。',
+               '承办部门：监督检查室', '经办人：王五    电话：87654321',
+               '二〇二六年七月二十五日']:
+        _dr.add_paragraph(_t)
+    _dsrc = os.path.join(SMOKE, 'op_gui_src.docx'); _dr.save(_dsrc)
+    _vals = _op.extract_values(_dsrc, list(_od._editors.keys()))
+    for _k, _v in _vals.items():
+        _ed = _od._editors[_k]
+        (_ed.setPlainText if hasattr(_ed, 'setPlainText') else _ed.setText)(_v)
+    _got = _od._values()
+    assert _got['标题'] == '关于开展某某专项检查的请示', '导入标题错: {}'.format(_got)
+    assert '全面检查' in _got['拟办意见'], '导入正文错: {}'.format(_got['拟办意见'])
+    assert (_got['年'], _got['月'], _got['日']) == ('2026', '7', '25'), \
+        '日期应拆成三格: {}'.format(_got)
 finally:
     _od.reject()
-print('[21] 套打填写：模板发现 + 字段生成 + 长短字段区分 ✓')
+print('[21] 套打填写：模板/字段/长短区分 + 从 docx 导入内容与日期拆格 ✓')
 
 
 
