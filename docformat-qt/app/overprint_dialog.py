@@ -395,47 +395,64 @@ def render_overprint_html(plan, scale=1.0):
     """把 plan_fill 的结果画成版面示意图。
 
     灰字 = 纸上已预印的内容（不会打印）；黑字 = 本次真正打印的内容。
-    格子按真实厘米比例绘制，字号按自适应后的实际磅值缩放——
-    所以"字变得特别小"在预览里就是肉眼可见的小。
+    按文档真实块顺序绘制（成文日期在表格之后），格子按真实厘米比例，
+    字号按自适应后的实际磅值缩放——"字变得特别小"在预览里肉眼可见。
+    表格线按模板的 tblBorders 画：左右外框为 none 就不画，
+    否则会凭空多出竖线、与真实版面对不上。
     """
     page = plan['page']
     cw = plan['content_w_cm']
-    parts = []
-    parts.append(
-        '<div style="width:{:.0f}px;background:#FFF;border:1px solid #D8D2C4;'
-        'padding:{:.0f}px {:.0f}px;">'.format(
-            cw * _PX_PER_CM * scale,
-            page['top_cm'] * _PX_PER_CM * scale * 0.35,
-            2))
+    W = cw * _PX_PER_CM * scale
+    parts = ['<div style="width:{:.0f}px;background:#FFF;'
+             'border:1px solid #D8D2C4;padding:6px 2px;">'.format(W)]
 
-    for p in plan['paras']:
-        parts.append('<div style="text-align:{};margin:2px 0;white-space:pre-wrap">{}</div>'
-                     .format(p['align'], _segs_html(p['segs'], scale)))
+    LINE = '1px solid #D9534F'
+    NONE = '0'
 
-    parts.append('<table cellspacing="0" cellpadding="0" '
-                 'style="width:{:.0f}px;border-collapse:collapse;margin-top:4px">'
-                 .format(cw * _PX_PER_CM * scale))
-    for row in plan['rows']:
-        h = row['height_cm'] * _PX_PER_CM * scale
-        parts.append('<tr>')
-        for c in row['cells']:
-            w = c['width_cm'] * _PX_PER_CM * scale
-            bg = ''
-            if c.get('overflow'):
-                bg = 'background:#FDECEA;'          # 放不下：红底警示
-            elif c.get('shrunk'):
-                bg = 'background:#FFF6D8;'          # 已缩小：黄底提示
-            badge = ''
-            if c.get('shrunk'):
-                badge = ('<div style="color:#B8860B;font-size:9px;">字号 {}→{}pt{}</div>'
-                         .format(c.get('orig_font_pt'), c.get('font_pt'),
-                                 ' · 仍偏长' if c.get('overflow') else ''))
+    for blk in plan.get('blocks') or []:
+        if blk['kind'] == 'para':
             parts.append(
-                '<td style="width:{:.0f}px;height:{:.0f}px;{}border:1px solid #E0A0A0;'
-                'vertical-align:top;padding:2px 3px;overflow:hidden;">'
-                '<div style="white-space:pre-wrap;line-height:1.25;">{}</div>{}</td>'
-                .format(w, h, bg, _segs_html(c['segs'], scale), badge))
-        parts.append('</tr>')
-    parts.append('</table></div>')
+                '<div style="text-align:{};margin:2px 0;white-space:pre-wrap">{}</div>'
+                .format(blk['align'], _segs_html(blk['segs'], scale)))
+            continue
+        b = blk.get('borders') or {}
+        rows = blk['rows']
+        parts.append('<table cellspacing="0" cellpadding="0" '
+                     'style="width:{:.0f}px;border-collapse:collapse;margin:4px 0">'
+                     .format(W))
+        for ri, row in enumerate(rows):
+            h = row['height_cm'] * _PX_PER_CM * scale
+            parts.append('<tr>')
+            n = len(row['cells'])
+            for ci, c in enumerate(row['cells']):
+                w = c['width_cm'] * _PX_PER_CM * scale
+                top = LINE if (ri == 0 and b.get('top') != 'none') or \
+                    (ri > 0 and b.get('insideH') != 'none') else NONE
+                bottom = LINE if (ri == len(rows) - 1 and b.get('bottom') != 'none') \
+                    else NONE
+                left = LINE if (ci == 0 and b.get('left') != 'none') or \
+                    (ci > 0 and b.get('insideV') != 'none') else NONE
+                right = LINE if (ci == n - 1 and b.get('right') != 'none') else NONE
+                bg = ''
+                if c.get('overflow'):
+                    bg = 'background:#FDECEA;'
+                elif c.get('shrunk'):
+                    bg = 'background:#FFF6D8;'
+                badge = ''
+                if c.get('shrunk'):
+                    badge = ('<div style="color:#B8860B;font-size:9px;">'
+                             '字号 {}→{}pt{}</div>'.format(
+                                 c.get('orig_font_pt'), c.get('font_pt'),
+                                 ' · 仍偏长' if c.get('overflow') else ''))
+                parts.append(
+                    '<td style="width:{:.0f}px;height:{:.0f}px;{}'
+                    'border-top:{};border-bottom:{};border-left:{};border-right:{};'
+                    'vertical-align:top;padding:2px 3px;overflow:hidden;">'
+                    '<div style="white-space:pre-wrap;line-height:1.25;">{}</div>{}</td>'
+                    .format(w, h, bg, top, bottom, left, right,
+                            _segs_html(c['segs'], scale), badge))
+            parts.append('</tr>')
+        parts.append('</table>')
+    parts.append('</div>')
     return ('<html><body style="margin:6px;font-family:SimSun,serif;background:#F3F1EC">'
             + ''.join(parts) + '</body></html>')

@@ -598,6 +598,23 @@ finally:
     _od3.reject()
 print('[23] 套打对话框：拖拽 docx 导入内容 + 非 docx 拒绝 ✓')
 
+# ---------- 21. 预览版面顺序与真实文档一致 ----------
+_od4 = _OD()
+try:
+    for _k, _v in {'标题': '关于某事项的请示', '拟办意见': '因工作需要，拟报请审批。',
+                   '承办部门': '办公室', '年': '2026', '月': '7', '日': '25'}.items():
+        _e = _od4._editors[_k]
+        (_e.setPlainText if hasattr(_e, 'setPlainText') else _e.setText)(_v)
+    _od4._refresh_preview()
+    _txt = _od4.preview.toPlainText()
+    _i_tbl = _txt.find('领导批示')
+    _i_date = _txt.find('2026')
+    assert _i_tbl > 0 and _i_date > 0, '预览缺少表格或日期'
+    assert _i_date > _i_tbl, '成文日期应排在表格之后，与实际版面一致'
+finally:
+    _od4.reject()
+print('[24] 套打预览：块顺序与真实文档一致（日期在表格后） ✓')
+
 
 
 # ---------- 12. v3.0 易用性 ----------

@@ -406,12 +406,77 @@ def fill_form(template_path, values, output_path, autofit=True, log=None,
     return used, notes
 
 
+def _table_borders(table):
+    """读表格边框设置，预览照此画线——模板左右外框为 none，
+    若四边都画会凭空多出竖线，和真实版面对不上。"""
+    out = {'top': 'single', 'bottom': 'single',
+           'left': 'none', 'right': 'none',
+           'insideH': 'single', 'insideV': 'single'}
+    tblPr = table._tbl.find(qn('w:tblPr'))
+    if tblPr is None:
+        return out
+    b = tblPr.find(qn('w:tblBorders'))
+    if b is None:
+        return out
+    for el in b:
+        name = el.tag.split('}')[-1]
+        if name in out:
+            out[name] = el.get(qn('w:val')) or 'none'
+    return out
+
+
+def _grid_line_cm(doc):
+    """文档网格每行高度（cm）；没设网格返回 None。
+
+    未关闭 snapToGrid 的段落（尤其是留白用的空段）按网格行占位，
+    预览要按它估高，否则留白区的比例会明显偏小。
+    """
+    sect = doc.sections[0]._sectPr
+    g = sect.find(qn('w:docGrid'))
+    if g is None:
+        return None
+    try:
+        return int(g.get(qn('w:linePitch'))) / TWIPS_PER_CM
+    except (TypeError, ValueError):
+        return None
+
+
+def _cell_content_cm(cell, grid_cm):
+    """单元格内容自然高度（cm），空段也算——它们正是留白区的高度来源。"""
+    total = 0.0
+    for p in cell.paragraphs:
+        fs = _para_font_pt(p)
+        ppr = p._p.find(qn('w:pPr'))
+        snap_off = False
+        if ppr is not None:
+            sg = ppr.find(qn('w:snapToGrid'))
+            if sg is not None and sg.get(qn('w:val')) in ('0', 'false'):
+                snap_off = True
+            rpr = ppr.find(qn('w:rPr'))
+            if rpr is not None and not p.runs:
+                sz = rpr.find(qn('w:sz'))
+                if sz is not None:
+                    try:
+                        fs = int(sz.get(qn('w:val'))) / 2.0
+                    except (TypeError, ValueError):
+                        pass
+        if grid_cm and not snap_off:
+            total += grid_cm
+        else:
+            total += _para_line_spacing_pt(p, fs) / PT_PER_CM
+    return total
+
+
 def plan_fill(template_path, values, autofit=True):
     """只算不存：返回预览所需的版面数据，与 fill_form 走同一条填充路径。
 
-    返回 {'page': {...}, 'paras': [...], 'rows': [...], 'notes': [...]}
+    blocks 按文档真实顺序给出（段落与表格交替）——套打单里成文日期在
+    表格**之后**，若先渲染全部段落再渲染表格，日期会跑到表格上面去，
+    预览与实际版面不符。
     """
     from docx import Document
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
     doc = Document(template_path)
     _used, notes, reports = _fill_doc(doc, values, autofit=autofit, log=None)
 
@@ -422,64 +487,74 @@ def plan_fill(template_path, values, autofit=True):
         'top_cm': sec.top_margin.cm, 'bottom_cm': sec.bottom_margin.cm,
     }
     content_w = page['width_cm'] - page['left_cm'] - page['right_cm']
+    grid_cm = _grid_line_cm(doc)
 
     def _is_white(run):
         c = run.font.color.rgb if run.font.color and run.font.color.rgb else None
         return str(c) == 'FFFFFF'
 
-    paras = []
-    for p in doc.paragraphs:
-        if not p.text.strip():
-            continue
-        segs = []
-        for r in p.runs:
-            if not r.text:
+    def _segs_of(para):
+        out = []
+        for r in para.runs:
+            if r.text:
+                out.append({'text': r.text, 'white': _is_white(r),
+                            'pt': r.font.size.pt if r.font.size else 14})
+        return out
+
+    blocks = []
+    for child in doc.element.body.iterchildren():
+        tag = child.tag.split('}')[-1]
+        if tag == 'p':
+            para = Paragraph(child, doc)
+            if not para.text.strip():
                 continue
-            segs.append({'text': r.text, 'white': _is_white(r),
-                         'pt': r.font.size.pt if r.font.size else 14})
-        al = p.paragraph_format.alignment
-        paras.append({'segs': segs,
-                      'align': {1: 'center', 2: 'right'}.get(
-                          int(al) if al is not None else 0, 'left')})
+            al = para.paragraph_format.alignment
+            blocks.append({'kind': 'para', 'segs': _segs_of(para),
+                           'align': {1: 'center', 2: 'right'}.get(
+                               int(al) if al is not None else 0, 'left')})
+        elif tag == 'tbl':
+            table = Table(child, doc)
+            borders = _table_borders(table)
+            rows = []
+            for row in table.rows:
+                h, exact = _row_height_cm(row)
+                cells = []
+                seen = []
+                for cell in row.cells:
+                    if any(cell._tc is x for x in seen):
+                        continue
+                    seen.append(cell._tc)
+                    rep = None
+                    for r in reports:
+                        if r['tc'] is cell._tc:
+                            rep = r
+                            break
+                    segs = []
+                    for i2, pp in enumerate(cell.paragraphs):
+                        if i2:
+                            segs.append({'text': '\n', 'white': True, 'pt': 1})
+                        segs.extend(_segs_of(pp))
+                    cells.append({
+                        'segs': segs,
+                        'width_cm': _cell_width_cm(table, cell),
+                        'content_cm': _cell_content_cm(cell, grid_cm),
+                        'font_pt': (rep or {}).get('font_pt'),
+                        'orig_font_pt': (rep or {}).get('orig_font_pt'),
+                        'shrunk': (rep or {}).get('shrunk', False),
+                        'overflow': (rep or {}).get('overflow', False),
+                    })
+                # 行的实际渲染高度：atLeast 取"声明高度"与"内容自然高度"较大者
+                natural = max([c['content_cm'] for c in cells] or [0])
+                height = (h or 0) if exact else max(h or 0, natural)
+                rows.append({'height_cm': height, 'declared_cm': h or 0,
+                             'exact': exact, 'cells': cells})
+            blocks.append({'kind': 'table', 'rows': rows, 'borders': borders})
 
-    rows = []
-    ri = 0
-    for t in doc.tables:
-        for row in t.rows:
-            h, exact = _row_height_cm(row)
-            cells = []
-            seen = []
-            for cell in row.cells:
-                if any(cell._tc is x for x in seen):
-                    continue
-                seen.append(cell._tc)
-                # 按元素身份匹配，不能按文本+行高——纵向合并的单元格
-                # 会出现在多行里，行高不同会匹配不上而丢掉报告
-                rep = None
-                for r in reports:
-                    if r['tc'] is cell._tc:
-                        rep = r
-                        break
-                segs = []
-                for p in cell.paragraphs:
-                    for r in p.runs:
-                        if r.text:
-                            segs.append({'text': r.text, 'white': _is_white(r),
-                                         'pt': r.font.size.pt if r.font.size else 14})
-                    segs.append({'text': '\n', 'white': True, 'pt': 1})
-                cells.append({
-                    'segs': segs,
-                    'width_cm': _cell_width_cm(t, cell),
-                    'font_pt': (rep or {}).get('font_pt'),
-                    'orig_font_pt': (rep or {}).get('orig_font_pt'),
-                    'shrunk': (rep or {}).get('shrunk', False),
-                    'overflow': (rep or {}).get('overflow', False),
-                })
-            rows.append({'height_cm': h or 0, 'exact': exact, 'cells': cells})
-            ri += 1
-
-    return {'page': page, 'content_w_cm': content_w,
-            'paras': paras, 'rows': rows, 'notes': notes}
+    # 兼容旧字段
+    paras = [b for b in blocks if b['kind'] == 'para']
+    rows_flat = [r for b in blocks if b['kind'] == 'table' for r in b['rows']]
+    return {'page': page, 'content_w_cm': content_w, 'grid_cm': grid_cm,
+            'blocks': blocks, 'paras': paras, 'rows': rows_flat, 'notes': notes}
 
 
 # ---------------- 模板发现 ----------------

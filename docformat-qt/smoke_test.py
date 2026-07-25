@@ -738,6 +738,27 @@ def test_overprint():
     pv_vals['拟办意见'] = '因某某事项需要进一步开展调查核实工作。' * 16
     plan = op.plan_fill(tpl, pv_vals)
     assert plan['rows'] and plan['paras'], '预览数据为空'
+    # 预览必须按文档真实块顺序：成文日期在表格之后，
+    # 若先渲染全部段落再渲染表格，日期会跑到表格上面，与实际版面不符
+    kinds = [b['kind'] for b in plan['blocks']]
+    assert 'table' in kinds, '预览缺少表格块'
+    ti = kinds.index('table')
+    after = [b for b in plan['blocks'][ti + 1:] if b['kind'] == 'para']
+    assert after, '表格之后应还有段落（成文日期行）'
+    date_txt = ''.join(x['text'] for x in after[0]['segs'])
+    assert '年' in date_txt and '月' in date_txt, \
+        '表格后的段落应是成文日期行: {!r}'.format(date_txt)
+    # 表格线按模板设置画：左右外框为 none 不应画出竖线
+    tb = [b for b in plan['blocks'] if b['kind'] == 'table'][0]
+    assert tb['borders']['left'] == 'none' and tb['borders']['right'] == 'none', \
+        '模板左右外框应为 none: {}'.format(tb['borders'])
+    # atLeast 行的预览高度取"声明高度"与"内容自然高度"较大者
+    for r in tb['rows']:
+        if r['exact']:
+            assert r['height_cm'] == r['declared_cm'], '固定行应用声明高度'
+        else:
+            assert r['height_cm'] >= r['declared_cm'], 'atLeast 行不应小于声明高度'
+    assert plan['grid_cm'], '应读到文档网格行高（留白区按它估高）'
     shrunk = [c for r in plan['rows'] for c in r['cells'] if c['shrunk']]
     assert shrunk, '长内容预览应标出已缩小'
     pv_out = os.path.join(OUT_DIR, 'overprint_pv.docx')
