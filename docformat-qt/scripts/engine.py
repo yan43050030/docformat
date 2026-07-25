@@ -177,6 +177,19 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
     # 否则后续读取 paragraph_format.alignment 会抛 InvalidXmlError
     sanitize_document(doc)
 
+    # v4.8.3: 套打表单误入排版流程的告警。
+    # 套打靠"白字占位、白线占格"复刻预印纸版式，排版会把白字刷成黑（打印时
+    # 全印出来）、几何也按预设重排，整张表直接报废。这里只警示不阻断——
+    # 用户确有需要仍可继续。
+    try:
+        from .cleaner import looks_like_overprint
+        if looks_like_overprint(doc):
+            logger.warning('本文档疑似套打表单（白色占位文字 + 白色/无框线表格）。'
+                           '排版会把白字刷黑并重排版式，套打对位会失效；'
+                           '若要填写套打表单，请改用「转换与工具 → 套打填写」。')
+    except Exception:
+        pass
+
     # v1.8.0: 强力清洗模式
     if preset.get('deep_clean', False):
         deep_clean_document(doc)

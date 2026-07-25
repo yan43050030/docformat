@@ -485,7 +485,32 @@ def test_cleaner():
     assert str(Document(_o6).paragraphs[0].runs[0].font.color.rgb) == '000000', \
         '样式带颜色时清洗仍应确保黑色，公文不能继承出蓝字'
 
-    print('[7k] 格式清洗：全文/部分段落/不伤识别/排版默认清洗+套打白字豁免 通过')
+    # --- 套打表单误入排版流程应告警（只警示不阻断）---
+    if os.path.exists(_otpl):
+        import logging as _lg
+        _recs = []
+
+        class _Grab(_lg.Handler):
+            def emit(self, rec):
+                _recs.append(rec.getMessage())
+
+        _h = _Grab(); _lg.getLogger('docformat.engine').addHandler(_h)
+        try:
+            _wsrc = os.path.join(OUT_DIR, 'clean_op_warn.docx')
+            _sh3.copyfile(_otpl, _wsrc)
+            format_document(_wsrc, os.path.join(OUT_DIR, 'clean_op_warn_out.docx'),
+                            preset_name='official_gbk')
+            assert any('套打' in m for m in _recs), \
+                '套打表单误入排版应告警: {}'.format(_recs)
+            _recs.clear()
+            format_document(SRC, os.path.join(OUT_DIR, 'clean_op_nowarn.docx'),
+                            preset_name='official_gbk')
+            assert not any('套打' in m for m in _recs), \
+                '普通公文不应误报为套打: {}'.format(_recs)
+        finally:
+            _lg.getLogger('docformat.engine').removeHandler(_h)
+
+    print('[7k] 格式清洗：套打白字豁免 + 误入排版告警 通过')
 
 
 def test_toc():
