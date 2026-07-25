@@ -330,6 +330,9 @@ class PresetsPage(QWidget):
         g.setColumnStretch(1, 2)
         g.setColumnStretch(2, 3)
         sec.set_body_layout(g)
+        # 规则测试只查看识别结果、不修改任何内容，
+        # 内置模板只读时也应可用，不被写保护连坐
+        sec.mark_always_enabled(test_lab, self.rule_test_edit, self.rule_test_result)
         self._sections.append(sec)
         self.editor_lay.addWidget(sec)
 

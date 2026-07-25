@@ -137,10 +137,29 @@ was = sec0._body.isVisible()
 sec0._header.click()
 app.processEvents()
 assert sec0._header.isChecked() != was or True
-assert not sec0._body.isEnabled(), '内置模板内容应为只读'
+# 只读是逐控件禁用（容器保持可用，否则豁免控件会被连坐）
+assert not pp._el_widgets['security']['size'].isEnabled(), '内置模板内容应为只读'
 # 密级元素编辑器存在
 assert 'security' in pp._el_widgets, '缺少密级标识编辑器'
 print('[6] 内置模板只读保护 + 折叠可展开 + 密级编辑器 ✓')
+
+# 内置模板的「规则测试」应开放——它只查看识别结果，不修改任何内容
+pp.combo.setCurrentIndex(pp.combo.findData('official_gbk'))
+app.processEvents()
+assert win.mgr.is_builtin(pp.current_key)
+assert pp.rule_test_edit.isEnabled(), '内置模板的规则测试输入框应可用'
+assert pp.rule_test_result.isEnabled(), '内置模板的规则测试结果应可用'
+assert not pp._rule_edits['heading1'].isEnabled(), '内置模板的规则正则仍应只读'
+assert not pp._rule_combos['heading1'].isEnabled(), '内置模板的规则方案下拉仍应只读'
+pp.rule_test_edit.setText('一、总体要求')
+app.processEvents()
+assert '一级标题' in pp.rule_test_result.text(), \
+    '内置模板规则测试未生效: {}'.format(pp.rule_test_result.text())
+pp.rule_test_edit.setText('某安委发〔2026〕12号')
+app.processEvents()
+assert '发文字号' in pp.rule_test_result.text(), '发文字号规则测试未生效'
+pp.rule_test_edit.setText('')
+print('[6b] 内置模板规则测试开放（可测不可改） ✓')
 
 # 导出/导入
 exp = os.path.join(SMOKE, 'preset_export.json')
