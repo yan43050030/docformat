@@ -298,23 +298,46 @@ class OverprintDialog(QDialog):
                     return [l for l in txt.split('\n') if l.strip()]
         return []
 
+    def _title_max_lines(self, plan):
+        """标题栏按预留高度最多能放几行"""
+        for blk in plan.get('blocks') or []:
+            if blk['kind'] != 'table':
+                continue
+            for row in blk['rows']:
+                for c in row['cells']:
+                    if c.get('is_title') and c.get('max_lines'):
+                        return int(c['max_lines'])
+        return None
+
     def _refresh_shape_hint(self, plan):
         """手动分行时把自动回行的两个下拉置灰——否则用户会以为没生效"""
         manual = self._manual_title()
         for cb in (self.shape_combo, self.lines_combo):
             cb.setEnabled(not manual)
+        cap = self._title_max_lines(plan)
+        # 超过格子高度的行数不给选：标题栏是纸上印死的固定框，
+        # 多一行会把整行撑高、下面全部下移，整张单子就与预印栏位错开
+        if cap:
+            for i in range(self.lines_combo.count()):
+                n = self.lines_combo.itemData(i)
+                self.lines_combo.model().item(i).setEnabled(n is None or n <= cap)
         lines = self._title_line_texts(plan)
+        capnote = ('；此标题栏最多放 {} 行（再多会撑高栏位、整单错位）'
+                   .format(cap) if cap else '')
         if manual:
+            over = ('　⚠ 手动分了 {} 行，超过栏位能放的 {} 行，会把栏位撑高'
+                    .format(len(lines), cap) if cap and len(lines) > cap else '')
             self.shape_hint.setText(
-                "标题已按你在标题框里的回车分成 {} 行；清掉回车即可恢复自动回行。"
-                .format(len(lines) or 1))
+                "标题已按你在标题框里的回车分成 {} 行；清掉回车即可恢复自动回行{}{}"
+                .format(len(lines) or 1, capnote, over))
         elif len(lines) > 1:
             self.shape_hint.setText(
-                "标题自动分成 {} 行（{}）；想改断点就在标题框里按回车。".format(
+                "标题自动分成 {} 行（{}）；想改断点就在标题框里按回车{}".format(
                     len(lines), '、'.join('{} 字'.format(len(l.strip()))
-                                          for l in lines)))
+                                          for l in lines), capnote))
         else:
-            self.shape_hint.setText("标题一行放得下；想强制分行可指定行数或在标题框里按回车。")
+            self.shape_hint.setText(
+                "标题一行放得下；想强制分行可指定行数或在标题框里按回车{}".format(capnote))
 
     def _pv_scale(self, plan):
         """让整幅版面填满预览区：几何和字号同倍放大，比例与行数不变。

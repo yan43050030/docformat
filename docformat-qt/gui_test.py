@@ -672,12 +672,20 @@ try:
     import tempfile as _tf
     from scripts import overprint as _op4
     from docx import Document as _D4
+    # 行数上限由标题栏预留高度决定：选超了也只给到上限，
+    # 多一行会撑高栏位、把下面内容全顶下去
+    _cap = _od4._title_max_lines(_od4._last_plan)
+    assert _cap == 2, '自带模板标题栏应只放得下 2 行，实得 {}'.format(_cap)
     for _li in range(1, _od4.lines_combo.count()):
         _want = _od4.lines_combo.itemData(_li)
         _od4.lines_combo.setCurrentIndex(_li)
         _od4._refresh_preview()
         _pv = [l.strip() for l in _od4._title_line_texts(_od4._last_plan)]
-        assert len(_pv) == _want, '指定 {} 行，预览实得 {} 行'.format(_want, len(_pv))
+        assert len(_pv) == min(_want, _cap), \
+            '指定 {} 行（上限 {}），预览实得 {} 行'.format(_want, _cap, len(_pv))
+        # 超过上限的选项应置灰，不能给出做不到的承诺
+        assert _od4.lines_combo.model().item(_li).isEnabled() == (_want <= _cap), \
+            '{} 行选项的可用状态不对（上限 {}）'.format(_want, _cap)
         _o4 = os.path.join(_tf.mkdtemp(), 'title.docx')
         _op4.fill_form(_od4._template_path, _od4._values(), _o4,
                        title_shape='trapezoid_down', title_lines=_want)

@@ -350,7 +350,37 @@ def autofit_cell(table, cell, warn=None):
     return True, final, not fits
 
 
-def shape_title_cell(table, cell, shape='trapezoid_down', lines_n=None):
+def max_title_lines(table, cell):
+    """这个标题栏**按模板原始字号**设计成能放几行（至少 1 行）。
+
+    套打的标题栏是纸上印死的固定框。行数要按模板原本的字号算，
+    不能按缩小后的字号算：标题一长，自适应会把字缩到 9pt，那时
+    2.19cm 的框里塞得下 3 行小字——几何上不撑高，可纸上那个框
+    是照两行设计的，印出三行小字就是不对。
+
+    所以这个上限必须在缩字号**之前**取好并一路带下去。标题过长的
+    正解是缩字号（用户要的就是"文字多了调整字号"），不是加行；
+    缩到下限仍放不下时如实告警，让用户精简标题。
+    """
+    row = _row_of_cell(table, cell)
+    if row is None:
+        return 3
+    height_cm, _exact = _row_height_cm(row)
+    if not height_cm:
+        return 3
+    paras = [p for p in cell.paragraphs if p.text.strip()]
+    if not paras:
+        return 3
+    para = max(paras, key=lambda p: len(p.text))
+    line_cm = _para_line_spacing_pt(para, _para_font_pt(para)) / PT_PER_CM
+    if line_cm <= 0:
+        return 3
+    avail = height_cm - min(0.15, height_cm * 0.08)
+    return max(1, int(avail / line_cm))
+
+
+def shape_title_cell(table, cell, shape='trapezoid_down', lines_n=None,
+                     max_lines=None):
     """长标题在格子里按梯形回行，返回 (是否改动, 行数)。
 
     lines_n 指定分成几行；None 表示按长度自动决定。
@@ -369,25 +399,54 @@ def shape_title_cell(table, cell, shape='trapezoid_down', lines_n=None):
 
     paras = [p for p in cell.paragraphs if p.text.strip()]
     if not paras:
-        return False, 0
+        return False, 0, False
     para = max(paras, key=lambda p: len(p.text))
     text = para.text.replace('\n', '').strip()
     if not text:
-        return False, 0
+        return False, 0, False
     font_pt = _para_font_pt(para)
     usable = _cell_width_cm(table, cell) - _cell_margins_cm(cell)
     per_line = usable / (font_pt / PT_PER_CM) if font_pt else 0
     if per_line <= 0:
-        return False, 0
-    lines = split_title_lines(text, per_line, shape, lines_n)
+        return False, 0, False
+    # 行数上限：调用方在缩字号前算好传进来，避免用缩小后的字号
+    # 重新推导出"还能再放一行"
+    cap = max_lines or max_title_lines(table, cell)
+    if lines_n:
+        lines_n = min(int(lines_n), cap)
+    want = lines_n or cap
+
+    def _split(pl):
+        ls = split_title_lines(text, pl, shape, lines_n)
+        if lines_n is None and len(ls) > cap:
+            ls = split_title_lines(text, pl, shape, cap)
+        return ls
+
+    lines = _split(per_line)
+    # 光把行数切够还不算完：每一行还得真的放得进格子宽度，
+    # 否则 Word 会自己再折一次，行数照样超——自适应只管高度，
+    # 3 行小字在 2.19cm 里绰绰有余，它不会因此继续缩字号。
+    base_pt = font_pt
+    base_ls = _para_line_spacing_pt(para, base_pt)
+    while (max(_text_width_units(l) for l in lines) > per_line
+           and font_pt > MIN_FONT_PT):
+        font_pt = max(MIN_FONT_PT, font_pt - FONT_STEP)
+        per_line = usable / (font_pt / PT_PER_CM)
+        lines = _split(per_line)
+    if font_pt < base_pt:
+        _set_para_size(para, font_pt,
+                       max(MIN_LINE_SPACING_PT, base_ls * font_pt / base_pt))
+    # 缩到下限仍有行放不下 → Word 会自己再折，实际行数就会超过栏位设计的
+    # 行数（纸上那个框照几行画的，多出来就压线/串行），据实告知
+    too_wide = max(_text_width_units(l) for l in lines) > per_line
     if len(lines) <= 1:
         # 一行放得下：若之前插过 br，要还原成单行
         if '\n' in para.text:
             _rebuild_lines(para, [text])
-            return True, 1
-        return False, 1
+            return True, 1, too_wide
+        return False, 1, too_wide
     _rebuild_lines(para, lines)
-    return True, len(lines)
+    return True, len(lines), too_wide
 
 
 def _rebuild_lines(para, lines):
@@ -467,6 +526,31 @@ def trim_nonprinting_tail(doc, log=None):
                 log('info', '成文日期行末尾的占位空白已收窄，避免折行把落款顶到第二页'
                             '（该处不打印，收窄不影响套打对位）')
     return n
+
+
+def print_positions(doc):
+    """列出表格外每段里**会真正打印**的文字及其距纸张左边的位置（cm）。
+
+    套打对不对，最终只取决于黑字落在哪儿——白字和空格再怎么排都不显影。
+    所以把黑字的实际位置报出来，用户拿尺子量一下真实的预印单就能核对；
+    对不上时改模板里那几个空格即可，改完位置也不会再随填写内容变动
+    （年/月/日是定宽槽位）。
+    """
+    sec = doc.sections[0]
+    left = sec.left_margin.cm
+    out = []
+    for para in doc.paragraphs:
+        if not para.text.strip():
+            continue
+        cw = _para_font_pt(para) / PT_PER_CM
+        acc = 0.0
+        for r in para.runs:
+            w = _text_width_units(r.text)
+            if r.text.strip() and _run_prints(r):
+                out.append((left + acc * cw, left + (acc + w) * cw,
+                            r.text.strip()))
+            acc += w
+    return out
 
 
 def fit_one_page(doc, min_bottom_cm=0.6):
@@ -590,8 +674,11 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
             # 用户在标题里自己敲了回车就完全照他的断法来——手动优先于自动。
             is_title = _is_title_cell(cell) and not manual_title
             do_shape = is_title and title_shape and title_shape != 'none'
+            # 上限在任何缩放之前取好：缩过字号后行距变小，
+            # 再算就会得出"还能多放一行"的错误结论
+            cap = max_title_lines(t, cell) if _is_title_cell(cell) else None
             if do_shape:
-                shape_title_cell(t, cell, title_shape, title_lines)
+                shape_title_cell(t, cell, title_shape, title_lines, cap)
             if autofit and cell.text.strip():
                 def _warn(msg, _l=label):
                     notes.append('【{}】{}'.format(_l, msg))
@@ -600,15 +687,23 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
                     log('info', '套打自适应：{} 区字号调整为 {}pt{}'.format(
                         label, _size, '（仍偏长）' if overflow else ''))
             if do_shape:
-                _ch, _n = shape_title_cell(t, cell, title_shape, title_lines)
+                _ch, _n, _wide = shape_title_cell(t, cell, title_shape,
+                                                  title_lines, cap)
                 if _n > 1 and log:
                     log('info', '标题按{}回行为 {} 行'.format(
                         '正梯形' if title_shape == 'trapezoid_down' else '倒梯形', _n))
+                if _wide:
+                    notes.append('【标题】太长了：字号已缩到 {:.0f}pt 下限，仍要多占行，'
+                                 '会超出标题栏设计的 {} 行、压到相邻栏位，'
+                                 '建议精简标题'.format(MIN_FONT_PT, cap))
+                    if log:
+                        log('warning', '标题过长，缩到下限仍超出标题栏行数')
             mp2 = _main_para(cell)
             final = _para_font_pt(mp2) if mp2 is not None else None
             reports.append({
                 'tc': cell._tc,
                 'is_title': _is_title_cell(cell),
+                'max_lines': cap,
                 'label': label,
                 'text': cell.text,
                 'width_cm': _cell_width_cm(t, cell),
@@ -624,6 +719,12 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
     # 那些空格是把"密级"等预印标签顶到纸上对应位置的，收窄会让黑字
     # 打偏。真正的解法是用户把内容写短些。
     trim_nonprinting_tail(doc, log=log)
+
+    if log:
+        for _a, _b, _t in print_positions(doc):
+            log('info', '打印位置：「{}」距纸左边 {:.2f}–{:.2f}cm'
+                        '（可拿尺子量预印单核对；对不上就改模板里的空格）'
+                .format(_t, _a, _b))
 
     # 告警门槛用**名义**版心宽（另加 2% 容差），比排版计算用的 0.82 宽松得多：
     # 排版留余量是内部的、代价只是字号小半档；告警是给人看的，
@@ -892,6 +993,7 @@ def plan_fill(template_path, values, autofit=True,
                         'shrunk': (rep or {}).get('shrunk', False),
                         'overflow': (rep or {}).get('overflow', False),
                         'is_title': (rep or {}).get('is_title', False),
+                        'max_lines': (rep or {}).get('max_lines'),
                     })
                 # 行的实际渲染高度：atLeast 取"声明高度"与"内容自然高度"较大者
                 natural = max([c['content_cm'] for c in cells] or [0])

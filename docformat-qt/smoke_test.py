@@ -1042,6 +1042,48 @@ def test_overprint():
             assert '\n' not in _c.text.strip(), '选“不回行”时输出不应插入 w:br'
             break
 
+    # ---- 标题行数由栏位高度说了算：长标题缩字号，不许多占行 ----
+    # 标题栏是纸上印死的固定框（hRule=atLeast），多一行会把整行撑高、
+    # 下面所有内容一起下移，整张单子与预印栏位错开
+    _cap = None
+    for _k in range(2, 40, 3):
+        _tt = '关于' + '某单位' * _k + '的请示'
+        _pl2 = op.plan_fill(tpl, dict(base, 标题=_tt))
+        _r0 = _pl2['blocks'][3]['rows'][0]
+        _tc2 = _r0['cells'][1]
+        _cap = _cap or _tc2['max_lines']
+        assert _tc2['max_lines'] == 2, \
+            '自带模板标题栏应只放得下 2 行，实得 {}'.format(_tc2['max_lines'])
+        assert _r0['height_cm'] <= _r0['declared_cm'] + 0.02, \
+            '标题 {} 字把标题栏撑高了：{:.2f} > 声明 {:.2f}'.format(
+                len(_tt), _r0['height_cm'], _r0['declared_cm'])
+        _ls2 = [l for l in ''.join(s['text'] for s in _tc2['segs']).split('\n')
+                if l.strip()]
+        _o2 = os.path.join(OUT_DIR, 'overprint_cap.docx')
+        _n3, _notes3 = op.fill_form(tpl, dict(base, 标题=_tt), _o2)
+        if len(_ls2) > 2:
+            # 只有缩到字号下限仍放不下时才允许超行，且必须如实告警
+            assert _tc2['font_pt'] <= op.MIN_FONT_PT, \
+                '标题 {} 字排了 {} 行，但字号 {}pt 还没缩到下限'.format(
+                    len(_tt), len(_ls2), _tc2['font_pt'])
+            assert any('标题' in _s and '精简' in _s for _s in _notes3), \
+                '标题超出栏位行数时应告警：{}'.format(_notes3)
+        else:
+            assert not any('标题' in _s and '精简' in _s for _s in _notes3), \
+                '标题放得下却报了警：{}'.format(_notes3)
+
+    # ---- 黑字打印位置：不随填写内容长短漂移（套打对位的根本） ----
+    _pp1 = os.path.join(OUT_DIR, 'overprint_pos1.docx')
+    _pp2 = os.path.join(OUT_DIR, 'overprint_pos2.docx')
+    op.fill_form(tpl, dict(base, **{'年': '2026', '月': '1', '日': '11'}), _pp1)
+    op.fill_form(tpl, dict(base, **{'年': '2026', '月': '12', '日': '5'}), _pp2)
+
+    def _pos(_p):
+        return [(round(a, 2), round(b, 2))
+                for a, b, _t in op.print_positions(Document(_p))]
+    assert _pos(_pp1) == _pos(_pp2) and _pos(_pp1), \
+        '黑字打印位置随月/日位数变了：{} vs {}'.format(_pos(_pp1), _pos(_pp2))
+
     # ---- 预览折行按真实几何：一行放不下就必须断开 ----
     # Qt 富文本无视表格像素宽度、会把表拉满可视区，靠它折行必然偏长，
     # 所以折行在 plan 阶段按 cm 算好
