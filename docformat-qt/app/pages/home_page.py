@@ -11,14 +11,15 @@ from PyQt5.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame,
 
 from app.widgets.drop_zone import DropZone, ALLOWED_EXTS
 from app.widgets.file_list import FileList
-from app.worker import (MODE_AI_PASTE, MODE_DIAGNOSE, MODE_FULL,
+# 注：MODE_DIAGNOSE（格式诊断）已退役首页入口——其标点探测已被合规检查吸收，
+# 序号/缩进类问题也已并入合规检查的完整核对。analyzer 仍作为后端库被合规检查调用。
+from app.worker import (MODE_AI_PASTE, MODE_FULL,
                         MODE_PUNCTUATION, MODE_TOC_AUTO, MODE_TOC_MANUAL,
                         MODE_COMPLIANCE, AiPasteWorker, ProcessWorker)
 
 MODES = [
     (MODE_FULL, '智能一键处理', '标点修复 + 排版规范 + 样式清洗，一步到位'),
-    (MODE_DIAGNOSE, '格式诊断', '仅分析文档问题，不修改文件内容'),
-    (MODE_COMPLIANCE, '公文合规检查', '对照当前预设核对版式偏差，勾选认可的问题即可自动修正、原文件不动'),
+    (MODE_COMPLIANCE, '公文合规检查', '逐段对照预设完整核对，勾选认可的问题即可精准修正，原文件不动'),
     (MODE_PUNCTUATION, '标点修复', '仅修复中英文标点混用，保留原有段落格式'),
     (MODE_AI_PASTE, 'AI 粘贴生成', '粘贴 AI 生成的文本或 Markdown，自动生成规范公文'),
     (MODE_TOC_AUTO, '生成自动目录（域）', '在文首插入 Word 目录域，Word/WPS 打开后右键更新域即可自动生成页码'),

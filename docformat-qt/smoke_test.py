@@ -230,42 +230,72 @@ def test_title_shape():
 
 
 def test_compliance():
-    """公文合规检查：对照预设报偏差、排版后改善、可配置开关"""
-    from scripts import compliance
+    """公文合规检查：完整核对（检查面≈排版面）+ 交互式精准修正
+
+    最关键的是自洽性：智能一键排完的文档，合规检查必须零偏差。
+    否则"检查通过"不等于"排版合规"，检查就不可信。
+    """
+    from docx.shared import Cm, Pt
+    from scripts import compliance, punctuation
     from scripts.data_model import PRESETS
     from scripts.formatter import format_document
-    d=Document()
-    d.add_paragraph('关于开展试点工作的通知'); d.add_paragraph('各单位：')
-    d.add_paragraph('这是一段足够长的正文用于抽样检查字体字号是否符合预设要求。')
-    d.add_paragraph('特此通知。'); d.add_paragraph('某某办公室'); d.add_paragraph('2026年7月24日')
-    src=os.path.join(OUT_DIR,'comp_in.docx'); d.save(src)
     preset=PRESETS['official_gbk']
+    PARAS=['关于开展某某试点工作的通知','各有关单位：','一、总体要求',
+           '为深入贯彻落实上级决策部署,现就开展试点工作通知如下,请遵照执行。',
+           '(一)工作目标','通过试点探索形成可复制可推广的经验做法,为全面推开奠定基础。',
+           '特此通知。','某某办公室','2026年7月25日']
+
+    def _dirty(path):
+        d=Document(); s=d.sections[0]
+        s.top_margin=Cm(2); s.bottom_margin=Cm(2); s.left_margin=Cm(2); s.right_margin=Cm(2)
+        for t in PARAS:
+            p=d.add_paragraph(t)
+            for r in p.runs: r.font.size=Pt(12)
+        d.save(path); return path
+
+    src=_dirty(os.path.join(OUT_DIR,'comp_in.docx'))
+
+    # --- 1. 完整核对：段落级逐类型逐属性 + 页面级 ---
     f0=compliance.check_compliance(Document(src),preset)
-    assert any(x['item']=='页边距' and x['level']=='warn' for x in f0), '应报边距偏差'
-    out=os.path.join(OUT_DIR,'comp_out.docx'); format_document(src,out,preset_name='official_gbk')
+    w0=[x for x in f0 if x['level']=='warn']
+    items0={x['item'] for x in w0}
+    for need in ('页边距','纸张','页面网格','页码'):
+        assert need in items0, '页面级应查 {}'.format(need)
+    for need in ('正文·字体','正文·字号','正文·首行缩进','正文·行距','正文·对齐方式'):
+        assert need in items0, '段落级应逐属性查 {}'.format(need)
+    assert any(x.get('locations') for x in w0), '段落级偏差应带段号定位'
+
+    # --- 2. 自洽性（核心）：智能一键完整流程后，合规检查必须零偏差 ---
+    p1=os.path.join(OUT_DIR,'comp_punct.docx'); punctuation.process_document(src,p1)
+    out=os.path.join(OUT_DIR,'comp_out.docx'); format_document(p1,out,preset_name='official_gbk')
     f1=compliance.check_compliance(Document(out),preset)
-    assert sum(1 for x in f1 if x['level']=='warn') < sum(1 for x in f0 if x['level']=='warn'), '排版后偏差应减少'
+    left=[x for x in f1 if x['level']=='warn']
+    assert not left, '排版后仍报偏差，检查与排版口径不一致：{}'.format(
+        [(x['item'],x['detail']) for x in left])
+    assert sum(1 for x in f1 if x['level']=='ok')>30, '合格项过少，检查覆盖面不足'
+
+    # --- 3. 检查项开关 + 旧键兼容 ---
     f2=compliance.check_compliance(Document(src),preset,options={'margins':False,'paper':False})
     assert not any(x['item']=='页边距' for x in f2), '关闭后不查边距'
-    # 交互式修正：只对认可项动手，其余不动
-    from docx.shared import Cm
-    dfix=Document(); s=dfix.sections[0]
-    s.top_margin=Cm(1); s.bottom_margin=Cm(1); s.left_margin=Cm(1); s.right_margin=Cm(1)
-    s.page_width=Cm(20); s.page_height=Cm(28)
-    dfix.add_paragraph('关于开展某项工作的通知')
-    dfix.add_paragraph('这是一段足够长的正文用来抽样检查字体字号是否符合预设的要求内容。')
-    fsrc=os.path.join(OUT_DIR,'fix_in.docx'); dfix.save(fsrc)
-    ff=compliance.check_compliance(Document(fsrc),preset)
-    keys=[x['fix_key'] for x in ff if x.get('fix_key')]
-    assert 'margins' in keys and 'paper' in keys, '应识别出边距/纸张可修正'
-    # 只认可 margins，不认可 paper：修正后边距合规、纸张仍偏差
-    fout=os.path.join(OUT_DIR,'fix_out.docx')
-    applied=compliance.apply_compliance_fixes(fsrc,fout,preset,['margins'])
-    assert applied and any('页边距' in a for a in applied), '应返回修正说明'
-    fr=compliance.check_compliance(Document(fout),preset)
-    assert not any(x['item']=='页边距' and x['level']=='warn' for x in fr), '认可后边距应合规'
-    assert any(x['item']=='纸张' and x['level']=='warn' for x in fr), '未认可的纸张应保持偏差'
-    print('[7i] 公文合规检查 + 交互式修正 通过')
+    f3=compliance.check_compliance(Document(src),preset,options={'body_font':False})
+    assert not any(x['item']=='正文·字体' for x in f3), '旧键 body_font 应映射到新键'
+
+    # --- 4. 全部认可 → 归零 ---
+    keys=[x['fix_key'] for x in w0 if x.get('fix_key')]
+    o_all=os.path.join(OUT_DIR,'fix_all.docx')
+    compliance.apply_compliance_fixes(src,o_all,preset,keys)
+    r_all=[x for x in compliance.check_compliance(Document(o_all),preset) if x['level']=='warn']
+    assert not r_all, '全部认可后应无偏差，仍剩：{}'.format([x['item'] for x in r_all])
+
+    # --- 5. 只认可一项 → 其余保持原样（精准手术刀）---
+    o_one=os.path.join(OUT_DIR,'fix_one.docx')
+    ap=compliance.apply_compliance_fixes(src,o_one,preset,['para:body:size'])
+    assert ap and any('字号' in a for a in ap), '应返回修正说明'
+    w_one={x['item'] for x in compliance.check_compliance(Document(o_one),preset)
+           if x['level']=='warn'}
+    assert '正文·字号' not in w_one, '认可项应已修正'
+    assert '正文·字体' in w_one and '页边距' in w_one, '未认可项必须保持原样'
+    print('[7i] 公文合规检查：完整核对({}项)+排版后零偏差+精准修正 通过'.format(len(f0)))
 
 
 def test_gb_header_record():

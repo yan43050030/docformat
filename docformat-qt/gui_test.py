@@ -64,17 +64,44 @@ assert res is not None and res[0] == 1 and res[1] == 0, '处理结果异常: {}'
 assert os.path.exists(out_expected), '输出文件未生成'
 print('[2] GUI 智能一键处理 → {} ✓'.format(os.path.basename(out_expected)))
 
-# ---------- 3. 诊断模式 ----------
-home.set_mode('diagnose')
-assert home.current_mode() == 'diagnose'
-assert home._mode_cards['diagnose'].property('selected') == 'true', '模式卡片未选中高亮'
+# ---------- 3. 公文合规检查（诊断入口已退役，其能力并入合规检查）----------
+assert 'diagnose' not in home._mode_cards, '格式诊断入口应已退役'
+home.set_mode('compliance')
+assert home.current_mode() == 'compliance'
+assert home._mode_cards['compliance'].property('selected') == 'true', '模式卡片未选中高亮'
 captured = []
-home._show_diagnose = lambda report: captured.append(report)   # 拦截弹窗
-home.start_process()
-wait_for(home.worker.allFinished)
-app.processEvents()
-assert captured and '标点' in captured[0], '诊断报告未生成'
-print('[3] 格式诊断模式 → 报告含标点问题 ✓')
+home._show_compliance = lambda results: captured.append(results)   # 拦截弹窗
+# 跳过检查项面板，直接用全量默认项
+import app.compliance_dialog as _cd
+_orig_dlg = _cd.ComplianceOptionsDialog
+
+
+class _AutoAcceptOptions(object):
+    Accepted = 1
+
+    def __init__(self, *_a, **_k):
+        pass
+
+    def exec_(self):
+        return 1
+
+    def get_options(self):
+        return None
+
+
+_cd.ComplianceOptionsDialog = _AutoAcceptOptions
+try:
+    home.start_process()
+    wait_for(home.worker.allFinished)
+    app.processEvents()
+finally:
+    _cd.ComplianceOptionsDialog = _orig_dlg
+assert captured, '合规检查未回传结构化结果'
+_findings = captured[0][0]['findings']
+assert any(f.get('fix_key') for f in _findings), '应有可自动修正的偏差'
+assert any('·' in f['item'] for f in _findings), '应有逐段类型级检查项（如 正文·字体）'
+print('[3] 公文合规检查 → 逐段结构化结果 {} 项，其中可修正 {} 项 ✓'.format(
+    len(_findings), sum(1 for f in _findings if f.get('fix_key'))))
 
 # ---------- 4. AI 粘贴生成 ----------
 home.set_mode('ai_paste')

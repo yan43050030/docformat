@@ -1,36 +1,104 @@
 # -*- coding: utf-8 -*-
-"""公文合规性检查：对照"当前预设"核对文档版式，报告偏差，并可对认可的偏差自动修正。
+"""公文合规性检查：对照"当前预设"完整核对文档版式，报告偏差，并可对认可的偏差自动修正。
 
-关键设计：检查标准来自用户选中的预设，而非死国标——用户改了预设，
-检查标准自动跟着变，适用范围更广。每类检查可通过 options 开关启停。
+设计原则
+--------
+1. 标准来自用户选中的预设，而非死国标——改预设，检查标准跟着变。
+2. **检查面必须逼近排版面**：预设里定义了明确规格的项，检查都要覆盖，
+   否则"检查通过"不等于"排版合规"，检查就失去意义。因此段落级检查是
+   逐段按识别类型 × 逐属性（字体/字号/加粗/对齐/首行缩进/行距/段距）
+   对照预设，与排版引擎 format_paragraph 用同一套口径。
+3. 交互式修正：可自动修正的偏差带 fix_key，用户勾选认可的项，
+   apply_compliance_fixes 只对认可项动手，其余保持原样。
 
-交互式修正：check_compliance 会给"可自动修正"的偏差打上 fix_key，UI 让用户
-勾选认可哪些，再调 apply_compliance_fixes 只对认可项动手，其余保持原样。
+天生"只能做、无法核对"的排版动作（样式清洗、结构性空行、盖章落款布局）
+不纳入检查，避免装样子；这些只在"智能一键处理"里执行。
 """
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.shared import Pt, Cm
 from docx.oxml.ns import qn
 
-# 可配置的检查项（键: 说明），供 UI 生成勾选面板
-CHECK_ITEMS = [
-    ('margins', '页边距是否符合预设'),
-    ('paper', '纸张大小是否符合预设'),
-    ('body_font', '正文字体字号是否符合预设'),
-    ('title_center', '标题是否居中'),
-    ('structure', '结构完整性（标题/主送机关/成文日期是否齐全）'),
-    ('line_spacing', '正文行距是否符合预设'),
-    ('punctuation', '是否残留英文标点'),
+# ---------------- 检查项定义 ----------------
+# 供 UI 生成勾选面板；分组便于展示
+CHECK_GROUPS = [
+    ('页面', [
+        ('margins', '页边距'),
+        ('paper', '纸张大小'),
+        ('grid', '页面网格（每页行数 × 每行字数）'),
+        ('page_number', '页码（有无 / 字体 / 字号）'),
+    ]),
+    ('段落（逐段按识别类型对照预设）', [
+        ('font', '字体'),
+        ('size', '字号'),
+        ('bold', '加粗'),
+        ('align', '对齐方式'),
+        ('indent', '首行缩进'),
+        ('line_spacing', '行距'),
+        ('spacing', '段前 / 段后间距'),
+    ]),
+    ('内容', [
+        ('structure', '结构完整性（标题 / 主送机关 / 成文日期）'),
+        ('numbering', '序号层次是否统一'),
+        ('punctuation', '英文 / 不规范标点'),
+    ]),
 ]
+
+CHECK_ITEMS = [item for _g, items in CHECK_GROUPS for item in items]
 
 DEFAULT_OPTIONS = {k: True for k, _ in CHECK_ITEMS}
 
-# 各 fix_key 的一句话说明，供修正对话框和结果提示复用
+# 旧版本的检查项键 → 新键（QSettings 里可能存着旧键，做兼容映射）
+_LEGACY_OPTION_MAP = {
+    'body_font': ('font', 'size'),
+    'title_center': ('align',),
+}
+
+# 段落级检查的属性 → 中文名
+ATTR_LABELS = {
+    'font': '字体',
+    'size': '字号',
+    'bold': '加粗',
+    'align': '对齐方式',
+    'indent': '首行缩进',
+    'line_spacing': '行距',
+    'spacing': '段前/段后间距',
+}
+
+# 段落类型 → 中文名（与预览界面保持一致）
+TYPE_LABELS = {
+    'security': '密级', 'docnum': '发文字号', 'title': '标题',
+    'subtitle': '副标题', 'recipient': '主送机关',
+    'heading1': '一级标题', 'heading2': '二级标题', 'heading3': '三级标题',
+    'heading4': '四级标题', 'body': '正文', 'signature': '署名',
+    'date': '日期', 'attachment': '附件说明', 'attachment_label': '附件标识',
+    'closing': '结尾', 'roster': '组成人员名单',
+    'copynum': '份号', 'urgency': '紧急程度', 'signatory': '签发人',
+    'cc': '抄送', 'issuer': '印发机关', 'caption': '图表题注',
+}
+
+ALIGN_LABELS = {'left': '左对齐', 'center': '居中', 'right': '右对齐',
+                'justify': '两端对齐'}
+
+_ALIGN_MAP = {
+    'center': WD_ALIGN_PARAGRAPH.CENTER,
+    'left': WD_ALIGN_PARAGRAPH.LEFT,
+    'right': WD_ALIGN_PARAGRAPH.RIGHT,
+    'justify': WD_ALIGN_PARAGRAPH.JUSTIFY,
+}
+
+# 排版引擎 format_paragraph 的默认行距（fmt 未指定 line_spacing 时用它）
+DEFAULT_LINE_SPACING_PT = 28
+
+# roster（组成人员名单）在排版时只设缩进和行距，其余保持原样，
+# 检查也只核对这两项，避免误报。
+_ROSTER_ATTRS = {'indent', 'line_spacing'}
+
+# 非段落级的修正说明
 FIX_LABELS = {
     'margins': '把页边距改为预设值',
     'paper': '把纸张改为 A4',
-    'body_font': '把正文字体字号改为预设值',
-    'title_center': '把标题设为居中',
-    'line_spacing': '把正文行距改为预设固定值',
+    'grid': '把页面网格改为预设值',
+    'page_number': '按预设重设页码',
     'punctuation': '修复英文/不规范标点',
 }
 
@@ -39,10 +107,30 @@ def _cm(v):
     return round(v, 2) if v is not None else None
 
 
+def normalize_options(options):
+    """把可能含旧键的 options 归一到新键集合。"""
+    if not options:
+        return None
+    opts = {}
+    for k, v in options.items():
+        if k in _LEGACY_OPTION_MAP:
+            for nk in _LEGACY_OPTION_MAP[k]:
+                # 旧键为真时不强行覆盖新键的显式设置
+                opts.setdefault(nk, v)
+        else:
+            opts[k] = v
+    return opts
+
+
 def _detect_types(doc, preset):
-    """返回 [(paragraph, ptype)]，仅含非空段，供检查与修正共用。"""
+    """返回 [(段序号, paragraph, ptype)]，仅含非空段，供检查与修正共用。"""
     from .detector import detect_para_type, _compile_rules, _build_text_context
     rules = _compile_rules(preset.get('detect_rules'))
+    flags = {
+        'subtitle_enabled': preset.get('subtitle_enabled', False),
+        'header_elements': preset.get('header_elements', False),
+        'record_elements': preset.get('record_elements', False),
+    }
     all_texts, idx_map = _build_text_context(doc)
     result = []
     prev = None
@@ -54,34 +142,297 @@ def _detect_types(doc, preset):
         ai = idx_map.get(i)
         ptype = detect_para_type(t, i, total, p.paragraph_format.alignment,
                                  all_texts, all_texts_index=ai, prev_para_type=prev,
-                                 rules=rules)
-        result.append((p, ptype))
+                                 rules=rules, flags=flags)
+        result.append((i + 1, p, ptype))
         prev = ptype
     return result
 
 
+# ---------------- 段落级：实际值读取 ----------------
+
+def _first_run(para):
+    for r in para.runs:
+        if r.text.strip():
+            return r
+    return None
+
+
+def _actual_font(para):
+    run = _first_run(para)
+    if run is None:
+        return None
+    rpr = run._element.rPr
+    if rpr is None or rpr.rFonts is None:
+        return None
+    return rpr.rFonts.get(qn('w:eastAsia'))
+
+
+def _actual_size(para):
+    run = _first_run(para)
+    if run is None or run.font.size is None:
+        return None
+    return run.font.size.pt
+
+
+def _actual_bold(para):
+    run = _first_run(para)
+    return None if run is None else run.font.bold
+
+
+def _actual_align(para):
+    return para.paragraph_format.alignment
+
+
+def _actual_indent(para):
+    ind = para.paragraph_format.first_line_indent
+    return None if ind is None else ind.pt
+
+
+def _actual_line_spacing(para):
+    ls = para.paragraph_format.line_spacing
+    if ls is None:
+        return None
+    return ls.pt if hasattr(ls, 'pt') else None
+
+
+def _actual_spacing(para):
+    pf = para.paragraph_format
+    before = pf.space_before.pt if pf.space_before is not None else None
+    after = pf.space_after.pt if pf.space_after is not None else None
+    return (before, after)
+
+
+def _expected_line_spacing(fmt):
+    return fmt.get('line_spacing', DEFAULT_LINE_SPACING_PT)
+
+
+def _compare_attr(attr, fmt, para, ptype):
+    """比较单个属性，返回 (是否合规, 实际值描述, 期望值描述)。
+
+    返回 None 表示该属性对此类型不适用/无法判定，跳过。
+    """
+    if attr == 'font':
+        exp = fmt.get('font_cn')
+        if not exp:
+            return None
+        got = _actual_font(para)
+        if got is None:
+            return (False, '未设置', exp)
+        return (got == exp, got, exp)
+
+    if attr == 'size':
+        exp = fmt.get('size')
+        if not exp:
+            return None
+        got = _actual_size(para)
+        if got is None:
+            return (False, '未设置', '{}pt'.format(exp))
+        return (abs(got - exp) <= 0.3, '{}pt'.format(round(got, 1)), '{}pt'.format(exp))
+
+    if attr == 'bold':
+        exp = bool(fmt.get('bold', False))
+        got = _actual_bold(para)
+        got_b = bool(got)
+        return (got_b == exp, '加粗' if got_b else '不加粗', '加粗' if exp else '不加粗')
+
+    if attr == 'align':
+        exp_key = fmt.get('align', 'justify')
+        exp = _ALIGN_MAP.get(exp_key, WD_ALIGN_PARAGRAPH.JUSTIFY)
+        got = _actual_align(para)
+        got_label = {v: k for k, v in _ALIGN_MAP.items()}.get(got)
+        return (got == exp,
+                ALIGN_LABELS.get(got_label, '未设置'),
+                ALIGN_LABELS.get(exp_key, exp_key))
+
+    if attr == 'indent':
+        # attachment 走悬挂缩进，规则特殊，不做首行缩进核对
+        if ptype == 'attachment':
+            return None
+        exp = fmt.get('indent', 0) or 0
+        got = _actual_indent(para) or 0
+        return (abs(got - exp) <= 1.0,
+                '{}pt'.format(round(got, 1)), '{}pt'.format(exp))
+
+    if attr == 'line_spacing':
+        exp = _expected_line_spacing(fmt)
+        if not exp:
+            return None
+        got = _actual_line_spacing(para)
+        if got is None:
+            return (False, '未设置固定行距', '固定 {}pt'.format(exp))
+        return (abs(got - exp) <= 1.0,
+                '{}pt'.format(round(got, 1)), '固定 {}pt'.format(exp))
+
+    if attr == 'spacing':
+        exp_b = fmt.get('space_before', 0) or 0
+        exp_a = fmt.get('space_after', 0) or 0
+        got_b, got_a = _actual_spacing(para)
+        got_b = got_b or 0
+        got_a = got_a or 0
+        ok = abs(got_b - exp_b) <= 1.0 and abs(got_a - exp_a) <= 1.0
+        return (ok,
+                '段前{}pt/段后{}pt'.format(round(got_b, 1), round(got_a, 1)),
+                '段前{}pt/段后{}pt'.format(exp_b, exp_a))
+
+    return None
+
+
+_PARA_ATTRS = ['font', 'size', 'bold', 'align', 'indent', 'line_spacing', 'spacing']
+
+
+def _check_paragraphs(doc, preset, opts, typed, add):
+    """逐段按识别类型 × 逐属性对照预设，按 (类型, 属性) 汇总为一条 finding。"""
+    from .paragraph import paragraph_has_media
+    active = [a for a in _PARA_ATTRS if opts.get(a)]
+    if not active:
+        return
+    # {(ptype, attr): {'bad': [(段号, 实际)], 'total': n, 'exp': 期望}}
+    agg = {}
+    for idx, para, ptype in typed:
+        fmt = preset.get(ptype)
+        if not isinstance(fmt, dict):
+            continue
+        if paragraph_has_media(para):   # 含图段落排版时被特殊保护，不参与核对
+            continue
+        for attr in active:
+            if ptype == 'roster' and attr not in _ROSTER_ATTRS:
+                continue
+            res = _compare_attr(attr, fmt, para, ptype)
+            if res is None:
+                continue
+            ok, got, exp = res
+            slot = agg.setdefault((ptype, attr), {'bad': [], 'total': 0, 'exp': exp})
+            slot['total'] += 1
+            if not ok:
+                slot['bad'].append((idx, got))
+
+    for (ptype, attr), slot in sorted(agg.items()):
+        tname = TYPE_LABELS.get(ptype, ptype)
+        aname = ATTR_LABELS.get(attr, attr)
+        item = '{}·{}'.format(tname, aname)
+        if not slot['bad']:
+            add('ok', item, '符合预设（{}，共 {} 段）'.format(slot['exp'], slot['total']))
+            continue
+        bad = slot['bad']
+        locs = [i for i, _g in bad]
+        got_vals = []
+        for _i, g in bad:
+            if g not in got_vals:
+                got_vals.append(g)
+        preview = '、'.join('第{}段'.format(i) for i in locs[:8])
+        more = ' 等 {} 段'.format(len(locs)) if len(locs) > 8 else ''
+        add('warn', item,
+            '{}/{} 段不符：实际 {}，预设要求 {}（{}{}）'.format(
+                len(bad), slot['total'], '/'.join(str(v) for v in got_vals[:3]),
+                slot['exp'], preview, more),
+            fix_key='para:{}:{}'.format(ptype, attr),
+            locations=locs)
+
+
+# ---------------- 页面级检查 ----------------
+
+def _check_grid(doc, preset, add):
+    grid = preset.get('grid') or {}
+    lines = grid.get('lines_per_page')
+    chars = grid.get('chars_per_line')
+    if not lines:
+        return
+    sec = doc.sections[0]
+    g = sec._sectPr.find(qn('w:docGrid'))
+    if g is None:
+        add('warn', '页面网格', '未设置文档网格，预设要求每页 {} 行 × 每行 {} 字'.format(lines, chars),
+            fix_key='grid')
+        return
+    try:
+        line_pitch = int(g.get(qn('w:linePitch')) or 0)
+    except (TypeError, ValueError):
+        line_pitch = 0
+    text_h = sec.page_height.twips - sec.top_margin.twips - sec.bottom_margin.twips
+    exp_pitch = int(round(float(text_h) / lines))
+    if line_pitch and abs(line_pitch - exp_pitch) <= 2:
+        add('ok', '页面网格', '每页 {} 行 × 每行 {} 字'.format(lines, chars))
+    else:
+        got_lines = int(round(float(text_h) / line_pitch)) if line_pitch else '?'
+        add('warn', '页面网格',
+            '实际约每页 {} 行，预设要求每页 {} 行 × 每行 {} 字'.format(got_lines, lines, chars),
+            fix_key='grid')
+
+
+def _footer_has_page_field(doc):
+    import re as _re
+    for section in doc.sections:
+        for footer in (section.footer, section.even_page_footer, section.first_page_footer):
+            for para in footer.paragraphs:
+                for run in para.runs:
+                    xml = run._r.xml or ''
+                    if _re.search(r'\bPAGE\b', xml, _re.I):
+                        return True, para
+                txt = para.text.strip()
+                if txt and _re.fullmatch(r'[—\-–\s　]*(?:第\s*)?\d+(?:\s*/\s*\d+)?(?:\s*页)?[—\-–\s　]*', txt):
+                    return True, para
+    return False, None
+
+
+def _check_page_number(doc, preset, add):
+    want = preset.get('page_number', False)
+    has, para = _footer_has_page_field(doc)
+    if not want:
+        if has:
+            add('info', '页码', '文档有页码，但预设未要求页码（不做处理）')
+        else:
+            add('ok', '页码', '预设未要求页码')
+        return
+    if not has:
+        add('warn', '页码', '预设要求页码，但文档页脚未找到页码', fix_key='page_number')
+        return
+    exp_font = preset.get('page_number_font', '宋体')
+    exp_size = preset.get('page_number_size', 14)
+    run = _first_run(para) if para is not None else None
+    got_font = got_size = None
+    if run is not None:
+        rpr = run._element.rPr
+        if rpr is not None and rpr.rFonts is not None:
+            got_font = rpr.rFonts.get(qn('w:eastAsia'))
+        if run.font.size is not None:
+            got_size = run.font.size.pt
+    bad = []
+    if got_font and exp_font and got_font != exp_font:
+        bad.append('字体实际「{}」应为「{}」'.format(got_font, exp_font))
+    if got_size and exp_size and abs(got_size - exp_size) > 0.3:
+        bad.append('字号实际 {}pt 应为 {}pt'.format(round(got_size, 1), exp_size))
+    if bad:
+        add('warn', '页码', '；'.join(bad), fix_key='page_number')
+    else:
+        add('ok', '页码', '{} {}pt'.format(exp_font, exp_size))
+
+
+# ---------------- 主检查入口 ----------------
+
 def check_compliance(doc, preset, options=None, detect_types=None):
     """返回 findings 列表：
-    [{'level': 'warn'/'info'/'ok', 'item': 名称, 'detail': 说明, 'fix_key': 可选}]
+    [{'level': 'warn'/'info'/'ok', 'item': 名称, 'detail': 说明,
+      'fix_key': 可选, 'locations': 可选段号列表}]
 
     fix_key 存在表示该偏差可被 apply_compliance_fixes 自动修正。
-    detect_types: 兼容旧参数，当前未使用（内部自行识别）。
     """
     opts = dict(DEFAULT_OPTIONS)
-    if options:
-        opts.update(options)
+    norm = normalize_options(options)
+    if norm:
+        opts.update(norm)
     findings = []
 
-    def add(level, item, detail, fix_key=None):
+    def add(level, item, detail, fix_key=None, locations=None):
         f = {'level': level, 'item': item, 'detail': detail}
         if fix_key:
             f['fix_key'] = fix_key
+        if locations:
+            f['locations'] = locations
         findings.append(f)
 
     sec = doc.sections[0]
     page = preset.get('page', {})
 
-    # 页边距
+    # --- 页边距 ---
     if opts.get('margins'):
         exp = (page.get('top'), page.get('bottom'), page.get('left'), page.get('right'))
         got = (_cm(sec.top_margin.cm), _cm(sec.bottom_margin.cm),
@@ -97,7 +448,7 @@ def check_compliance(doc, preset, options=None, detect_types=None):
         else:
             add('ok', '页边距', '符合预设')
 
-    # 纸张大小
+    # --- 纸张 ---
     if opts.get('paper'):
         w, h = _cm(sec.page_width.cm), _cm(sec.page_height.cm)
         want = preset.get('page_size', 'A4')
@@ -108,71 +459,52 @@ def check_compliance(doc, preset, options=None, detect_types=None):
         else:
             add('ok', '纸张', '{}×{} cm'.format(w, h))
 
-    # 正文字体字号（抽样首个正文段）
-    if opts.get('body_font') or opts.get('line_spacing'):
-        body = preset.get('body', {})
-        body_para = None
-        for p in doc.paragraphs:
-            t = p.text.strip()
-            if len(t) > 15 and p.runs:
-                body_para = p
-                break
-        if body_para is not None:
-            if opts.get('body_font'):
-                run = body_para.runs[0]
-                rpr = run._element.rPr
-                ea = rpr.rFonts.get(qn('w:eastAsia')) if rpr is not None and rpr.rFonts is not None else None
-                size = run.font.size.pt if run.font.size else None
-                exp_font = body.get('font_cn'); exp_size = body.get('size')
-                if ea and exp_font and ea != exp_font:
-                    add('warn', '正文字体', '实际「{}」，预设要求「{}」'.format(ea, exp_font),
-                        fix_key='body_font')
-                elif size and exp_size and abs(size - exp_size) > 0.3:
-                    add('warn', '正文字号', '实际 {}pt，预设要求 {}pt'.format(size, exp_size),
-                        fix_key='body_font')
-                else:
-                    add('ok', '正文字体字号', '符合预设')
-            if opts.get('line_spacing'):
-                exp_ls = body.get('line_spacing')
-                ls = body_para.paragraph_format.line_spacing
-                if exp_ls:
-                    got_pt = ls.pt if hasattr(ls, 'pt') else None
-                    if got_pt and abs(got_pt - exp_ls) > 1:
-                        add('warn', '正文行距', '实际约 {}pt，预设要求固定 {}pt'.format(round(got_pt, 1), exp_ls),
-                            fix_key='line_spacing')
-                    else:
-                        add('ok', '正文行距', '符合预设')
+    # --- 页面网格 ---
+    if opts.get('grid'):
+        _check_grid(doc, preset, add)
 
-    # 结构完整性 + 标题居中
-    if opts.get('structure') or opts.get('title_center'):
-        typed = _detect_types(doc, preset)
+    # --- 页码 ---
+    if opts.get('page_number'):
+        _check_page_number(doc, preset, add)
+
+    # --- 段落级 + 结构完整性（共用一次类型识别）---
+    need_typed = any(opts.get(a) for a in _PARA_ATTRS) or opts.get('structure')
+    typed = _detect_types(doc, preset) if need_typed else []
+
+    if any(opts.get(a) for a in _PARA_ATTRS):
+        _check_paragraphs(doc, preset, opts, typed, add)
+
+    if opts.get('structure'):
         types = {}
-        title_para = None
-        for p, ptype in typed:
+        for _i, _p, ptype in typed:
             types[ptype] = types.get(ptype, 0) + 1
-            if ptype == 'title' and title_para is None:
-                title_para = p
-        if opts.get('structure'):
-            missing = []
-            if not types.get('title'):
-                missing.append('标题')
-            if not types.get('recipient'):
-                missing.append('主送机关')
-            if not types.get('date'):
-                missing.append('成文日期')
-            if missing:
-                # 结构缺失无法凭空补出内容，不给 fix_key（不可自动修正）
-                add('warn', '结构完整性', '未识别到：{}（如确有请在预览里核对/指定）'.format('、'.join(missing)))
-            else:
-                add('ok', '结构完整性', '标题/主送机关/成文日期齐全')
-        if opts.get('title_center') and title_para is not None:
-            al = title_para.paragraph_format.alignment
-            if al != WD_ALIGN_PARAGRAPH.CENTER:
-                add('warn', '标题居中', '标题当前非居中', fix_key='title_center')
-            else:
-                add('ok', '标题居中', '标题居中')
+        missing = []
+        if not types.get('title'):
+            missing.append('标题')
+        if not types.get('recipient'):
+            missing.append('主送机关')
+        if not types.get('date'):
+            missing.append('成文日期')
+        if missing:
+            # 结构缺失是内容缺失，无法凭空补出，不给 fix_key
+            add('warn', '结构完整性',
+                '未识别到：{}（如确有请在预览里核对/指定）'.format('、'.join(missing)))
+        else:
+            add('ok', '结构完整性', '标题/主送机关/成文日期齐全')
 
-    # 残留英文标点
+    # --- 序号层次一致性 ---
+    if opts.get('numbering'):
+        from . import analyzer
+        issues = analyzer.analyze_numbering(doc)
+        if issues:
+            for it in issues:
+                add('warn', '序号层次',
+                    '{}（{}）；建议用「智能一键处理」统一序号层次'.format(
+                        it.get('type', '序号不统一'), it.get('detail', '')))
+        else:
+            add('ok', '序号层次', '未发现序号风格混用')
+
+    # --- 标点 ---
     if opts.get('punctuation'):
         from . import analyzer
         issues = analyzer.analyze_punctuation(doc)
@@ -187,77 +519,57 @@ def check_compliance(doc, preset, options=None, detect_types=None):
 
 # ---------------- 自动修正 ----------------
 
-def _fix_margins(doc, preset):
+def _fix_margins(doc, preset, typed=None):
     page = preset.get('page', {})
     sec = doc.sections[0]
-    done = []
-    for attr, key, label in (('top_margin', 'top', '上'), ('bottom_margin', 'bottom', '下'),
-                             ('left_margin', 'left', '左'), ('right_margin', 'right', '右')):
+    for attr, key in (('top_margin', 'top'), ('bottom_margin', 'bottom'),
+                      ('left_margin', 'left'), ('right_margin', 'right')):
         v = page.get(key)
         if v is not None:
             setattr(sec, attr, Cm(v))
-            done.append(label)
     return '页边距→上{}/下{}/左{}/右{} cm'.format(
         page.get('top', '-'), page.get('bottom', '-'),
-        page.get('left', '-'), page.get('right', '-')) if done else ''
+        page.get('left', '-'), page.get('right', '-'))
 
 
-def _fix_paper(doc, preset):
+def _fix_paper(doc, preset, typed=None):
     sec = doc.sections[0]
     sec.page_width = Cm(21.0)
     sec.page_height = Cm(29.7)
     return '纸张→A4（21×29.7 cm）'
 
 
-def _fix_title_center(doc, preset, typed=None):
-    typed = typed if typed is not None else _detect_types(doc, preset)
-    for p, ptype in typed:
-        if ptype == 'title':
-            p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            return '标题→居中'
-    return ''
-
-
-def _fix_line_spacing(doc, preset, typed=None):
-    from .paragraph import paragraph_has_media
-    exp_ls = preset.get('body', {}).get('line_spacing')
-    if not exp_ls:
+def _fix_grid(doc, preset, typed=None):
+    from .page import _apply_page_grid
+    grid = preset.get('grid') or {}
+    lines = grid.get('lines_per_page')
+    chars = grid.get('chars_per_line')
+    if not lines:
         return ''
-    typed = typed if typed is not None else _detect_types(doc, preset)
-    n = 0
-    for p, ptype in typed:
-        if ptype != 'body':
-            continue
-        if paragraph_has_media(p):   # 图片段落不动，固定行距会裁切图片
-            continue
-        pf = p.paragraph_format
-        pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY
-        pf.line_spacing = Pt(exp_ls)
-        n += 1
-    return '正文行距→固定 {}pt（{} 段）'.format(exp_ls, n) if n else ''
+    base = (preset.get('body') or {}).get('size', 16)
+    _apply_page_grid(doc, lines, chars, base)
+    return '页面网格→每页 {} 行 × 每行 {} 字'.format(lines, chars)
 
 
-def _fix_body_font(doc, preset, typed=None):
-    from .font import set_font
-    body = preset.get('body', {})
-    font_cn = body.get('font_cn'); font_en = body.get('font_en', font_cn)
-    size = body.get('size')
-    if not font_cn or not size:
+def _fix_page_number(doc, preset, typed=None):
+    from .page import add_page_number
+    if not preset.get('page_number'):
         return ''
-    typed = typed if typed is not None else _detect_types(doc, preset)
-    n = 0
-    for p, ptype in typed:
-        if ptype != 'body':
-            continue
-        for run in p.runs:
-            if not run.text.strip():
-                continue
-            set_font(run, font_cn, font_en, size, bold=body.get('bold', False))
-        n += 1
-    return '正文字体→{} {}pt（{} 段）'.format(font_cn, size, n) if n else ''
+    add_page_number(
+        doc,
+        font_name=preset.get('page_number_font', '宋体'),
+        font_size=preset.get('page_number_size', 14),
+        style=preset.get('page_number_style', 'dash'),
+        position=preset.get('page_number_position', 'center'),
+        offset_from_text_mm=preset.get('page_number_offset_mm', 7),
+        replace_existing=preset.get('replace_existing_page_number', True),
+        bold=preset.get('page_number_bold', False),
+    )
+    return '页码→{} {}pt'.format(preset.get('page_number_font', '宋体'),
+                                preset.get('page_number_size', 14))
 
 
-def _fix_punctuation(doc, preset):
+def _fix_punctuation(doc, preset, typed=None):
     from . import punctuation
     quote_state = {'dq': 0, 'sq': 0}
     n = 0
@@ -273,15 +585,116 @@ def _fix_punctuation(doc, preset):
     return '标点修复（{} 段有改动）'.format(n) if n else '标点修复（无需改动）'
 
 
-# 需要段落类型识别的修正，接收共享的 typed 以免重复识别
-_FIXERS = {
-    'margins': (_fix_margins, False),
-    'paper': (_fix_paper, False),
-    'title_center': (_fix_title_center, True),
-    'line_spacing': (_fix_line_spacing, True),
-    'body_font': (_fix_body_font, True),
-    'punctuation': (_fix_punctuation, False),
+def _apply_attr(para, attr, fmt, ptype):
+    """把单个属性按预设写入段落（只动这一个属性，其余不碰）。"""
+    from .font import set_font
+    pf = para.paragraph_format
+
+    if attr in ('font', 'size', 'bold'):
+        font_cn = fmt.get('font_cn')
+        font_en = fmt.get('font_en', font_cn)
+        size = fmt.get('size')
+        bold = bool(fmt.get('bold', False))
+        for run in para.runs:
+            if not run.text.strip():
+                continue
+            if attr == 'font':
+                rpr = run._element.get_or_add_rPr()
+                rf = rpr.find(qn('w:rFonts'))
+                if rf is None:
+                    from docx.oxml import OxmlElement
+                    rf = OxmlElement('w:rFonts')
+                    rpr.insert(0, rf)
+                rf.set(qn('w:eastAsia'), font_cn)
+                rf.set(qn('w:ascii'), font_en)
+                rf.set(qn('w:hAnsi'), font_en)
+            elif attr == 'size' and size:
+                run.font.size = Pt(size)
+            elif attr == 'bold':
+                run.font.bold = bold
+        return
+
+    if attr == 'align':
+        pf.alignment = _ALIGN_MAP.get(fmt.get('align', 'justify'),
+                                      WD_ALIGN_PARAGRAPH.JUSTIFY)
+        return
+
+    if attr == 'indent':
+        indent = fmt.get('indent', 0) or 0
+        pf.first_line_indent = Pt(indent)
+        # 同步 firstLineChars，避免 Word 用字符数覆盖磅值
+        try:
+            from docx.oxml import OxmlElement
+            pPr = para._p.get_or_add_pPr()
+            ind = pPr.find(qn('w:ind'))
+            if indent > 0:
+                size = fmt.get('size', 16) or 16
+                if ind is None:
+                    ind = OxmlElement('w:ind')
+                    pPr.append(ind)
+                ind.set(qn('w:firstLineChars'), str(int(round(indent / size * 100))))
+            elif ind is not None:
+                ind.attrib.pop(qn('w:firstLineChars'), None)
+        except Exception:
+            pass
+        return
+
+    if attr == 'line_spacing':
+        ls = _expected_line_spacing(fmt)
+        if ls:
+            pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+            pf.line_spacing = Pt(ls)
+        return
+
+    if attr == 'spacing':
+        from .paragraph import _set_paragraph_spacing_points
+        _set_paragraph_spacing_points(para, fmt.get('space_before', 0),
+                                      fmt.get('space_after', 0))
+        return
+
+
+def _fix_paragraph_attr(doc, preset, typed, ptype, attr):
+    """只修正指定类型段落的指定属性。"""
+    from .paragraph import paragraph_has_media
+    fmt = preset.get(ptype)
+    if not isinstance(fmt, dict):
+        return ''
+    if ptype == 'roster' and attr not in _ROSTER_ATTRS:
+        return ''
+    n = 0
+    for _idx, para, t in typed:
+        if t != ptype or paragraph_has_media(para):
+            continue
+        if attr == 'indent' and ptype == 'attachment':
+            continue   # 悬挂缩进规则特殊，不在此处理
+        _apply_attr(para, attr, fmt, ptype)
+        n += 1
+    if not n:
+        return ''
+    return '{}·{}→按预设（{} 段）'.format(
+        TYPE_LABELS.get(ptype, ptype), ATTR_LABELS.get(attr, attr), n)
+
+
+_DOC_FIXERS = {
+    'margins': _fix_margins,
+    'paper': _fix_paper,
+    'grid': _fix_grid,
+    'page_number': _fix_page_number,
+    'punctuation': _fix_punctuation,
 }
+
+
+def fix_label(fix_key):
+    """把 fix_key 翻成一句人话，供 UI 显示。"""
+    if fix_key in FIX_LABELS:
+        return FIX_LABELS[fix_key]
+    if fix_key and fix_key.startswith('para:'):
+        parts = fix_key.split(':')
+        if len(parts) == 3:
+            _p, ptype, attr = parts
+            return '把{}的{}改为预设值'.format(
+                TYPE_LABELS.get(ptype, ptype), ATTR_LABELS.get(attr, attr))
+    return '修正'
 
 
 def apply_compliance_fixes(input_path, output_path, preset, fix_keys):
@@ -294,17 +707,36 @@ def apply_compliance_fixes(input_path, output_path, preset, fix_keys):
     doc = Document(input_path)
     sanitize_document(doc)
 
-    keys = [k for k in fix_keys if k in _FIXERS]
-    needs_typed = any(_FIXERS[k][1] for k in keys)
-    typed = _detect_types(doc, preset) if needs_typed else None
+    para_keys = [k for k in fix_keys if k.startswith('para:')]
+    doc_keys = [k for k in fix_keys if k in _DOC_FIXERS]
+
+    # 段落修正依赖类型识别；页边距等页面改动不影响识别结果，
+    # 故一次识别即可，且在页面修正之前做（避免 grid 依赖新边距时错序）。
+    typed = _detect_types(doc, preset) if para_keys else None
 
     applied = []
-    for key in keys:
-        fn, uses_typed = _FIXERS[key]
+
+    for key in para_keys:
+        parts = key.split(':')
+        if len(parts) != 3:
+            continue
+        _p, ptype, attr = parts
         try:
-            desc = fn(doc, preset, typed) if uses_typed else fn(doc, preset)
+            desc = _fix_paragraph_attr(doc, preset, typed, ptype, attr)
         except Exception as e:
-            applied.append('{}：修正失败（{}）'.format(FIX_LABELS.get(key, key), e))
+            applied.append('{}：修正失败（{}）'.format(fix_label(key), e))
+            continue
+        if desc:
+            applied.append(desc)
+
+    # 页面级修正放在后面：网格依赖最终的页边距/纸张
+    for key in ('margins', 'paper', 'grid', 'page_number', 'punctuation'):
+        if key not in doc_keys:
+            continue
+        try:
+            desc = _DOC_FIXERS[key](doc, preset)
+        except Exception as e:
+            applied.append('{}：修正失败（{}）'.format(fix_label(key), e))
             continue
         if desc:
             applied.append(desc)
