@@ -678,6 +678,20 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
                 if not (isinstance(next_block, Paragraph) and not next_block.text.strip()):
                     _insert_paragraph_after_table(table, text="")
 
+    # 4.45 大纲级别：排版把所有段落强制成「正文」样式，Word 自动目录域
+    # 因此取不到条目。按识别出的类型标注 outlineLvl，使目录域与导航窗格
+    # 能取到标题层级，更新域即可得到真实页码。
+    try:
+        from .east_asian_typography import set_outline_level as _set_outline
+        _OUTLINE_BY_TYPE = {'title': 0, 'heading1': 0, 'heading2': 1,
+                            'heading3': 2, 'heading4': 3}
+        for _p, _t in typed_entries:
+            _lvl = _OUTLINE_BY_TYPE.get(_t)
+            if _lvl is not None:
+                _set_outline(_p, _lvl)
+    except ImportError:
+        pass
+
     # 4.5 中文禁则处理（标点不溢出、遵循中文换行规则）
     _progress(74, 100, '应用中文排版规则...')
     try:

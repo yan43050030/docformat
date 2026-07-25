@@ -41,6 +41,31 @@ def _set_paragraph_boolean_property(paragraph, local_name, value):
     return True
 
 
+def set_outline_level(paragraph, level):
+    """设置段落大纲级别（0-8 表示 1-9 级；None 表示正文级）。
+
+    公文排版会把所有段落强制成「正文」样式，Word 的自动目录域因此取不到
+    任何条目。设置 outlineLvl 后，目录域（含 \\u 开关）与导航窗格都能
+    正确取到标题层级，更新域即可得到真实页码。
+    """
+    p_pr = paragraph._p.get_or_add_pPr()
+    tag = qn("w:outlineLvl")
+    element = p_pr.find(tag)
+    if level is None:
+        if element is not None:
+            p_pr.remove(element)
+            return True
+        return False
+    if element is None:
+        element = OxmlElement("w:outlineLvl")
+        _insert_paragraph_property(p_pr, element, "outlineLvl")
+    value = str(int(level))
+    if element.get(qn("w:val")) == value:
+        return False
+    element.set(qn("w:val"), value)
+    return True
+
+
 def apply_chinese_line_break_rules_to_paragraph(paragraph):
     """Enable Chinese kinsoku and disable hanging punctuation for one paragraph."""
     if not paragraph.text.strip():

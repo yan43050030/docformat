@@ -345,7 +345,8 @@ class ProcessWorker(QThread):
                         out = output_path_for(path, self.suffix)
                         from scripts import toc
                         toc.generate_toc(work, out,
-                                         mode='auto' if self.mode == MODE_TOC_AUTO else 'manual')
+                                         mode='auto' if self.mode == MODE_TOC_AUTO else 'manual',
+                                         log=self._log)
                         self._log('success', '已生成目录: {} → {}'.format(base, os.path.basename(out)))
                         self.fileFinished.emit(path, out)
                     else:  # MODE_FULL

@@ -428,6 +428,84 @@ def test_cleaner():
     print('[7k] 格式清洗：全文/部分段落/不伤识别/排版默认清洗+合规预览 通过')
 
 
+def test_toc():
+    """目录：大纲级别写入、层级识别、点引导线制表位、页码匹配与降级"""
+    from docx.oxml.ns import qn
+    from scripts import toc
+    from scripts.formatter import format_document
+
+    d = Document()
+    d.add_paragraph('关于开展某某试点工作的通知'); d.add_paragraph('各有关单位：')
+    for h in ['一、总体要求', '（一）工作目标', '二、主要任务']:
+        d.add_paragraph(h)
+        for _ in range(3):
+            d.add_paragraph('为深入贯彻落实上级决策部署，现就开展试点工作通知如下。')
+    d.add_paragraph('某某办公室'); d.add_paragraph('2026年7月25日')
+    src = os.path.join(OUT_DIR, 'toc_in.docx'); d.save(src)
+    fmt = os.path.join(OUT_DIR, 'toc_fmt.docx')
+    format_document(src, fmt, preset_name='official_gbk')
+
+    # 1. 排版写入大纲级别——Word 自动目录域靠它取条目，否则目录是空的
+    fdoc = Document(fmt)
+    levels = {}
+    for p in fdoc.paragraphs:
+        ppr = p._p.find(qn('w:pPr'))
+        if ppr is None:
+            continue
+        el = ppr.find(qn('w:outlineLvl'))
+        if el is not None:
+            levels[p.text.strip()] = int(el.get(qn('w:val')))
+    assert levels.get('一、总体要求') == 0, '一级标题应为大纲级别1'
+    assert levels.get('（一）工作目标') == 1, '二级标题应为大纲级别2'
+    assert '为深入贯彻落实上级决策部署，现就开展试点工作通知如下。' not in levels, \
+        '正文不应有大纲级别'
+
+    # 2. 自动目录域
+    auto = os.path.join(OUT_DIR, 'toc_auto.docx')
+    toc.generate_toc(fmt, auto, mode='auto')
+    xml = '\n'.join(p._p.xml for p in Document(auto).paragraphs[:6])
+    assert 'TOC' in xml and 'instrText' in xml, '未插入目录域'
+
+    # 3. 手动目录：层级从大纲级别读、点引导线用右对齐制表位
+    man = os.path.join(OUT_DIR, 'toc_man.docx')
+    toc.generate_toc(fmt, man, mode='manual')
+    mdoc = Document(man)
+    entries = [p for p in mdoc.paragraphs if '\t' in p.text]
+    assert len(entries) >= 4, '目录条目过少: {}'.format(len(entries))
+    for p in entries:
+        ppr = p._p.find(qn('w:pPr'))
+        tabs = ppr.find(qn('w:tabs')) if ppr is not None else None
+        assert tabs is not None, '目录项应有制表位'
+        tb = tabs.find(qn('w:tab'))
+        assert tb.get(qn('w:leader')) == 'dot', '点引导线应由制表位生成'
+        assert tb.get(qn('w:val')) == 'right', '页码列应右对齐'
+    assert not any('. . . .' in p.text for p in entries), '不应再用字面点线拼接'
+
+    # 4. 层级映射（大纲级别优先，未排版文档回退识别器）
+    items = toc._build_heading_items(Document(fmt))
+    assert ('一、总体要求', 1) in items and ('（一）工作目标', 2) in items, \
+        '层级读取错误: {}'.format(items)
+
+    # 5. 页码匹配：按文档顺序推进游标，同名标题不错配到首次出现处
+    pages = toc._match_headings_to_pages(
+        [('标题A', 1), ('小节X', 2), ('标题B', 1), ('小节X', 2), ('标题C', 1)],
+        ['标题A小节X正文', '标题B小节X正文', '标题C正文'])
+    assert pages['标题A'] == 1 and pages['标题B'] == 2 and pages['标题C'] == 3, \
+        '页码匹配错误: {}'.format(pages)
+
+    # 6. 缺 PDF 取词工具时优雅降级，且提示能对症
+    _orig = toc._has_pdf_text_tool
+    toc._has_pdf_text_tool = lambda: False
+    try:
+        deg = os.path.join(OUT_DIR, 'toc_degrade.docx')
+        toc.generate_toc(fmt, deg, mode='manual')
+        txt = '\n'.join(p.text for p in Document(deg).paragraphs[:12])
+        assert '__' in txt, '降级时应留页码占位符'
+    finally:
+        toc._has_pdf_text_tool = _orig
+    print('[7l] 目录：大纲级别/层级/点引导线制表位/页码匹配/降级 通过')
+
+
 def test_gb_header_record():
     """版头红线/版记分隔线（flags 开启）+ 副标题识别"""
     from docx.oxml.ns import qn
@@ -707,6 +785,7 @@ if __name__ == '__main__':
     test_title_shape()
     test_compliance()
     test_cleaner()
+    test_toc()
     test_gb_header_record()
     test_image_protection()
     test_redaction()

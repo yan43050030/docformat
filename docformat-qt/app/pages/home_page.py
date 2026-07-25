@@ -23,8 +23,8 @@ MODES = [
     (MODE_CLEAN, '格式清洗', '排版出怪问题时用：清掉文档里看不见的脏格式，不改文字内容'),
     (MODE_PUNCTUATION, '标点修复', '仅修复中英文标点混用，保留原有段落格式'),
     (MODE_AI_PASTE, 'AI 粘贴生成', '粘贴 AI 生成的文本或 Markdown，自动生成规范公文'),
-    (MODE_TOC_AUTO, '生成自动目录（域）', '在文首插入 Word 目录域，Word/WPS 打开后右键更新域即可自动生成页码'),
-    (MODE_TOC_MANUAL, '生成手动目录页', '扫描标题层级，在文首插入目录文本（页码需手动填入）'),
+    (MODE_TOC_AUTO, '生成自动目录（域）', '插入 Word 目录域，排版已写入大纲级别，打开后右键更新域即得真实页码'),
+    (MODE_TOC_MANUAL, '生成手动目录页', '静态目录页，点引导线对齐；有 Word/WPS 或 LibreOffice 时自动填真实页码'),
 ]
 
 
