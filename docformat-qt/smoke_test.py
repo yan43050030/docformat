@@ -781,6 +781,32 @@ def test_overprint():
         else:
             assert r['height_cm'] >= r['declared_cm'], 'atLeast 行不应小于声明高度'
     assert plan['grid_cm'], '应读到文档网格行高（留白区按它估高）'
+
+    # 网格吸附：行高超过一个网格行要占两格。按一格算会把留白区算成一半，
+    # 整单看起来只占大半页（领导批示 11 段：一格 6.05cm vs 吸附 12.11cm）
+    _g = plan['grid_cm']
+    _mk = Document().add_paragraph('测')
+    from docx.shared import Pt as _Pt
+    _mk.runs[0].font.size = _Pt(14)
+    _h = op.paragraph_height_cm(_mk, _g)
+    assert abs(_h - 2 * _g) < 0.01, \
+        '14pt 段落自然行高 0.69cm > 网格 0.55cm，应吸附占 2 格: {:.3f}'.format(_h)
+    _lead = [r for r in tb['rows'] if r['declared_cm'] > 6][0]
+    assert _lead['height_cm'] > 11, \
+        '留白区（领导批示）高度应按吸附算约 12cm，实得 {:.2f}'.format(_lead['height_cm'])
+
+    # 整单应正好占满一页：内容末端接近页高减下边距
+    _tbl_h = sum(r['height_cm'] for b in plan['blocks'] if b['kind'] == 'table'
+                 for r in b['rows'])
+    _pg = plan['page']
+    _paras_h = 0.0
+    _pd = Document(tpl)
+    for _pp in _pd.paragraphs:
+        _paras_h += op.paragraph_height_cm(_pp, _g)
+    _end = _pg['top_cm'] + _paras_h + _tbl_h
+    _limit = _pg['height_cm'] - _pg['bottom_cm']
+    assert _limit - 1.5 < _end <= _limit + 0.2, \
+        '整单应基本占满一页：末端 {:.2f}cm，可用到 {:.2f}cm'.format(_end, _limit)
     shrunk = [c for r in plan['rows'] for c in r['cells'] if c['shrunk']]
     assert shrunk, '长内容预览应标出已缩小'
     pv_out = os.path.join(OUT_DIR, 'overprint_pv.docx')

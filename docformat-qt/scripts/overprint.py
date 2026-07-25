@@ -471,30 +471,40 @@ def _grid_line_cm(doc):
         return None
 
 
+def paragraph_height_cm(para, grid_cm):
+    """单个段落占用的垂直高度（cm）。
+
+    关键是文档网格的吸附规则：未关闭 snapToGrid 的段落，其每一行会吸附到
+    网格行上，**行高超过一个网格行时占两格**（本模板网格 0.55cm，14pt 正文
+    自然行高 0.69cm → 占 2 格 = 1.10cm）。按一格算会把留白区高度算成一半，
+    整单看起来只占大半页——领导批示区 11 段，一格算 6.05cm、吸附算 12.11cm，
+    差出 6cm 之多。
+    """
+    fs = _para_font_pt(para)
+    ppr = para._p.find(qn('w:pPr'))
+    snap_off = False
+    if ppr is not None:
+        sg = ppr.find(qn('w:snapToGrid'))
+        if sg is not None and sg.get(qn('w:val')) in ('0', 'false'):
+            snap_off = True
+        rpr = ppr.find(qn('w:rPr'))
+        if rpr is not None and not para.runs:
+            sz = rpr.find(qn('w:sz'))
+            if sz is not None:
+                try:
+                    fs = int(sz.get(qn('w:val'))) / 2.0
+                except (TypeError, ValueError):
+                    pass
+    natural = _para_line_spacing_pt(para, fs) / PT_PER_CM
+    if grid_cm and not snap_off:
+        import math
+        return max(1, int(math.ceil(natural / grid_cm))) * grid_cm
+    return natural
+
+
 def _cell_content_cm(cell, grid_cm):
     """单元格内容自然高度（cm），空段也算——它们正是留白区的高度来源。"""
-    total = 0.0
-    for p in cell.paragraphs:
-        fs = _para_font_pt(p)
-        ppr = p._p.find(qn('w:pPr'))
-        snap_off = False
-        if ppr is not None:
-            sg = ppr.find(qn('w:snapToGrid'))
-            if sg is not None and sg.get(qn('w:val')) in ('0', 'false'):
-                snap_off = True
-            rpr = ppr.find(qn('w:rPr'))
-            if rpr is not None and not p.runs:
-                sz = rpr.find(qn('w:sz'))
-                if sz is not None:
-                    try:
-                        fs = int(sz.get(qn('w:val'))) / 2.0
-                    except (TypeError, ValueError):
-                        pass
-        if grid_cm and not snap_off:
-            total += grid_cm
-        else:
-            total += _para_line_spacing_pt(p, fs) / PT_PER_CM
-    return total
+    return sum(paragraph_height_cm(p, grid_cm) for p in cell.paragraphs)
 
 
 def plan_fill(template_path, values, autofit=True):
