@@ -63,6 +63,9 @@ class OverprintDialog(QDialog):
                         "日期会拆成年/月/日分别落位，识别不到的可手工补填")
         pick.clicked.connect(self._import_content)
         src_row.addWidget(pick)
+        drop_hint = QLabel("（也可把 docx 直接拖到本窗口）")
+        drop_hint.setProperty("muted", "true")
+        src_row.addWidget(drop_hint)
         clear = QPushButton("清空")
         clear.setProperty("flat", "true")
         clear.setCursor(Qt.PointingHandCursor)
@@ -111,10 +114,53 @@ class OverprintDialog(QDialog):
         btns.addWidget(ok)
         root.addLayout(btns)
 
+        # 支持把 docx 直接拖进窗口：拖模板→添加为模板，拖普通文档→导入内容
+        self.setAcceptDrops(True)
+
         if not self._templates:
             self.status.setText("未找到套打模板。点「添加模板…」导入一份含 {{字段名}} 的 docx。")
         else:
             self._load_fields()
+
+    # ---------- 拖拽 ----------
+    @staticmethod
+    def _dropped_docx(mime):
+        if not mime.hasUrls():
+            return None
+        for url in mime.urls():
+            path = url.toLocalFile()
+            if path and path.lower().endswith('.docx') and os.path.isfile(path):
+                return path
+        return None
+
+    def dragEnterEvent(self, event):
+        if self._dropped_docx(event.mimeData()):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        if self._dropped_docx(event.mimeData()):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        path = self._dropped_docx(event.mimeData())
+        if not path:
+            return
+        event.acceptProposedAction()
+        # 带 {{字段}} 的是套打模板，否则当作要适配的内容文档
+        try:
+            has_fields = bool(overprint.scan_fields(path))
+        except Exception:
+            has_fields = False
+        if has_fields:
+            ret = QMessageBox.question(
+                self, "拖入的是套打模板",
+                "这份 docx 含 {{字段名}} 占位符，看起来是套打模板。\n\n"
+                "添加为模板？选「否」则按内容文档导入。",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if ret == QMessageBox.Yes:
+                self._add_template_file(path)
+                return
+        self._load_content_from(path)
 
     # ---------- 字段 ----------
     def _load_fields(self, *_a):
@@ -206,6 +252,12 @@ class OverprintDialog(QDialog):
             self, "选择要适配的文档", "", "Word 文档 (*.docx);;所有文件 (*.*)")
         if not path:
             return
+        self._load_content_from(path)
+
+    def _load_content_from(self, path):
+        if not self._template_path:
+            QMessageBox.information(self, "提示", "请先选择套打模板")
+            return
         from PyQt5.QtWidgets import QApplication
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
@@ -236,6 +288,9 @@ class OverprintDialog(QDialog):
             self, "选择套打模板", "", "Word 文档 (*.docx)")
         if not path:
             return
+        self._add_template_file(path)
+
+    def _add_template_file(self, path):
         try:
             fields = overprint.scan_fields(path)
         except Exception as e:

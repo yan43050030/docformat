@@ -313,10 +313,14 @@ def autofit_cell(table, cell, warn=None):
 def lock_row_heights(doc):
     """把所有已设高度的行改为固定高度（hRule=exact），返回锁定的行数。
 
-    套打的命门是几何绝对不能变。atLeast 行一旦内容超长，Word 会把行撑高、
-    下面所有内容整体下移，与预印栏位全部错位——这比文字被裁掉严重得多。
-    改成 exact 后 Word 物理上无法撑高，版面永远对得住预印纸；
-    配合自适应缩字号，正常内容都能放下，实在放不下会明确告警。
+    默认不启用。原因：atLeast 行的实际渲染高度是
+    max(声明高度, 内容自然高度)，而"内容自然高度"取决于 Word 的字体度量，
+    程序无法可靠预测（实测领导批示行声明 6.40cm、实际渲染约 11.9cm，
+    里面有 10 个空段落撑着）。一旦按声明高度锁成 exact，那一行反而被
+    **压小**，下面内容整体上移——正是我们要避免的错位。
+
+    行不会被撑高由自适应保证：自适应以"声明高度"为目标缩字号，而声明高度
+    ≤ 实际渲染高度，因此内容永远塞得进原有空间，不会把行顶大。
     """
     n = 0
     for table in doc.tables:
@@ -333,7 +337,7 @@ def lock_row_heights(doc):
     return n
 
 
-def _fill_doc(doc, values, autofit=True, log=None, lock_heights=True):
+def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False):
     """在内存 Document 上完成填充→自适应→锁高，返回 (已填数, 提示, 单元格报告)。
 
     预览与实际输出共用这一条路径，保证"预览看到的字号"就是"打印出来的字号"，
@@ -392,7 +396,7 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=True):
 
 
 def fill_form(template_path, values, output_path, autofit=True, log=None,
-              lock_heights=True):
+              lock_heights=False):
     """按 values 填充套打模板并另存，返回 (已填字段数, 提示列表)。"""
     from docx import Document
     doc = Document(template_path)

@@ -570,6 +570,34 @@ finally:
     _od2.reject()
 print('[22] 套打版面预览：实时刷新 + 缩字号可见 + 放不下警示 + 留空可用 ✓')
 
+# ---------- 20. 套打对话框支持拖拽 docx ----------
+_od3 = _OD()
+try:
+    assert _od3.acceptDrops(), '套打对话框应接受拖拽'
+    _dr3 = _D2()
+    for _t in ['标题：关于拖拽导入的请示', '拟办意见：', '经研究，拟同意。请审示。',
+               '承办部门：办公室', '经办人：孙七', '2026年8月1日']:
+        _dr3.add_paragraph(_t)
+    _p3 = os.path.join(SMOKE, 'op_drop.docx'); _dr3.save(_p3)
+    _m = QMimeData(); _m.setUrls([QUrl.fromLocalFile(_p3)])
+    _e = QDragEnterEvent(QPoint(50, 50), Qt.CopyAction, _m, Qt.LeftButton, Qt.NoModifier)
+    _od3.dragEnterEvent(_e)
+    assert _e.isAccepted(), 'docx 拖入应被接受'
+    _od3.dropEvent(QDropEvent(QPoint(50, 50), Qt.CopyAction, _m,
+                              Qt.LeftButton, Qt.NoModifier))
+    _v3 = _od3._values()
+    assert _v3['标题'] == '关于拖拽导入的请示', '拖放后未导入标题: {}'.format(_v3)
+    assert '拟同意' in _v3['拟办意见'], '拖放后未导入正文'
+    assert (_v3['年'], _v3['月'], _v3['日']) == ('2026', '8', '1'), '拖放后日期未拆格'
+    # 非 docx 不应接受
+    _m2 = QMimeData(); _m2.setUrls([QUrl.fromLocalFile(SAMPLE + '.notdocx')])
+    _e2 = QDragEnterEvent(QPoint(1, 1), Qt.CopyAction, _m2, Qt.LeftButton, Qt.NoModifier)
+    _od3.dragEnterEvent(_e2)
+    assert not _e2.isAccepted(), '非 docx 不应被接受'
+finally:
+    _od3.reject()
+print('[23] 套打对话框：拖拽 docx 导入内容 + 非 docx 拒绝 ✓')
+
 
 
 # ---------- 12. v3.0 易用性 ----------

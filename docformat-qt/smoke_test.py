@@ -629,7 +629,9 @@ def test_overprint():
         h0, _e0 = op._row_height_cm(r0)
         h1, e1 = op._row_height_cm(r1)
         assert h0 == h1, '行高数值被改动，套打会错位: {} vs {}'.format(h0, h1)
-        assert e1, '输出应把行锁为固定高度，否则长内容会把行撑高'
+        assert _e0 == e1, ('行高规则被改动: {} → {}。atLeast 行的实际渲染高度取决于'
+                           'Word 字体度量，程序算不准；擅自锁成 exact 会把行压小、'
+                           '下面内容整体上移').format(_e0, e1)
 
     # 长内容：应缩字号；固定高度行(经办人所在行)不应被连带缩
     out_l, _n, notes_l, logs_l = _fill('因某某事项需要进一步开展调查核实工作，' * 14, 'long')
@@ -696,6 +698,7 @@ def test_overprint():
     assert any('自适应' in m for m in lg), '适配长文时应缩字号: {}'.format(lg)
 
     # --- 标题栏/拟办意见栏不得被撑高：无论内容多长，几何必须恒定 ---
+    tpl_geo = [op._row_height_cm(r) for r in Document(tpl).tables[0].rows]
     geos = []
     for mult, tmult in ((1, 1), (16, 1), (40, 4)):
         v = dict(base)
@@ -704,10 +707,16 @@ def test_overprint():
         o = os.path.join(OUT_DIR, 'overprint_geo_{}.docx'.format(mult))
         op.fill_form(tpl, v, o)
         geos.append([op._row_height_cm(r) for r in Document(o).tables[0].rows])
-    assert geos[0] == geos[1] == geos[2], \
-        '内容长短改变了表格几何，套打会错位: {}'.format(geos)
-    assert all(exact for h, exact in geos[0]), \
-        '所有行都应锁为固定高度，否则会被内容撑高: {}'.format(geos[0])
+    assert geos[0] == geos[1] == geos[2] == tpl_geo, \
+        '内容长短改变了表格几何，套打会错位: {} vs 模板 {}'.format(geos, tpl_geo)
+
+    # 模板里不应残留空 run（无文字也无图片/换行等结构），
+    # 它们是转模板时清空黑字留下的垃圾
+    import zipfile as _zf
+    import re as _re2
+    _x = _zf.ZipFile(tpl).read('word/document.xml').decode('utf-8')
+    _empty = _re2.findall(r'<w:r>(?:(?!<w:t[ >]).)*?</w:r>', _x, _re2.S)
+    assert not _empty, '模板残留 {} 个空 run'.format(len(_empty))
 
     # --- 空值：经办人等留空供手写签字，应干净留白 ---
     import re as _re
