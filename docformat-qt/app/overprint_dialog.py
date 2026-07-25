@@ -101,6 +101,21 @@ class OverprintDialog(QDialog):
         pv_head.setProperty("sectionTitle", "true")
         pv_head.setWordWrap(True)
         pv_lay.addWidget(pv_head)
+
+        shape_row = QHBoxLayout()
+        shape_row.addWidget(QLabel("长标题回行："))
+        self.shape_combo = QComboBox()
+        for _t, _v in (('正梯形（上长下短）', 'trapezoid_down'),
+                       ('倒梯形（上短下长）', 'trapezoid_up'),
+                       ('不回行（由 Word 自动折行）', 'none')):
+            self.shape_combo.addItem(_t, _v)
+        self.shape_combo.setToolTip(
+            "标题一行放不下时的分行方式。公文要求词意完整、排列对称；\n"
+            "选“不回行”则交给 Word 自动折行，可能把词拆断。")
+        self.shape_combo.currentIndexChanged.connect(self._schedule_preview)
+        shape_row.addWidget(self.shape_combo)
+        shape_row.addStretch(1)
+        pv_lay.addLayout(shape_row)
         self.preview = QTextBrowser()
         pv_lay.addWidget(self.preview, 1)
         self.pv_note = QLabel("")
@@ -222,14 +237,15 @@ class OverprintDialog(QDialog):
         if not self._template_path or not hasattr(self, 'preview'):
             return
         try:
-            plan = overprint.plan_fill(self._template_path, self._values())
+            plan = overprint.plan_fill(self._template_path, self._values(),
+                                       title_shape=self._title_shape())
         except Exception as e:
             self.preview.setHtml('<body style="color:#888;font-family:SimSun">'
                                  '预览失败：{}</body>'.format(e))
             return
         self._last_plan = plan
         pos = self.preview.verticalScrollBar().value()
-        self.preview.setHtml(render_overprint_html(plan))
+        self.preview.setHtml(render_overprint_html(plan, self._pv_scale(plan)))
         self.preview.verticalScrollBar().setValue(pos)
         msgs = []
         for row in plan['rows']:
@@ -242,6 +258,23 @@ class OverprintDialog(QDialog):
             msgs.append('{} 处已自动缩小字号以放进预留格'.format(shrunk))
         self.pv_note.setText('；'.join(dict.fromkeys(msgs)) or
                              '各栏内容均能正常放下')
+
+    def _pv_scale(self, plan):
+        """让整幅版面填满预览区：几何和字号同倍放大，比例与行数不变。
+
+        真实版心只有 16.5cm（约 428px），在宽预览区里小得看不清字；
+        整体等比放大既看得清，又不影响"哪一行放不下"的判断——
+        折行是按真实厘米算好的，放大只是显示倍率。
+        """
+        avail = max(200, self.preview.viewport().width() - 24)
+        want = plan['content_w_cm'] * _PX_PER_CM
+        return max(0.6, min(2.2, avail / want)) if want else 1.0
+
+    def _title_shape(self):
+        cb = getattr(self, 'shape_combo', None)
+        if cb is None:
+            return 'trapezoid_down'
+        return cb.itemData(cb.currentIndex()) or 'none'
 
     def _values(self):
         out = {}
@@ -428,7 +461,8 @@ class OverprintDialog(QDialog):
         from PyQt5.QtWidgets import QApplication
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            n, notes = overprint.fill_form(self._template_path, values, out)
+            n, notes = overprint.fill_form(self._template_path, values, out,
+                                           title_shape=self._title_shape())
         except Exception as e:
             QApplication.restoreOverrideCursor()
             QMessageBox.warning(self, "生成失败", str(e))
@@ -494,23 +528,31 @@ def render_overprint_html(plan, scale=1.0):
     合在一张表里时 Qt 会把这些互相冲突的宽度合成同一套列约束（整行合并
     的那格没有 colspan，被当成第一列的宽度），标题栏就被撑到半幅宽，
     与真实版面完全对不上。逐行成表后各行只受自己的宽度约束。
-    宽度用百分比而非像素：Qt 富文本对像素宽度只当"建议值"，
-    内容稍长就会自行重新分配。
+    表宽用 <table width> **属性**而不是 CSS width：实测 Qt 富文本完全
+    无视表格的 CSS 像素宽度（模板表宽应 428px，加了 style 仍被拉满可视区
+    渲染成 1190px，格子宽出近三倍，29 字的标题于是挤成一行、
+    而 Word 里明明是两行）；width 属性才被真正采纳。列宽仍用百分比，
+    它是相对表宽的，表宽对了列宽就对了。
     """
     page = plan['page']
     cw = plan['content_w_cm']
     W = cw * _PX_PER_CM * scale
-    parts = ['<div style="width:{:.0f}px;background:#FFF;'
-             'border:1px solid #D8D2C4;padding:6px 0;">'.format(W)]
+    parts = ['<div style="background:#FFF;'
+             'border:1px solid #D8D2C4;padding:6px 0;">']
 
     LINE = '1px solid #D9534F'
     NONE = '0'
 
     for blk in plan.get('blocks') or []:
         if blk['kind'] == 'para':
+            # 独立段落也套一张定宽单格表：div 的 CSS 宽度同样被 Qt 无视，
+            # 不约束的话段落会按可视区宽度排，与表格部分对不齐
             parts.append(
-                '<div style="text-align:{};margin:2px 0;white-space:pre-wrap">{}</div>'
-                .format(blk['align'], _segs_html(blk['segs'], scale)))
+                '<table width="{:.0f}" cellspacing="0" cellpadding="0" '
+                'style="border-collapse:collapse;margin:0"><tr>'
+                '<td style="text-align:{};padding:1px 3px;'
+                'white-space:pre-wrap">{}</td></tr></table>'
+                .format(W, blk['align'], _segs_html(blk['segs'], scale)))
             continue
         b = blk.get('borders') or {}
         rows = blk['rows']
@@ -519,8 +561,8 @@ def render_overprint_html(plan, scale=1.0):
             widths = [max(0.01, c.get('width_cm') or 0.01) for c in row['cells']]
             total = sum(widths) or 1.0
             parts.append(
-                '<table cellspacing="0" cellpadding="0" '
-                'style="width:{:.0f}px;border-collapse:collapse;margin:0">'
+                '<table width="{:.0f}" cellspacing="0" cellpadding="0" '
+                'style="border-collapse:collapse;margin:0">'
                 '<tr>'.format(W))
             n = len(row['cells'])
             for ci, c in enumerate(row['cells']):

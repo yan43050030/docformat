@@ -75,6 +75,26 @@ def scan_fields(template_path):
     return names
 
 
+# 定宽字段：值短于占位符时补空格补足原宽度。
+# 套打里"年 月 日"三个字是**预印在纸上的固定位置**，模板用等宽的
+# {{年}}/{{月}}/{{日}} 占住那段空白。若直接把 {{月}}（4 个半角宽）换成
+# "7"（1 个半角宽），后面的"月"字就左移 3 个半角宽（14pt 下约 0.75cm），
+# 与纸上预印的"月"对不上。补足原宽后，无论一位数还是两位数，
+# 预印字符都纹丝不动；留空待手签时空白也原样保留。
+_FIXED_WIDTH_FIELDS = ('年', '月', '日')
+
+# 需要梯形回行的字段（公文标题回行要求词意完整、排列对称）
+TITLE_FIELDS = ('标题', '题目')
+
+
+def _pad_to_width(value, slot_units):
+    """把值右对齐补空格到 slot_units 个全角宽（数字紧贴其后的年/月/日）。"""
+    need = slot_units - _text_width_units(value)
+    if need <= 0:
+        return value
+    return ' ' * int(round(need / 0.5)) + value
+
+
 def _replace_in_paragraph(para, values):
     """把段落里的占位符替换为取值，保留该 run 的字体/颜色/字号。
 
@@ -85,8 +105,13 @@ def _replace_in_paragraph(para, values):
     for run in para.runs:
         if '{{' not in run.text:
             continue
+
         def _sub(m):
-            return str(values.get(m.group(1).strip(), ''))
+            key = m.group(1).strip()
+            val = str(values.get(key, ''))
+            if key in _FIXED_WIDTH_FIELDS:
+                return _pad_to_width(val, _text_width_units(m.group(0)))
+            return val
         new = PLACEHOLDER_RE.sub(_sub, run.text)
         if new != run.text:
             run.text = new
@@ -310,6 +335,65 @@ def autofit_cell(table, cell, warn=None):
     return True, final, not fits
 
 
+def shape_title_cell(table, cell, shape='trapezoid_down'):
+    """长标题在格子里按梯形回行，返回 (是否改动, 行数)。
+
+    公文标题回行要求"词意完整、排列对称、长短适宜"（GB/T 9704），
+    靠 Word 自动折行只会齐头齐尾、还可能把词拆断。这里主动算好断点并
+    插入 w:br：输出的 docx 与预览看到的行数、断点因此完全一致——
+    交给 Word 自动折行时，预览端无从知道它会断在哪里。
+
+    行数由格子宽度和**当前字号**决定，所以要在自适应缩字号之后再调用；
+    缩过字号的话一行能多放几个字，断点要按新字号重算。
+    """
+    from .title_shape import split_title_lines
+    from docx.oxml import OxmlElement
+    import copy
+
+    paras = [p for p in cell.paragraphs if p.text.strip()]
+    if not paras:
+        return False, 0
+    para = max(paras, key=lambda p: len(p.text))
+    text = para.text.replace('\n', '').strip()
+    if not text:
+        return False, 0
+    font_pt = _para_font_pt(para)
+    usable = _cell_width_cm(table, cell) - _cell_margins_cm(cell)
+    per_line = usable / (font_pt / PT_PER_CM) if font_pt else 0
+    if per_line <= 0:
+        return False, 0
+    lines = split_title_lines(text, per_line, shape)
+    if len(lines) <= 1:
+        # 一行放得下：若之前插过 br，要还原成单行
+        if '\n' in para.text:
+            _rebuild_lines(para, [text])
+            return True, 1
+        return False, 1
+    _rebuild_lines(para, lines)
+    return True, len(lines)
+
+
+def _rebuild_lines(para, lines):
+    """把段落重建成若干行（w:br 分隔），沿用首个 run 的字体属性。"""
+    from docx.oxml import OxmlElement
+    import copy
+    runs = para.runs
+    if not runs:
+        return
+    rpr = runs[0]._r.find(qn('w:rPr'))
+    for r in list(runs):
+        para._p.remove(r._r)
+    for i, line in enumerate(lines):
+        run = para.add_run(line)
+        if rpr is not None:
+            old = run._r.find(qn('w:rPr'))
+            if old is not None:
+                run._r.remove(old)
+            run._r.insert(0, copy.deepcopy(rpr))
+        if i < len(lines) - 1:
+            run._r.append(OxmlElement('w:br'))
+
+
 def fit_one_page(doc, min_bottom_cm=0.6):
     """给套打表单留足分页余量：把下边距压到较小值。
 
@@ -387,7 +471,7 @@ def strip_empty_runs(doc):
 
 
 def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
-              one_page=True):
+              one_page=True, title_shape='trapezoid_down'):
     """在内存 Document 上完成填充→自适应→锁高，返回 (已填数, 提示, 单元格报告)。
 
     预览与实际输出共用这一条路径，保证"预览看到的字号"就是"打印出来的字号"，
@@ -397,10 +481,17 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
     reports = []
 
     filled = set()
+    title_tcs = []          # 标题占位符所在的单元格，梯形回行只作用于它
     for p, _cell in _iter_paragraphs(doc):
         for m in PLACEHOLDER_RE.finditer(p.text):
-            filled.add(m.group(1).strip())
+            key = m.group(1).strip()
+            filled.add(key)
+            if key in TITLE_FIELDS and _cell is not None:
+                title_tcs.append(_cell._tc)
         _replace_in_paragraph(p, values)
+
+    def _is_title_cell(cell, _tcs=title_tcs):
+        return any(cell._tc is x for x in _tcs)
 
     for t in doc.tables:
         for cell in _iter_cells(t):
@@ -415,6 +506,11 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
             mp = _main_para(cell)
             orig = _para_font_pt(mp) if mp is not None else None
             shrunk = overflow = False
+            # 标题梯形回行：先按原字号断行，让自适应看到真实行数；
+            # 自适应若缩了字号，一行能多放字，再按新字号重断一次
+            is_title = _is_title_cell(cell)
+            if is_title and title_shape and title_shape != 'none':
+                shape_title_cell(t, cell, title_shape)
             if autofit and cell.text.strip():
                 def _warn(msg, _l=label):
                     notes.append('【{}】{}'.format(_l, msg))
@@ -422,6 +518,11 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
                 if shrunk and log:
                     log('info', '套打自适应：{} 区字号调整为 {}pt{}'.format(
                         label, _size, '（仍偏长）' if overflow else ''))
+            if is_title and title_shape and title_shape != 'none':
+                _ch, _n = shape_title_cell(t, cell, title_shape)
+                if _n > 1 and log:
+                    log('info', '标题按{}回行为 {} 行'.format(
+                        '正梯形' if title_shape == 'trapezoid_down' else '倒梯形', _n))
             mp2 = _main_para(cell)
             final = _para_font_pt(mp2) if mp2 is not None else None
             reports.append({
@@ -435,6 +536,26 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
                 'shrunk': bool(shrunk),
                 'overflow': bool(overflow),
             })
+
+    # 表格外的独立段落（紧急程度/密级行、成文日期行）若超出版心会折成两行，
+    # 整单就多占一行、可能被顶到第二页。这里只能告警不能自动收窄：
+    # 那些空格是把"密级"等预印标签顶到纸上对应位置的，收窄会让黑字
+    # 打偏。真正的解法是用户把内容写短些。
+    sec0 = doc.sections[0]
+    content_w = (sec0.page_width.cm - sec0.left_margin.cm - sec0.right_margin.cm)
+    for p in doc.paragraphs:
+        txt = p.text.rstrip()
+        if not txt.strip():
+            continue
+        fs = _para_font_pt(p)
+        # 字宽是估算值（★、符号等未必正好一个全角宽），留 2% 容差，
+        # 免得刚过线一点就报警、把真正该看的提示淹掉
+        if _text_width_units(txt) * (fs / PT_PER_CM) > content_w * 1.02:
+            head = txt.strip()[:10]
+            notes.append('【{}…】这一行超出版心宽度，会折成两行、整单可能多占一行，'
+                         '建议精简该行内容'.format(head))
+            if log:
+                log('warning', '套打：有一行超出版心宽度，可能折行')
 
     stripped = strip_empty_runs(doc)
     if stripped and log:
@@ -456,12 +577,13 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
 
 
 def fill_form(template_path, values, output_path, autofit=True, log=None,
-              lock_heights=False, one_page=True):
+              lock_heights=False, one_page=True, title_shape='trapezoid_down'):
     """按 values 填充套打模板并另存，返回 (已填字段数, 提示列表)。"""
     from docx import Document
     doc = Document(template_path)
     used, notes, _reports = _fill_doc(doc, values, autofit=autofit, log=log,
-                                      lock_heights=lock_heights, one_page=one_page)
+                                      lock_heights=lock_heights, one_page=one_page,
+                                      title_shape=title_shape)
     doc.save(output_path)
     return used, notes
 
@@ -532,12 +654,53 @@ def paragraph_height_cm(para, grid_cm):
     return natural
 
 
+def wrap_segs(segs, usable_cm):
+    """按真实几何把片段序列折行，在断点处插入换行片段。
+
+    预览必须自己算折行，不能交给 Qt：Qt 富文本**无视表格的像素宽度**，
+    会把表拉满可视区（实测模板表宽应 428px、实际渲染 1190px），
+    格子宽出近三倍，于是 29 个字的标题在预览里挤成一行、
+    而 Word 里明明是两行——"预览和实际不一样"正出在这里。
+
+    宽度按每个片段自己的字号算（一格里标签和正文字号常不同），
+    与 estimate_lines 用的是同一套度量，因此预览的行数就是
+    自适应缩字号时依据的行数。
+    """
+    if usable_cm <= 0:
+        return segs
+    out = []
+    used = 0.0
+    for seg in segs:
+        if seg.get('text') == '\n':
+            out.append(seg)
+            used = 0.0
+            continue
+        char_cm = (seg.get('pt') or 14) / PT_PER_CM
+        buf = ''
+        for ch in seg.get('text', ''):
+            w = char_cm * (1.0 if ord(ch) > 0x2E80 else 0.5)
+            # 行尾空格不触发换行，与 estimate_lines 的 rstrip 一致
+            if used + w > usable_cm and ch != ' ':
+                if buf:
+                    out.append(dict(seg, text=buf))
+                    buf = ''
+                out.append({'text': '\n', 'white': seg.get('white'),
+                            'pt': seg.get('pt')})
+                used = 0.0
+            buf += ch
+            used += w
+        if buf:
+            out.append(dict(seg, text=buf))
+    return out
+
+
 def _cell_content_cm(cell, grid_cm):
     """单元格内容自然高度（cm），空段也算——它们正是留白区的高度来源。"""
     return sum(paragraph_height_cm(p, grid_cm) for p in cell.paragraphs)
 
 
-def plan_fill(template_path, values, autofit=True):
+def plan_fill(template_path, values, autofit=True,
+              title_shape='trapezoid_down'):
     """只算不存：返回预览所需的版面数据，与 fill_form 走同一条填充路径。
 
     blocks 按文档真实顺序给出（段落与表格交替）——套打单里成文日期在
@@ -548,7 +711,8 @@ def plan_fill(template_path, values, autofit=True):
     from docx.table import Table
     from docx.text.paragraph import Paragraph
     doc = Document(template_path)
-    _used, notes, reports = _fill_doc(doc, values, autofit=autofit, log=None)
+    _used, notes, reports = _fill_doc(doc, values, autofit=autofit, log=None,
+                                      title_shape=title_shape)
 
     sec = doc.sections[0]
     page = {
@@ -566,9 +730,18 @@ def plan_fill(template_path, values, autofit=True):
     def _segs_of(para):
         out = []
         for r in para.runs:
-            if r.text:
-                out.append({'text': r.text, 'white': _is_white(r),
-                            'pt': r.font.size.pt if r.font.size else 14})
+            if not r.text:
+                continue
+            white = _is_white(r)
+            pt = r.font.size.pt if r.font.size else 14
+            # run 里的 w:br 在 python-docx 里就是 '\n'，必须拆成换行片段，
+            # 否则梯形回行的标题在预览里仍会挤成一行
+            parts = r.text.split('\n')
+            for i, part in enumerate(parts):
+                if i:
+                    out.append({'text': '\n', 'white': white, 'pt': pt})
+                if part:
+                    out.append({'text': part, 'white': white, 'pt': pt})
         return out
 
     blocks = []
@@ -579,7 +752,8 @@ def plan_fill(template_path, values, autofit=True):
             if not para.text.strip():
                 continue
             al = para.paragraph_format.alignment
-            blocks.append({'kind': 'para', 'segs': _segs_of(para),
+            blocks.append({'kind': 'para',
+                           'segs': wrap_segs(_segs_of(para), content_w),
                            'align': {1: 'center', 2: 'right'}.get(
                                int(al) if al is not None else 0, 'left')})
         elif tag == 'tbl':
@@ -611,15 +785,17 @@ def plan_fill(template_path, values, autofit=True):
                         if r['tc'] is cell._tc:
                             rep = r
                             break
+                    cw = _cell_width_cm(table, cell)
+                    usable = cw - _cell_margins_cm(cell)
                     segs = []
                     for i2, pp in enumerate(cell.paragraphs):
                         if i2:
                             segs.append({'text': '\n', 'white': True, 'pt': 1})
-                        segs.extend(_segs_of(pp))
+                        segs.extend(wrap_segs(_segs_of(pp), usable))
                     cells.append({
                         'segs': [] if cont else segs,
                         'vmerge_cont': cont,
-                        'width_cm': _cell_width_cm(table, cell),
+                        'width_cm': cw,
                         # 延续格的内容属于合并源那一行，不能再拿来抬高本行
                         'content_cm': 0.0 if cont else _cell_content_cm(cell, grid_cm),
                         'font_pt': (rep or {}).get('font_pt'),
@@ -988,7 +1164,8 @@ def extract_values(source_path, fields=None):
 
 
 def fit_document(source_path, template_path, output_path,
-                 overrides=None, autofit=True, log=None):
+                 overrides=None, autofit=True, log=None,
+                 title_shape='trapezoid_down'):
     """把一份已有 docx 的内容适配到套打模板并输出。
 
     overrides: 手工修正/补充的字段，优先级高于自动抽取的值。
@@ -1002,7 +1179,7 @@ def fit_document(source_path, template_path, output_path,
         got = '、'.join('{}={}'.format(k, str(v)[:12]) for k, v in sorted(values.items()))
         log('info', '套打适配：识别到 {} 个字段（{}）'.format(len(values), got or '无'))
     _n, notes = fill_form(template_path, values, output_path,
-                          autofit=autofit, log=log)
+                          autofit=autofit, log=log, title_shape=title_shape)
     missing = [f for f in fields if not str(values.get(f, '')).strip()]
     if missing:
         notes = list(notes) + ['未能自动识别：{}（可在对话框里手工补填）'.format('、'.join(missing))]

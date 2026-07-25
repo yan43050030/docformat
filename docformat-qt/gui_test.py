@@ -627,10 +627,15 @@ try:
                 _tables.append(_ch)
             _walk(_ch)
     _walk(_doc.rootFrame())
+    # 预览把每一行（以及每个独立段落）各画成一张定宽表，按文档顺序排列
     _plan4 = _od4._last_plan
-    _exp = [[_c['width_cm'] for _c in _r['cells']]
-            for _b in _plan4['blocks'] if _b['kind'] == 'table' for _r in _b['rows']]
-    assert len(_tables) == len(_exp), '预览表格行数 {} ≠ 模板 {}'.format(
+    _exp = []
+    for _b in _plan4['blocks']:
+        if _b['kind'] == 'para':
+            _exp.append([_plan4['content_w_cm']])
+        else:
+            _exp.extend([_c['width_cm'] for _c in _r['cells']] for _r in _b['rows'])
+    assert len(_tables) == len(_exp), '预览表格数 {} ≠ 预期 {}'.format(
         len(_tables), len(_exp))
     for _t, _e in zip(_tables, _exp):
         _ws = [_lay.blockBoundingRect(
@@ -642,9 +647,26 @@ try:
             _want_pct = _want / sum(_e) * 100.0
             assert abs(_got_pct - _want_pct) <= 3.0, \
                 '栏宽比例 {:.1f}% 应为 {:.1f}%'.format(_got_pct, _want_pct)
+    # 长标题梯形回行：下拉切换后预览随之重排，且行宽方向相反
+    _e = _od4._editors['标题']
+    (_e.setPlainText if hasattr(_e, 'setPlainText') else _e.setText)(
+        '关于对某单位某单位某单位某部门某部门张三李四王五赵六的请示')
+    from scripts.overprint import _text_width_units as _twu
+    _shape_w = {}
+    for _si in range(_od4.shape_combo.count()):
+        _od4.shape_combo.setCurrentIndex(_si)
+        _od4._refresh_preview()
+        _tc = _od4._last_plan['blocks'][3]['rows'][0]['cells'][1]
+        _ls = [l for l in ''.join(s['text'] for s in _tc['segs']).split('\n') if l]
+        _shape_w[_od4.shape_combo.itemData(_si)] = [_twu(l) for l in _ls]
+    assert len(_shape_w['trapezoid_down']) == 2, '长标题应回成两行'
+    assert _shape_w['trapezoid_down'][0] > _shape_w['trapezoid_down'][1], \
+        '正梯形应上长下短：{}'.format(_shape_w['trapezoid_down'])
+    assert _shape_w['trapezoid_up'][0] < _shape_w['trapezoid_up'][1], \
+        '倒梯形应上短下长：{}'.format(_shape_w['trapezoid_up'])
 finally:
     _od4.reject()
-print('[24] 套打预览：块顺序与真实文档一致（日期在表格后）+ 栏宽比例与模板一致 ✓')
+print('[24] 套打预览：块顺序一致 + 栏宽比例与模板一致 + 长标题梯形回行可切换 ✓')
 
 # ---------- 22. 模板目录入口与"修改模板" ----------
 from scripts import overprint as _op2

@@ -1014,8 +1014,81 @@ def test_overprint():
         _mkdoc('日留空', _date_cases['日留空']), fields=['日']).get('日'), \
         '日未填写时不应臆造日期'
 
+    # ---- 长标题梯形回行：正梯形上长下短、倒梯形上短下长，且预览=输出 ----
+    _long = dict(base)
+    _long['标题'] = '关于对某单位某单位某单位某部门某部门张三李四王五赵六的请示'
+    for _shape, _cmp in (('trapezoid_down', lambda a, b: a > b),
+                         ('trapezoid_up', lambda a, b: a < b)):
+        _pl = op.plan_fill(tpl, _long, title_shape=_shape)
+        _tc = _pl['blocks'][3]['rows'][0]['cells'][1]
+        _lines = [l for l in ''.join(s['text'] for s in _tc['segs']).split('\n') if l]
+        assert len(_lines) == 2, '{}：长标题应回成 2 行，实得 {}'.format(_shape, _lines)
+        _w = [op._text_width_units(l) for l in _lines]
+        assert _cmp(_w[0], _w[1]), '{}：两行宽度 {} 不符合梯形'.format(_shape, _w)
+        # 输出的 docx 必须与预览断在同一处，否则"预览和实际不一样"
+        _to = os.path.join(OUT_DIR, 'overprint_title_%s.docx' % _shape)
+        op.fill_form(tpl, _long, _to, title_shape=_shape)
+        for _c in op._iter_cells(Document(_to).tables[0]):
+            if _c.text.strip().startswith('关于'):
+                assert [l for l in _c.text.split('\n') if l] == _lines, \
+                    '输出断行与预览不一致'
+                break
+    # 选“不回行”时输出里不插 w:br，交给 Word 自动折行；
+    # 预览仍按几何显示会折在哪儿——那正是 Word 将要折的位置
+    _tn = os.path.join(OUT_DIR, 'overprint_title_none.docx')
+    op.fill_form(tpl, _long, _tn, title_shape='none')
+    for _c in op._iter_cells(Document(_tn).tables[0]):
+        if _c.text.strip().startswith('关于'):
+            assert '\n' not in _c.text.strip(), '选“不回行”时输出不应插入 w:br'
+            break
+
+    # ---- 预览折行按真实几何：一行放不下就必须断开 ----
+    # Qt 富文本无视表格像素宽度、会把表拉满可视区，靠它折行必然偏长，
+    # 所以折行在 plan 阶段按 cm 算好
+    _cell_w = _pl['blocks'][3]['rows'][0]['cells'][1]['width_cm']
+    for _l in _lines:
+        assert op._text_width_units(_l) * (16.0 / op.PT_PER_CM) <= _cell_w, \
+            '预览行 {!r} 超出格子宽度 {:.2f}cm'.format(_l, _cell_w)
+
+    # ---- 年/月/日定宽：位数变化不得挪动预印的"年月日" ----
+    def _white_pos(_path):
+        _p4 = Document(_path).paragraphs[4]
+        _acc, _out = 0.0, {}
+        for _r in _p4.runs:
+            _c = _r.font.color.rgb if _r.font.color and _r.font.color.rgb else None
+            if str(_c) == 'FFFFFF' and _r.text in ('年', '月', '日'):
+                _out[_r.text] = round(_acc, 2)
+            _acc += op._text_width_units(_r.text)
+        return _out
+    _d1 = os.path.join(OUT_DIR, 'overprint_d1.docx')
+    _d2 = os.path.join(OUT_DIR, 'overprint_d2.docx')
+    op.fill_form(tpl, dict(base, **{'年': '2026', '月': '7', '日': '25'}), _d1)
+    op.fill_form(tpl, dict(base, **{'年': '2026', '月': '12', '日': '5'}), _d2)
+    assert _white_pos(_d1) == _white_pos(_d2) and _white_pos(_d1), \
+        '预印的年/月/日位置随位数变了：{} vs {}'.format(_white_pos(_d1), _white_pos(_d2))
+    # 留空待手签时也不能塌缩
+    _d3 = os.path.join(OUT_DIR, 'overprint_d3.docx')
+    op.fill_form(tpl, dict(base, **{'年': '', '月': '', '日': ''}), _d3)
+    assert _white_pos(_d3) == _white_pos(_d1), '留空时预印的年/月/日位置变了'
+
+    # ---- 成文日期行必须一行放得下：多出来的那一行会把整单顶到第二页 ----
+    # （模板原先这一行 38.5 全角宽 > 版心 33.3，自带模板就折行占两行）
+    _limit_u = (_pg['width_cm'] - _pg['left_cm'] - _pg['right_cm']) / (14 / op.PT_PER_CM)
+    for _dp in (_d1, _d2, _d3):
+        _dt = [_p4.text.rstrip() for _p4 in Document(_dp).paragraphs
+               if '年' in _p4.text and '月' in _p4.text]
+        assert _dt, '找不到成文日期行'
+        assert op._text_width_units(_dt[-1]) <= _limit_u, \
+            '成文日期行宽 {:.1f} 超版心 {:.1f}，会多占一行'.format(
+                op._text_width_units(_dt[-1]), _limit_u)
+    # 值太长把某行撑出版心时要如实告警，而不是闷声折行
+    _ov = os.path.join(OUT_DIR, 'overprint_wide.docx')
+    _n2, _notes2 = op.fill_form(tpl, dict(base, 密级='绝密★长期特别提示补充说明'), _ov)
+    assert any('超出版心' in _s for _s in _notes2), \
+        '某行超出版心时应告警：{}'.format(_notes2)
+
     print('[7o] 套打：填充/几何锁定/自适应/空值留白/预览与输出一致 + docx 适配'
-          ' + 纵向合并去重 + 日期识别 10 种写法 通过')
+          ' + 纵向合并去重 + 日期识别 10 种写法 + 标题梯形回行 + 年月日定宽 通过')
 
 
 def test_gb_header_record():
