@@ -298,6 +298,92 @@ def test_compliance():
     print('[7i] 公文合规检查：完整核对({}项)+排版后零偏差+精准修正 通过'.format(len(f0)))
 
 
+def test_cleaner():
+    """格式清洗：全文/部分段落、脏格式清除、不伤类型识别"""
+    from docx.shared import Pt, RGBColor
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from scripts import cleaner, compliance
+    from scripts.data_model import PRESETS
+    from scripts.formatter import format_document
+
+    def _dirty_para(p, text):
+        r = p.add_run(text)
+        r.font.size = Pt(9); r.font.color.rgb = RGBColor(0xFF, 0, 0); r.font.bold = True
+        rpr = r._r.get_or_add_rPr()
+        for tag, val in (('w:spacing', '40'), ('w:w', '150'), ('w:position', '6')):
+            e = OxmlElement(tag); e.set(qn('w:val'), val); rpr.append(e)
+        em = OxmlElement('w:em'); em.set(qn('w:val'), 'dot'); rpr.append(em)
+        ppr = p._p.get_or_add_pPr()
+        bdr = OxmlElement('w:pBdr'); b = OxmlElement('w:bottom')
+        b.set(qn('w:val'), 'single'); b.set(qn('w:sz'), '8'); bdr.append(b); ppr.append(bdr)
+        shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), 'FFFF00'); ppr.append(shd)
+        fr = OxmlElement('w:framePr'); fr.set(qn('w:w'), '2000'); ppr.append(fr)
+        p.paragraph_format.first_line_indent = Pt(60)
+        p.paragraph_format.space_before = Pt(20)
+        return p
+
+    # --- 1. 全文清洗：各类脏格式都清掉 ---
+    d = Document()
+    _dirty_para(d.add_paragraph(), '这是一段带脏格式的正文内容用于测试清洗效果。')
+    p2 = d.add_paragraph(); p2.add_run('第二段\t含制表符和　全角空格   和连续空格。')
+    p2.runs[0]._r.append(OxmlElement('w:br'))
+    p2.add_run('')
+    src = os.path.join(OUT_DIR, 'clean_in.docx'); d.save(src)
+    out = os.path.join(OUT_DIR, 'clean_out.docx')
+    stat = cleaner.clean_file(src, out)
+    for need in ('char_format', 'char_spacing', 'emphasis', 'borders_shading',
+                 'frame', 'para_format', 'whitespace', 'breaks', 'empty_runs'):
+        assert stat.get(need), '清洗项 {} 未生效'.format(need)
+    c = Document(out); q = c.paragraphs[0]
+    rp = q.runs[0]._r.find(qn('w:rPr')); pp = q._p.find(qn('w:pPr'))
+    assert q.runs[0].font.size is None and q.runs[0].font.color.rgb is None, '字符格式未清'
+    assert rp is None or rp.find(qn('w:spacing')) is None, '字符间距未清'
+    assert rp is None or rp.find(qn('w:em')) is None, '着重号未清'
+    assert pp is None or pp.find(qn('w:pBdr')) is None, '段落边框未清'
+    assert pp is None or pp.find(qn('w:framePr')) is None, 'framePr 未清'
+    assert q.paragraph_format.first_line_indent is None, '段落格式未清'
+    assert '\t' not in c.paragraphs[1].text and '　' not in c.paragraphs[1].text, '空白未清'
+
+    # --- 2. 部分段落清洗：只动标记的段，其余原样 ---
+    d2 = Document()
+    for i in range(4):
+        p = d2.add_paragraph(); r = p.add_run('第{}段脏内容测试。'.format(i))
+        r.font.size = Pt(9)
+        p.paragraph_format.first_line_indent = Pt(60)
+    s2 = os.path.join(OUT_DIR, 'clean_part_in.docx'); d2.save(s2)
+    o2 = os.path.join(OUT_DIR, 'clean_part_out.docx')
+    cleaner.clean_file(s2, o2, scope_indices={1, 3})
+    c2 = Document(o2)
+    for i, p in enumerate(c2.paragraphs):
+        cleaned = p.runs[0].font.size is None
+        assert cleaned == (i in (1, 3)), '第{}段清洗范围错误'.format(i)
+
+    # --- 3. 清洗 + 排版：不削弱类型识别，排版后仍零偏差 ---
+    d3 = Document()
+    t = d3.add_paragraph(); t.add_run('关于开展某某试点工作的通知')
+    t.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    for txt in ['各有关单位：', '一、总体要求',
+                '为深入贯彻落实上级决策部署，现就开展试点工作通知如下。',
+                '特此通知。', '某某办公室', '2026年7月25日']:
+        p = d3.add_paragraph(); r = p.add_run(txt); r.font.size = Pt(9)
+        p.paragraph_format.first_line_indent = Pt(72)
+    s3 = os.path.join(OUT_DIR, 'clean_fmt_in.docx'); d3.save(s3)
+    preset = PRESETS['official_gbk']
+    seen = {}
+    for spec, label in ((None, 'raw'), ({'scope': 'all', 'items': None}, 'cleaned')):
+        o3 = os.path.join(OUT_DIR, 'clean_fmt_{}.docx'.format(label))
+        format_document(s3, o3, preset_name='official_gbk', clean_spec=spec)
+        f = compliance.check_compliance(Document(o3), preset)
+        seen[label] = {x['item'].split('·')[0] for x in f if '·' in x['item']}
+        assert not [x for x in f if x['level'] == 'warn'], \
+            '{}: 清洗+排版后不应有偏差'.format(label)
+    assert seen['raw'] == seen['cleaned'], \
+        '清洗改变了类型识别结果：{} vs {}'.format(seen['raw'], seen['cleaned'])
+    print('[7k] 格式清洗：全文/部分段落/不伤识别 通过')
+
+
 def test_gb_header_record():
     """版头红线/版记分隔线（flags 开启）+ 副标题识别"""
     from docx.oxml.ns import qn
@@ -576,6 +662,7 @@ if __name__ == '__main__':
     test_attachment_label()
     test_title_shape()
     test_compliance()
+    test_cleaner()
     test_gb_header_record()
     test_image_protection()
     test_redaction()

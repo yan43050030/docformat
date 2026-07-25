@@ -288,6 +288,33 @@ assert '<br>' not in _raf(_ps,_pp,None,None), '模板none不应折行'
 assert '<br>' in _raf(_ps,_pp,None,'trapezoid_down'), '预览选正梯形应折行'
 print('[16] 预览标题梯形选择即应用 ✓')
 
+# ---------- 14. 预览格式清洗：范围选择 + 逐段标记 ----------
+assert '🧹' not in _raf(_ps, _pp, None, None, set()), '未标记不应出现清洗图标'
+assert '🧹' in _raf(_ps, _pp, None, None, {0}), '标记段落应显示清洗图标'
+from app.preview_dialog import PreviewDialog as _PD
+_pv = _PD([SAMPLE], win.mgr.get('official_gbk'), win)
+try:
+    assert _pv.get_clean_spec() == {}, '默认不清洗时不应产生 clean_spec'
+    # 全文清洗
+    _pv.clean_combo.setCurrentIndex(_pv.clean_combo.findData('all'))
+    _spec = _pv.get_clean_spec()
+    assert _spec.get(SAMPLE, {}).get('scope') == 'all', '全文清洗 spec 未生成'
+    # 仅清洗标记段落：未标记时不产生 spec，标记后带段号
+    _pv.clean_combo.setCurrentIndex(_pv.clean_combo.findData('selected'))
+    assert _pv.get_clean_spec() == {}, '未标记段落时不应产生 spec'
+    _pv._clean_marks.setdefault(SAMPLE, set()).update({1, 3})
+    _sel = _pv.get_clean_spec()[SAMPLE]
+    assert _sel['scope'] == 'selected' and _sel['paragraphs'] == [1, 3], \
+        '部分清洗段号错误: {}'.format(_sel)
+    _pv._refresh_clean_state()
+    assert '2' in _pv.clean_count_label.text(), '标记数未回显'
+finally:
+    _pv.reject()
+# 独立「格式清洗」模式已在首页
+from app.worker import MODE_CLEAN as _MC
+assert _MC in home._mode_cards, '格式清洗模式卡片缺失'
+print('[17] 预览格式清洗：全文/部分段落标记 + 独立清洗模式 ✓')
+
 
 
 # ---------- 12. v3.0 易用性 ----------

@@ -15,11 +15,12 @@ from app.widgets.file_list import FileList
 # 序号/缩进类问题也已并入合规检查的完整核对。analyzer 仍作为后端库被合规检查调用。
 from app.worker import (MODE_AI_PASTE, MODE_FULL,
                         MODE_PUNCTUATION, MODE_TOC_AUTO, MODE_TOC_MANUAL,
-                        MODE_COMPLIANCE, AiPasteWorker, ProcessWorker)
+                        MODE_COMPLIANCE, MODE_CLEAN, AiPasteWorker, ProcessWorker)
 
 MODES = [
     (MODE_FULL, '智能一键处理', '标点修复 + 排版规范 + 样式清洗，一步到位'),
     (MODE_COMPLIANCE, '公文合规检查', '逐段对照预设完整核对，勾选认可的问题即可精准修正，原文件不动'),
+    (MODE_CLEAN, '格式清洗', '排版出怪问题时用：清掉文档里看不见的脏格式，不改文字内容'),
     (MODE_PUNCTUATION, '标点修复', '仅修复中英文标点混用，保留原有段落格式'),
     (MODE_AI_PASTE, 'AI 粘贴生成', '粘贴 AI 生成的文本或 Markdown，自动生成规范公文'),
     (MODE_TOC_AUTO, '生成自动目录（域）', '在文首插入 Word 目录域，Word/WPS 打开后右键更新域即可自动生成页码'),
@@ -78,6 +79,7 @@ class HomePage(QWidget):
         self._outputs = []          # 本轮成功输出的文件
         self._type_overrides = {}   # 预览中手动指定的段落类型 {路径: {序号: 类型}}
         self._title_shape = None    # 预览中选择的标题梯形（覆盖模板）
+        self._clean_specs = {}      # 预览中选择的格式清洗 {路径: spec}
         self._seal = False          # 是否加盖公章落款布局
         self.font_check_enabled = True   # 处理前检查排版字体是否安装（测试时可关闭）
         self._build()
@@ -461,12 +463,14 @@ class HomePage(QWidget):
             self._type_overrides = dlg.get_overrides()
             self._seal = dlg.seal_check.isChecked()
             self._title_shape = dlg.get_title_shape()
+            self._clean_specs = dlg.get_clean_spec()
             try:
                 self.start_process()
             finally:
                 self._type_overrides = {}
                 self._seal = False
                 self._title_shape = None
+                self._clean_specs = {}
 
     # ---------- 字体检查 ----------
     def _missing_fonts(self):
@@ -535,6 +539,15 @@ class HomePage(QWidget):
         if not self.files:
             return
 
+        # 格式清洗：先弹清洗项面板
+        clean_items = None
+        if mode == MODE_CLEAN:
+            from app.clean_dialog import CleanItemsDialog
+            dlg = CleanItemsDialog(None, self)
+            if dlg.exec_() != CleanItemsDialog.Accepted:
+                return
+            clean_items = dlg.get_items()
+
         # 公文合规检查：先弹可配置的检查项面板
         compliance_options = None
         if mode == MODE_COMPLIANCE:
@@ -553,8 +566,10 @@ class HomePage(QWidget):
             revision_mode=self.revision_check.isChecked(),
             type_overrides=self._type_overrides,
             title_shape=self._title_shape,
+            clean_specs=self._clean_specs,
             parent=self)
         self.worker.compliance_options = compliance_options
+        self.worker.clean_items = clean_items
         self.worker.logMessage.connect(self.logMessage)
         self.worker.progressChanged.connect(self.progress.setValue)
         self.worker.diagnoseReady.connect(self._show_diagnose)

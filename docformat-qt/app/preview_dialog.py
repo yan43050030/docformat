@@ -162,6 +162,7 @@ def _html_shell(body, base_size=12):
             'margin-right: 4px; text-decoration: none; }}'
             '.tag0 {{ font-size: 8pt; color: #999; background: #F0EDE6; '
             'border-radius: 3px; padding: 0 4px; margin-right: 4px; }}'
+            '.broom {{ font-size: 8pt; margin-right: 4px; }}'
             '</style></head><body>{}</body></html>').format(base_size, body)
 
 
@@ -236,8 +237,9 @@ def _preview_title_cpl(preset):
     return max(6, int(usable_pt / tsize))
 
 
-def render_after_html(paras, preset, overrides=None, title_shape=None):
+def render_after_html(paras, preset, overrides=None, title_shape=None, clean_marks=None):
     overrides = overrides or {}
+    clean_marks = clean_marks or set()
     types = compute_types(paras, preset, overrides)
     # 标题梯形：None=按模板；否则覆盖
     shape = title_shape if title_shape is not None else preset.get('title_shape', 'none')
@@ -279,9 +281,10 @@ def render_after_html(paras, preset, overrides=None, title_shape=None):
                 display, fmt.get('font_en', 'Times New Roman'), fmt.get('font_cn', '仿宋_GB2312'))
         tag = TYPE_LABELS.get(ptype, ptype)
         cls = 'tagx' if ai in overrides else 'tag'
+        broom = '<span class="broom" title="已标记为待清洗">🧹</span>' if ai in clean_marks else ''
         parts.append(
-            '<p style="{}"><a class="{}" href="para:{}" title="点击修改此段类型">{}</a>{}</p>'.format(
-                '; '.join(style), cls, ai, tag, inner))
+            '<p style="{}"><a class="{}" href="para:{}" title="点击修改此段类型">{}</a>{}{}</p>'.format(
+                '; '.join(style), cls, ai, tag, broom, inner))
     return _html_shell(''.join(parts))
 
 
@@ -303,6 +306,10 @@ class PreviewDialog(QDialog):
         self.preset = preset
         # path -> {非空段序号: 类型}
         self._overrides = {}
+        # path -> set(非空段序号)，标记为"待清洗"的段落
+        self._clean_marks = {}
+        # 清洗项（None = 用 cleaner.DEFAULT_CLEAN）
+        self._clean_items = None
         self._current_paras = None
         self._converted = {}    # .doc/.wps 预览转换缓存: 原路径 -> 临时 docx
         self._tmp_dirs = []     # 对话框关闭时清理
@@ -345,10 +352,35 @@ class PreviewDialog(QDialog):
                                           "不必修改模板")
         self.title_shape_combo.currentIndexChanged.connect(self._render_after)
         ts_row.addWidget(self.title_shape_combo)
+        ts_row.addSpacing(18)
+
+        # 格式清洗：排版疑难杂症多半源于原文档里看不见的脏格式
+        ts_row.addWidget(QLabel("格式清洗："))
+        self.clean_combo = QComboBox()
+        for label, val in [('不清洗', 'none'),
+                           ('全文清洗', 'all'),
+                           ('仅清洗标记的段落', 'selected')]:
+            self.clean_combo.addItem(label, val)
+        self.clean_combo.setToolTip(
+            "排版出怪问题（缩进被挤走、行距莫名撑高、字号变化）时启用。\n"
+            "会清掉原文档里看不见的脏格式：字符缩放/间距、着重号、拼音指南、\n"
+            "边框底纹、文本框式段落、域代码、书签批注、修订痕迹、\n"
+            "手动换行符、制表符与全角空格等。")
+        self.clean_combo.currentIndexChanged.connect(self._on_clean_scope_changed)
+        ts_row.addWidget(self.clean_combo)
+        self.clean_items_btn = QPushButton("清洗项…")
+        self.clean_items_btn.setCursor(Qt.PointingHandCursor)
+        self.clean_items_btn.clicked.connect(self._pick_clean_items)
+        self.clean_items_btn.setEnabled(False)
+        ts_row.addWidget(self.clean_items_btn)
+        self.clean_count_label = QLabel("")
+        self.clean_count_label.setProperty("muted", "true")
+        ts_row.addWidget(self.clean_count_label)
         ts_row.addStretch(1)
         root.addLayout(ts_row)
 
-        hint = QLabel("提示：点击右侧段落前的类型标签，可手动指定该段是标题/正文/附件等（红色标签=已手动指定）")
+        hint = QLabel("提示：点击右侧段落前的类型标签，可手动指定该段是标题/正文/附件等（红色标签=已手动指定）；"
+                      "菜单里还可把该段标记为「待清洗」（🧹）")
         hint.setProperty("muted", "true")
         hint.setWordWrap(True)
         root.addWidget(hint)
@@ -432,11 +464,30 @@ class PreviewDialog(QDialog):
         menu.addSeparator()
         auto = menu.addAction("恢复自动识别")
         auto.setData('__auto__')
+        menu.addSeparator()
+        marked = ai in self._clean_marks.get(path, set())
+        clean_act = menu.addAction(
+            '取消「待清洗」标记' if marked else '标记此段为「待清洗」🧹')
+        clean_act.setData('__clean__')
 
         chosen = menu.exec_(QCursor.pos())
         if chosen is None:
             return
         val = chosen.data()
+        if val == '__clean__':
+            marks = self._clean_marks.setdefault(path, set())
+            if ai in marks:
+                marks.discard(ai)
+            else:
+                marks.add(ai)
+                # 标了段落却没选范围时，自动切到"仅清洗标记的段落"
+                if self.clean_combo.currentData() == 'none':
+                    i = self.clean_combo.findData('selected')
+                    if i >= 0:
+                        self.clean_combo.setCurrentIndex(i)
+            self._refresh_clean_state()
+            self._render_after()
+            return
         m = self._overrides.setdefault(path, {})
         if val == '__auto__':
             m.pop(ai, None)
@@ -448,7 +499,50 @@ class PreviewDialog(QDialog):
         path = self._current_path()
         if path in self._overrides:
             self._overrides[path] = {}
+        if path in self._clean_marks:
+            self._clean_marks[path] = set()
+        self._refresh_clean_state()
         self._render_after()
+
+    # ---------- 格式清洗 ----------
+    def _on_clean_scope_changed(self, _idx=None):
+        self._refresh_clean_state()
+        self._render_after()
+
+    def _refresh_clean_state(self):
+        scope = self.clean_combo.currentData()
+        self.clean_items_btn.setEnabled(scope != 'none')
+        path = self._current_path()
+        n = len(self._clean_marks.get(path, set()))
+        if scope == 'selected':
+            self.clean_count_label.setText(
+                '已标记 {} 段'.format(n) if n else '尚未标记段落（点类型标签→标记）')
+        elif scope == 'all':
+            self.clean_count_label.setText('将清洗全文')
+        else:
+            self.clean_count_label.setText('')
+
+    def _pick_clean_items(self):
+        from app.clean_dialog import CleanItemsDialog
+        dlg = CleanItemsDialog(self._clean_items, self)
+        if dlg.exec_() == CleanItemsDialog.Accepted:
+            self._clean_items = dlg.get_items()
+
+    def get_clean_spec(self):
+        """返回 {文件路径: clean_spec}，仅含需要清洗的文件；无则返回 {}"""
+        scope = self.clean_combo.currentData()
+        if scope == 'none':
+            return {}
+        out = {}
+        for path in self.files:
+            if scope == 'all':
+                out[path] = {'scope': 'all', 'items': self._clean_items}
+            else:
+                marks = sorted(self._clean_marks.get(path, set()))
+                if marks:
+                    out[path] = {'scope': 'selected', 'items': self._clean_items,
+                                 'paragraphs': marks}
+        return out
 
     # ---------- 渲染 ----------
     def _render_after(self):
@@ -459,9 +553,12 @@ class PreviewDialog(QDialog):
         bar = self.view_after.verticalScrollBar()
         pos = bar.value()
         ts = self.get_title_shape() if hasattr(self, 'title_shape_combo') else None
-        self.view_after.setHtml(render_after_html(self._current_paras, self.preset, ovr, ts))
+        marks = self._clean_marks.get(path, set()) \
+            if self.clean_combo.currentData() == 'selected' else set()
+        self.view_after.setHtml(
+            render_after_html(self._current_paras, self.preset, ovr, ts, marks))
         bar.setValue(pos)
-        self.reset_btn.setEnabled(bool(ovr))
+        self.reset_btn.setEnabled(bool(ovr) or bool(self._clean_marks.get(path)))
 
     def _convert_for_preview(self, path):
         """.doc/.wps → 临时 docx（结果缓存，对话框关闭时清理）"""

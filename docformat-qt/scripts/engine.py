@@ -120,11 +120,16 @@ def _ensure_structural_blank_lines(doc, line_spacing_pt=28, rules=None, type_ove
 
 def format_document(input_path, output_path, preset_name='official', progress_callback=None,
                     revision_mode=False, bold_serial=True, custom_settings=None,
-                    type_overrides=None, title_shape=None):
+                    type_overrides=None, title_shape=None, clean_spec=None):
     """格式化文档
 
     title_shape: 覆盖预设的标题梯形设置（'none'/'trapezoid_down'/'trapezoid_up'）；
                  None 表示用预设值。预览里临时选择时通过此参数生效。
+
+    clean_spec: 格式清洗设置，None 表示不做额外清洗。形如
+                {'scope': 'all'|'selected', 'items': {清洗项: bool},
+                 'paragraphs': [非空段序号...]}
+                在排版前执行，用于处理原文档里看不见的脏格式（疑难杂症）。
 
     Args:
         input_path: 源文件路径
@@ -175,6 +180,21 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
     # v1.8.0: 强力清洗模式
     if preset.get('deep_clean', False):
         deep_clean_document(doc)
+
+    # v4.2.0: 格式清洗（疑难杂症专用），可全文或仅选定段落。
+    # 放在类型识别之前执行，但强制不清对齐——排版引擎把对齐当作
+    # 标题等类型的识别线索，清掉会削弱自动识别；排版时本就会按类型重设。
+    if clean_spec:
+        from .cleaner import clean_document, format_clean_summary
+        _scope = clean_spec.get('scope', 'all')
+        _items = dict(clean_spec.get('items') or {})
+        _items['para_align'] = False
+        _idx = None if _scope == 'all' else set(clean_spec.get('paragraphs') or [])
+        if _scope != 'selected' or _idx:
+            _stat = clean_document(doc, items=_items, scope_indices=_idx)
+            logger.info('格式清洗（%s）：%s',
+                        '全文' if _idx is None else '{} 个段落'.format(len(_idx)),
+                        format_clean_summary(_stat))
 
     # 标题+标点拆分
     if preset.get('split_heading_at_punct', False):

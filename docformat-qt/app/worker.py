@@ -15,6 +15,7 @@ MODE_AI_PASTE = 'ai_paste'
 MODE_TOC_AUTO = 'toc_auto'
 MODE_TOC_MANUAL = 'toc_manual'
 MODE_COMPLIANCE = 'compliance'
+MODE_CLEAN = 'clean'
 
 # Windows/Linux 文件名中的非法字符
 _INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
@@ -218,7 +219,8 @@ class ProcessWorker(QThread):
     allFinished = pyqtSignal(int, int)               # ok, fail
 
     def __init__(self, files, mode, preset_name, custom_settings, suffix,
-                 revision_mode=False, type_overrides=None, title_shape=None, parent=None):
+                 revision_mode=False, type_overrides=None, title_shape=None,
+                 clean_specs=None, parent=None):
         super(ProcessWorker, self).__init__(parent)
         self.files = list(files)
         self.mode = mode
@@ -230,7 +232,13 @@ class ProcessWorker(QThread):
         self.type_overrides = {os.path.normpath(k): v
                                for k, v in (type_overrides or {}).items()}
         self.title_shape = title_shape
+        # {文件路径: clean_spec}，来自预览中的格式清洗选择
+        self.clean_specs = {os.path.normpath(k): v
+                            for k, v in (clean_specs or {}).items()}
         self.compliance_options = None
+        # 独立「格式清洗」模式用
+        self.clean_items = None
+        self.clean_scope_indices = {}
         self._compliance_results = []
         self._cancelled = False
 
@@ -308,6 +316,17 @@ class ProcessWorker(QThread):
                     if self.mode == MODE_DIAGNOSE:
                         reports.append(self._diagnose(work, base))
                         self.fileFinished.emit(path, '')
+                    elif self.mode == MODE_CLEAN:
+                        out = output_path_for(path, self.suffix)
+                        from scripts import cleaner
+                        stat = cleaner.clean_file(
+                            work, out, items=self.clean_items,
+                            scope_indices=self.clean_scope_indices.get(
+                                os.path.normpath(path)))
+                        self._log('success', '已清洗: {} → {}'.format(
+                            base, os.path.basename(out)))
+                        self._log('info', '  · ' + cleaner.format_clean_summary(stat))
+                        self.fileFinished.emit(path, out)
                     elif self.mode == MODE_COMPLIANCE:
                         reports.append(self._check_compliance(work, base, path))
                         self.fileFinished.emit(path, '')
@@ -332,7 +351,8 @@ class ProcessWorker(QThread):
                     else:  # MODE_FULL
                         out = output_path_for(path, self.suffix)
                         self._run_format(work, out, i, n,
-                                         self.type_overrides.get(os.path.normpath(path)))
+                                         self.type_overrides.get(os.path.normpath(path)),
+                                         self.clean_specs.get(os.path.normpath(path)))
                         self._log('success', '已完成: {} → {}'.format(base, os.path.basename(out)))
                         self.fileFinished.emit(path, out)
                     ok += 1
@@ -363,7 +383,8 @@ class ProcessWorker(QThread):
                     pass
         self.allFinished.emit(ok, fail)
 
-    def _run_format(self, work, out, file_idx, total_files, type_overrides=None):
+    def _run_format(self, work, out, file_idx, total_files, type_overrides=None,
+                    clean_spec=None):
         """智能一键 = 标点修复(占单文件进度 0-10%) → 排版规范(10-100%)"""
         from scripts import punctuation
         from scripts.formatter import format_document
@@ -393,6 +414,7 @@ class ProcessWorker(QThread):
                 revision_mode=self.revision_mode,
                 type_overrides=type_overrides,
                 title_shape=self.title_shape,
+                clean_spec=clean_spec,
             )
         finally:
             _cleanup_dir(tmp_root)
