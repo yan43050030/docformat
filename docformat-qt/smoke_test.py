@@ -1078,11 +1078,52 @@ def test_overprint():
     op.fill_form(tpl, dict(base, **{'年': '2026', '月': '1', '日': '11'}), _pp1)
     op.fill_form(tpl, dict(base, **{'年': '2026', '月': '12', '日': '5'}), _pp2)
 
-    def _pos(_p):
-        return [(round(a, 2), round(b, 2))
-                for a, b, _t in op.print_positions(Document(_p))]
-    assert _pos(_pp1) == _pos(_pp2) and _pos(_pp1), \
-        '黑字打印位置随月/日位数变了：{} vs {}'.format(_pos(_pp1), _pos(_pp2))
+    # 定宽槽位是**右对齐**的：数字紧贴其后预印的年/月/日，所以恒定不变的
+    # 是右沿。左沿差一个字宽正是"1"和"12"位数不同，本就该如此。
+    def _right(_p):
+        return [round(b, 2) for _a, b, _t in op.print_positions(Document(_p))]
+    assert _right(_pp1) == _right(_pp2) and _right(_pp1), \
+        '黑字右沿随月/日位数变了（预印的年月日会对不上）：{} vs {}'.format(
+            _right(_pp1), _right(_pp2))
+
+    # ---- 打印位置微调：指定"距纸左边几厘米"，黑字就落在那儿 ----
+    import shutil as _sh3
+    _tdir = os.path.join(OUT_DIR, 'offtpl')
+    os.makedirs(_tdir, exist_ok=True)
+    _tpl2 = os.path.join(_tdir, '送审单.docx')
+    _sh3.copyfile(tpl, _tpl2)
+    _dv = {'年': '2026', '月': '1', '日': '11'}
+    _pl3 = op.plan_fill(_tpl2, _dv)
+    # 表格外的字段才可调；格子里的横向位置由格子定死
+    assert '年' in _pl3['adjustable'] and '月' in _pl3['adjustable'], \
+        '年/月应可微调：{}'.format(_pl3['adjustable'])
+    assert '承办部门' not in _pl3['adjustable'], '格子里的字段不该列为可微调'
+
+    _want = {'月': 6.5, '日': 9.0}
+    _p3 = op.save_offsets(_tpl2, _want)
+    assert os.path.exists(_p3), '位置表未落盘'
+    assert op.load_offsets(_tpl2) == _want, '位置表读回不一致'
+    _pl4 = op.plan_fill(_tpl2, _dv)
+    for _k, _v in _want.items():
+        _got = _pl4['field_pos'][_k]
+        # 以半角空格为步进推移，允许一个步进的量化误差
+        assert abs(_got - _v) <= 0.26, \
+            '{} 目标 {:.2f}cm，实得 {:.2f}cm'.format(_k, _v, _got)
+    # 输出的 docx 与预览报的位置一致
+    _o5 = os.path.join(OUT_DIR, 'overprint_off.docx')
+    op.fill_form(_tpl2, _dv, _o5)
+    _blk = {t.strip(): (a, b) for a, b, t in op.print_positions(Document(_o5))}
+    assert abs(_blk['1'][0] - _pl4['field_pos']['月']) < 0.01, \
+        '输出位置与预览不一致：{} vs {}'.format(_blk['1'][0], _pl4['field_pos']['月'])
+    # 目标定在左边够不着时要告警，而不是把前面的字挤走
+    op.save_offsets(_tpl2, {'年': 0.5})
+    _n5, _notes5 = op.fill_form(_tpl2, _dv, _o5)
+    assert any('顶不过去' in _s for _s in _notes5), \
+        '够不着的位置应告警：{}'.format(_notes5)
+    # 恢复默认 = 删掉位置表
+    op.save_offsets(_tpl2, {})
+    assert not os.path.exists(_p3), '恢复默认应删除位置表'
+    assert op.load_offsets(_tpl2) == {}, '恢复默认后应读到空表'
 
     # ---- 预览折行按真实几何：一行放不下就必须断开 ----
     # Qt 富文本无视表格像素宽度、会把表拉满可视区，靠它折行必然偏长，

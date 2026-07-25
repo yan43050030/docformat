@@ -3,7 +3,8 @@
 import os
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import (QComboBox, QDialog, QFileDialog, QFormLayout,
+from PyQt5.QtWidgets import (QComboBox, QDialog, QDialogButtonBox,
+                             QDoubleSpinBox, QFileDialog, QFormLayout,
                              QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                              QPlainTextEdit, QPushButton, QScrollArea,
                              QSplitter, QTextBrowser, QVBoxLayout, QWidget)
@@ -15,6 +16,92 @@ from scripts import overprint
 _LONG_FIELDS = {'拟办意见', '领导批示', '备注', '主要内容', '说明'}
 # 这些字段每次都变，不做记忆
 _NO_MEMORY = {'标题', '拟办意见', '领导批示', '备注', '年', '月', '日'}
+
+
+class OffsetDialog(QDialog):
+    """打印位置微调：把每个字段顶到距纸张左边指定的厘米数上。
+
+    套打准不准，只取决于黑字落在哪儿。这里让用户拿尺子量真实预印单，
+    把数值填进来，存成模板旁边的 .位置.json，跟着模板走。
+    """
+
+    STEP_CM = 0.25      # 一个半角空格的宽度（14pt 下约 0.247cm）
+
+    def __init__(self, template_path, fields, current, parent=None):
+        super(OffsetDialog, self).__init__(parent)
+        self.setWindowTitle("打印位置微调")
+        self.resize(520, 520)
+        self._template_path = template_path
+        self._spins = {}
+        saved = overprint.load_offsets(template_path)
+
+        root = QVBoxLayout(self)
+        tip = QLabel(
+            "<b>怎么量、怎么填</b><br>"
+            "① 拿一张真实的预印单，用直尺从<b>纸张左边缘</b>量到该栏空格的<b>左沿</b>；<br>"
+            "② 把量到的<b>厘米数</b>填进下面对应的格子（例如 3.20）；<br>"
+            "③ 生成、试打一张，对不准再回来微调，直到套准为止。<br><br>"
+            "单位一律是 <b>厘米(cm)</b>，从纸张左边缘算起（含页边距），"
+            "不是从版心或表格边算起。<br>"
+            "留空（0.00）表示不指定，按模板原样排。<br>"
+            "位置以空格为单位推移，最小步进约 {:.2f}cm；"
+            "填完下面会显示实际落点，以它为准。".format(self.STEP_CM))
+        tip.setWordWrap(True)
+        tip.setProperty("muted", "true")
+        root.addWidget(tip)
+
+        host = QWidget()
+        form = QFormLayout(host)
+        form.setLabelAlignment(Qt.AlignRight)
+        for name in fields:
+            row = QHBoxLayout()
+            sp = QDoubleSpinBox()
+            sp.setRange(0.0, 21.0)
+            sp.setDecimals(2)
+            sp.setSingleStep(0.1)
+            sp.setSuffix(" cm")
+            sp.setSpecialValueText("不指定")     # 0.00 显示成"不指定"
+            sp.setValue(float(saved.get(name, 0.0)))
+            sp.setToolTip("距纸张左边缘的厘米数；0 = 不指定，按模板原样")
+            self._spins[name] = sp
+            row.addWidget(sp)
+            cur = current.get(name)
+            lab = QLabel("当前实际：{:.2f} cm".format(cur) if cur is not None else "")
+            lab.setProperty("muted", "true")
+            row.addWidget(lab)
+            row.addStretch(1)
+            w = QWidget()
+            w.setLayout(row)
+            form.addRow(name + "：", w)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(host)
+        root.addWidget(scroll, 1)
+
+        path_lab = QLabel("保存到：{}".format(overprint.offsets_path(template_path)))
+        path_lab.setWordWrap(True)
+        path_lab.setProperty("muted", "true")
+        root.addWidget(path_lab)
+
+        bb = QDialogButtonBox()
+        btn_reset = bb.addButton("恢复默认", QDialogButtonBox.ResetRole)
+        bb.addButton("取消", QDialogButtonBox.RejectRole)
+        bb.addButton("保存", QDialogButtonBox.AcceptRole)
+        btn_reset.clicked.connect(self._reset)
+        bb.accepted.connect(self._save)
+        bb.rejected.connect(self.reject)
+        root.addWidget(bb)
+
+    def _reset(self):
+        for sp in self._spins.values():
+            sp.setValue(0.0)
+
+    def values(self):
+        return {k: sp.value() for k, sp in self._spins.items() if sp.value() > 0}
+
+    def _save(self):
+        overprint.save_offsets(self._template_path, self.values())
+        self.accept()
 
 
 class OverprintDialog(QDialog):
@@ -127,6 +214,12 @@ class OverprintDialog(QDialog):
         self.lines_combo.currentIndexChanged.connect(self._schedule_preview)
         shape_row.addWidget(self.lines_combo)
         shape_row.addStretch(1)
+        self.btn_offsets = QPushButton("打印位置微调…")
+        self.btn_offsets.setToolTip(
+            "拿尺子量真实预印单，指定每个字段距纸张左边缘多少厘米，\n"
+            "试打几次调准后就固定下来（存在模板旁边，跟着模板走）")
+        self.btn_offsets.clicked.connect(self._edit_offsets)
+        shape_row.addWidget(self.btn_offsets)
         pv_lay.addLayout(shape_row)
         self.shape_hint = QLabel("")
         self.shape_hint.setProperty("muted", "true")
@@ -298,6 +391,26 @@ class OverprintDialog(QDialog):
                     return [l for l in txt.split('\n') if l.strip()]
         return []
 
+    def _edit_offsets(self):
+        plan = getattr(self, '_last_plan', None)
+        if not self._template_path or not plan:
+            return
+        fields = plan.get('adjustable') or []
+        if not fields:
+            QMessageBox.information(
+                self, "打印位置微调",
+                "这个模板的可填字段都在表格格子里，横向位置由格子本身定死"
+                "（紧跟预印的栏目名），没有需要微调的余地。")
+            return
+        dlg = OffsetDialog(self._template_path, fields,
+                           plan.get('field_pos') or {}, self)
+        if dlg.exec_() == QDialog.Accepted:
+            self._refresh_preview()
+            QMessageBox.information(
+                self, "已保存",
+                "位置已保存到：\n{}\n\n先生成一份试打，对不准再回来微调。"
+                .format(overprint.offsets_path(self._template_path)))
+
     def _title_max_lines(self, plan):
         """标题栏按预留高度最多能放几行"""
         for blk in plan.get('blocks') or []:
@@ -347,7 +460,7 @@ class OverprintDialog(QDialog):
         折行是按真实厘米算好的，放大只是显示倍率。
         """
         avail = max(200, self.preview.viewport().width() - 24)
-        want = plan['content_w_cm'] * _PX_PER_CM
+        want = plan['page']['width_cm'] * _PX_PER_CM     # 按整张纸的宽度铺满
         return max(0.6, min(2.2, avail / want)) if want else 1.0
 
     def _title_shape(self):
@@ -627,26 +740,59 @@ def render_overprint_html(plan, scale=1.0):
     渲染成 1190px，格子宽出近三倍，29 字的标题于是挤成一行、
     而 Word 里明明是两行）；width 属性才被真正采纳。列宽仍用百分比，
     它是相对表宽的，表宽对了列宽就对了。
+
+    画的是**整张 A4 纸**（21×29.7cm），不是只画版心：每一行都带上左右
+    页边距两栏、上下各加一条页边距空行，纸张四边描出边线。只画版心的话
+    预览的宽高比和真实 A4 对不上，用尺子比划位置就无从谈起。
     """
     page = plan['page']
     cw = plan['content_w_cm']
-    W = cw * _PX_PER_CM * scale
-    parts = ['<div style="background:#FFF;'
-             'border:1px solid #D8D2C4;padding:6px 0;">']
+    # 以整页宽为基准，版心与页边距按真实厘米占比分配
+    PW = page['width_cm'] * _PX_PER_CM * scale
+    W = PW
+    pct_l = page['left_cm'] / page['width_cm'] * 100.0
+    pct_r = page['right_cm'] / page['width_cm'] * 100.0
+    pct_body = 100.0 - pct_l - pct_r
+    PAPER = '1px solid #C9C4B8'
+    MARGIN_BG = 'background:#F2EFE9;'
+    parts = []
 
     LINE = '1px solid #D9534F'
     NONE = '0'
 
+    def _edge(td_extra, height_px, top=False, bottom=False):
+        """一整行页边距空白（同时把纸张上下边线画出来）"""
+        return ('<table width="{:.0f}" cellspacing="0" cellpadding="0" '
+                'style="border-collapse:collapse;margin:0"><tr>'
+                '<td height="{:.0f}" style="height:{:.0f}px;{}'
+                'border-left:{};border-right:{};border-top:{};border-bottom:{};'
+                '"></td></tr></table>'
+                .format(PW, height_px, height_px, td_extra, PAPER, PAPER,
+                        PAPER if top else '0', PAPER if bottom else '0'))
+
+    parts.append(_edge(MARGIN_BG, page['top_cm'] * _PX_PER_CM * scale, top=True))
+
+    def _margin_cells(extra_top=NONE, extra_bottom=NONE):
+        """左右页边距两栏——纸张左右边线也由它们画"""
+        style = ('%s;border-left:%s;border-top:%s;border-bottom:%s'
+                 % (MARGIN_BG, PAPER, extra_top, extra_bottom))
+        style_r = ('%s;border-right:%s;border-top:%s;border-bottom:%s'
+                   % (MARGIN_BG, PAPER, extra_top, extra_bottom))
+        return ('<td width="{:.2f}%" style="{}"></td>'.format(pct_l, style),
+                '<td width="{:.2f}%" style="{}"></td>'.format(pct_r, style_r))
+
     for blk in plan.get('blocks') or []:
         if blk['kind'] == 'para':
-            # 独立段落也套一张定宽单格表：div 的 CSS 宽度同样被 Qt 无视，
+            # 独立段落也套一张定宽表：div 的 CSS 宽度同样被 Qt 无视，
             # 不约束的话段落会按可视区宽度排，与表格部分对不齐
+            ml, mr = _margin_cells()
             parts.append(
                 '<table width="{:.0f}" cellspacing="0" cellpadding="0" '
-                'style="border-collapse:collapse;margin:0"><tr>'
-                '<td style="text-align:{};padding:1px 3px;'
-                'white-space:pre-wrap">{}</td></tr></table>'
-                .format(W, blk['align'], _segs_html(blk['segs'], scale)))
+                'style="border-collapse:collapse;margin:0"><tr>{}'
+                '<td width="{:.2f}%" style="background:#FFF;text-align:{};'
+                'padding:1px 0;white-space:pre-wrap">{}</td>{}</tr></table>'
+                .format(PW, ml, pct_body, blk['align'],
+                        _segs_html(blk['segs'], scale), mr))
             continue
         b = blk.get('borders') or {}
         rows = blk['rows']
@@ -654,13 +800,15 @@ def render_overprint_html(plan, scale=1.0):
             h = row['height_cm'] * _PX_PER_CM * scale
             widths = [max(0.01, c.get('width_cm') or 0.01) for c in row['cells']]
             total = sum(widths) or 1.0
+            ml, mr = _margin_cells()
             parts.append(
                 '<table width="{:.0f}" cellspacing="0" cellpadding="0" '
                 'style="border-collapse:collapse;margin:0">'
-                '<tr>'.format(W))
+                '<tr>{}'.format(PW, ml))
             n = len(row['cells'])
             for ci, c in enumerate(row['cells']):
-                w = widths[ci] / total * 100.0
+                # 列宽按整页宽折算，版心之外还要留出左右页边距
+                w = widths[ci] / total * pct_body
                 top = LINE if (ri == 0 and b.get('top') != 'none') or \
                     (ri > 0 and b.get('insideH') != 'none') else NONE
                 # 纵向合并的延续格：它和上一行本是同一个格子，
@@ -684,13 +832,21 @@ def render_overprint_html(plan, scale=1.0):
                                  c.get('orig_font_pt'), c.get('font_pt'),
                                  ' · 仍偏长' if c.get('overflow') else ''))
                 parts.append(
-                    '<td width="{:.2f}%" style="width:{:.2f}%;height:{:.0f}px;{}'
+                    '<td width="{:.2f}%" style="width:{:.2f}%;height:{:.0f}px;'
+                    'background:#FFF;{}'
                     'border-top:{};border-bottom:{};border-left:{};border-right:{};'
                     'vertical-align:top;padding:2px 3px;">'
                     '<div style="white-space:pre-wrap;line-height:1.25;">{}</div>{}</td>'
                     .format(w, w, h, bg, top, bottom, left, right,
                             _segs_html(c['segs'], scale), badge))
-            parts.append('</tr></table>')
-    parts.append('</div>')
-    return ('<html><body style="margin:6px;font-family:SimSun,serif;background:#F3F1EC">'
-            + ''.join(parts) + '</body></html>')
+            parts.append(mr + '</tr></table>')
+
+    parts.append(_edge(MARGIN_BG, max(6.0, page['bottom_cm'] * _PX_PER_CM * scale),
+                       bottom=True))
+    head = ('<div style="color:#8A8578;font-size:11px;margin:0 0 4px 0;">'
+            'A4 纸 {:.0f}×{:.0f}mm　左边距 {:.2f}cm　右边距 {:.2f}cm　'
+            '版心宽 {:.2f}cm（预览按真实比例）</div>'.format(
+                page['width_cm'] * 10, page['height_cm'] * 10,
+                page['left_cm'], page['right_cm'], cw))
+    return ('<html><body style="margin:6px;font-family:SimSun,serif;'
+            'background:#F3F1EC">' + head + ''.join(parts) + '</body></html>')

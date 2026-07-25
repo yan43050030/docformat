@@ -629,23 +629,37 @@ try:
                 _tables.append(_ch)
             _walk(_ch)
     _walk(_doc.rootFrame())
-    # 预览把每一行（以及每个独立段落）各画成一张定宽表，按文档顺序排列
+    # 预览画的是整张 A4：首尾各一条页边距空白带，中间每一行（以及每个
+    # 独立段落）各画一张定宽表，且左右都带页边距栏
     _plan4 = _od4._last_plan
+    _pg4 = _plan4['page']
     _exp = []
     for _b in _plan4['blocks']:
         if _b['kind'] == 'para':
             _exp.append([_plan4['content_w_cm']])
         else:
             _exp.extend([_c['width_cm'] for _c in _r['cells']] for _r in _b['rows'])
-    assert len(_tables) == len(_exp), '预览表格数 {} ≠ 预期 {}'.format(
-        len(_tables), len(_exp))
-    for _t, _e in zip(_tables, _exp):
+    assert len(_tables) == len(_exp) + 2, \
+        '预览表格数 {} ≠ 预期 {}（内容 {} + 上下页边距 2）'.format(
+            len(_tables), len(_exp) + 2, len(_exp))
+    # 首尾两张是页边距带，比例校验只看中间的内容行
+    for _t, _e in zip(_tables[1:-1], _exp):
         _ws = [_lay.blockBoundingRect(
             _t.cellAt(0, _c).firstCursorPosition().block()).width()
             for _c in range(_t.columns())]
         _tot = sum(_ws) or 1.0
-        for _got, _want in zip(_ws, _e):
-            _got_pct = _got / _tot * 100.0
+        # 首尾两栏是左右页边距，应占整页宽的真实比例
+        _want_l = _pg4['left_cm'] / _pg4['width_cm'] * 100.0
+        _want_r = _pg4['right_cm'] / _pg4['width_cm'] * 100.0
+        assert abs(_ws[0] / _tot * 100.0 - _want_l) <= 3.0, \
+            '左页边距占比 {:.1f}% 应为 {:.1f}%'.format(_ws[0] / _tot * 100.0, _want_l)
+        assert abs(_ws[-1] / _tot * 100.0 - _want_r) <= 3.0, \
+            '右页边距占比 {:.1f}% 应为 {:.1f}%'.format(_ws[-1] / _tot * 100.0, _want_r)
+        # 中间是版心内的各栏，按版心宽折算比例
+        _body = _ws[1:-1]
+        _btot = sum(_body) or 1.0
+        for _got, _want in zip(_body, _e):
+            _got_pct = _got / _btot * 100.0
             _want_pct = _want / sum(_e) * 100.0
             assert abs(_got_pct - _want_pct) <= 3.0, \
                 '栏宽比例 {:.1f}% 应为 {:.1f}%'.format(_got_pct, _want_pct)

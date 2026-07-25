@@ -110,28 +110,107 @@ def _pad_to_width(value, slot_units):
     return ' ' * int(round(need / 0.5)) + value
 
 
-def _replace_in_paragraph(para, values):
+def _replace_in_paragraph(para, values, offsets=None, left_cm=0.0):
     """把段落里的占位符替换为取值，保留该 run 的字体/颜色/字号。
 
-    占位符在模板里已被合并进单个 run（模板生成时保证），
-    因此逐 run 替换即可，不必跨 run 拼接。
+    同时记录每个字段最终落在**距纸张左边多少厘米**，并支持用 offsets
+    指定目标位置：offsets={'年': 2.5} 表示"年的数字要从距纸左边 2.5cm
+    处开始印"，函数据此补足前导空格。这是套打对位的核心——纸上的空格
+    印在哪儿是死的，只能靠调整前面的空白把黑字顶到位。
+
+    位置要边替换边累计：前一个字段补了多少空格，会把后面所有字段一起
+    右推，所以必须按从左到右的实际结果算，不能各算各的。
+
+    返回 (是否改动, {字段: 起始位置cm})。
     """
+    char_cm = _para_font_pt(para) / PT_PER_CM
+    offsets = offsets or {}
     changed = False
+    pos_map = {}
+    acc = 0.0                       # 已排过的宽度（全角单位）
     for run in para.runs:
         if '{{' not in run.text:
+            acc += _text_width_units(run.text)
             continue
-
-        def _sub(m):
+        out = []
+        cur = 0
+        for m in PLACEHOLDER_RE.finditer(run.text):
+            lead = run.text[cur:m.start()]
+            out.append(lead)
+            acc += _text_width_units(lead)
             key = m.group(1).strip()
             val = str(values.get(key, ''))
-            if key in _FIXED_WIDTH_FIELDS:
-                return _pad_to_width(val, _FIXED_WIDTH_FIELDS[key])
-            return val
-        new = PLACEHOLDER_RE.sub(_sub, run.text)
+            target = offsets.get(key)
+            if target is not None and char_cm > 0:
+                want = (float(target) - left_cm) / char_cm
+                pad = want - acc
+                if pad > 0:
+                    val = ' ' * int(round(pad / 0.5)) + val
+                # pad <= 0 说明目标位置在前面内容的左边，顶不过去；
+                # 不硬塞（会把前面的字挤走），由调用方据 pos_map 告警
+            elif key in _FIXED_WIDTH_FIELDS:
+                val = _pad_to_width(val, _FIXED_WIDTH_FIELDS[key])
+            # 记的是"值本身"的起点，前导空格不算——用户量的是数字的左沿
+            lead_sp = len(val) - len(val.lstrip(' '))
+            pos_map[key] = left_cm + (acc + lead_sp * 0.5) * char_cm
+            out.append(val)
+            acc += _text_width_units(val)
+            cur = m.end()
+        tail = run.text[cur:]
+        out.append(tail)
+        acc += _text_width_units(tail)
+        new = ''.join(out)
         if new != run.text:
             run.text = new
             changed = True
-    return changed
+    return changed, pos_map
+
+
+# ---------------- 打印位置微调（随模板存盘） ----------------
+
+def offsets_path(template_path):
+    """位置微调表的存放路径：与模板同名的 .位置.json，跟着模板走"""
+    base = os.path.splitext(template_path)[0]
+    return base + '.位置.json'
+
+
+def load_offsets(template_path):
+    """读取该模板的位置微调表 {字段: 距纸左边cm}，没有就返回空表"""
+    import json
+    p = offsets_path(template_path)
+    try:
+        with open(p, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (IOError, OSError, ValueError):
+        return {}
+    out = {}
+    for k, v in (data.get('fields') or data).items():
+        try:
+            out[k] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def save_offsets(template_path, offsets):
+    """写回位置微调表；传空表则删除文件（恢复默认）"""
+    import json
+    p = offsets_path(template_path)
+    if not offsets:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+        return p
+    payload = {
+        '说明': '套打打印位置微调。数值 = 该字段第一个字距纸张左边缘的厘米数。'
+                '用尺子量真实预印单上空格的左沿填进来即可；留空/删除本文件恢复默认。',
+        '单位': 'cm（厘米，从纸张左边缘量起，含页边距）',
+        'fields': {k: round(float(v), 2) for k, v in offsets.items()},
+    }
+    with open(p, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return p
 
 
 def _row_of_cell(table, cell):
@@ -547,7 +626,12 @@ def print_positions(doc):
         for r in para.runs:
             w = _text_width_units(r.text)
             if r.text.strip() and _run_prints(r):
-                out.append((left + acc * cw, left + (acc + w) * cw,
+                # 量的是**墨迹**的左右沿，run 里的前后空格不算——
+                # 用户拿尺子量的是看得见的字，不是看不见的空格
+                lead = _text_width_units(r.text[:len(r.text) - len(r.text.lstrip())])
+                trail = _text_width_units(r.text[len(r.text.rstrip()):])
+                out.append((left + (acc + lead) * cw,
+                            left + (acc + w - trail) * cw,
                             r.text.strip()))
             acc += w
     return out
@@ -631,7 +715,7 @@ def strip_empty_runs(doc):
 
 def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
               one_page=True, title_shape='trapezoid_down',
-              title_lines=None):
+              title_lines=None, offsets=None):
     """在内存 Document 上完成填充→自适应→锁高，返回 (已填数, 提示, 单元格报告)。
 
     预览与实际输出共用这一条路径，保证"预览看到的字号"就是"打印出来的字号"，
@@ -642,13 +726,23 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
 
     filled = set()
     title_tcs = []          # 标题占位符所在的单元格，梯形回行只作用于它
+    field_pos = {}          # 字段 → 实际落在距纸左边多少 cm
+    adjustable = []         # 可用"位置微调"调的字段（表格外的段落）
+    _left = doc.sections[0].left_margin.cm
     for p, _cell in _iter_paragraphs(doc):
+        in_cell = _cell is not None
         for m in PLACEHOLDER_RE.finditer(p.text):
             key = m.group(1).strip()
             filled.add(key)
-            if key in TITLE_FIELDS and _cell is not None:
+            if key in TITLE_FIELDS and in_cell:
                 title_tcs.append(_cell._tc)
-        _replace_in_paragraph(p, values)
+            # 表格内的字段横向位置由格子本身定死（紧跟预印栏目名），
+            # 没有可调的空间；只有表格外的段落靠空格定位，才需要微调
+            if not in_cell and key not in adjustable:
+                adjustable.append(key)
+        _ch, _pos = _replace_in_paragraph(
+            p, values, None if in_cell else offsets, _left)
+        field_pos.update(_pos)
 
     def _is_title_cell(cell, _tcs=title_tcs):
         return any(cell._tc is x for x in _tcs)
@@ -760,19 +854,30 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
         if locked and log:
             log('info', '已锁定 {} 行为固定高度，保证与预印栏位对齐'.format(locked))
 
+    # 目标位置在前面内容的左边时顶不过去，据实告知而不是悄悄忽略
+    for _k, _want in (offsets or {}).items():
+        _got = field_pos.get(_k)
+        if _got is not None and abs(_got - float(_want)) > 0.06:
+            notes.append('【{}】位置设为 {:.2f}cm，但前面的内容已经排到 {:.2f}cm，'
+                         '顶不过去；请把数值调大，或在模板里减少该字段前面的空格'
+                         .format(_k, float(_want), _got))
+
     used = [k for k in values if k in filled and str(values.get(k, '')).strip()]
-    return len(used), notes, reports
+    return len(used), notes, reports, field_pos, adjustable
 
 
 def fill_form(template_path, values, output_path, autofit=True, log=None,
               lock_heights=False, one_page=True, title_shape='trapezoid_down',
-              title_lines=None):
+              title_lines=None, offsets=None):
     """按 values 填充套打模板并另存，返回 (已填字段数, 提示列表)。"""
     from docx import Document
     doc = Document(template_path)
-    used, notes, _reports = _fill_doc(doc, values, autofit=autofit, log=log,
-                                      lock_heights=lock_heights, one_page=one_page,
-                                      title_shape=title_shape, title_lines=title_lines)
+    if offsets is None:
+        offsets = load_offsets(template_path)
+    used, notes, _r, _fp, _adj = _fill_doc(
+        doc, values, autofit=autofit, log=log,
+        lock_heights=lock_heights, one_page=one_page,
+        title_shape=title_shape, title_lines=title_lines, offsets=offsets)
     doc.save(output_path)
     return used, notes
 
@@ -889,7 +994,7 @@ def _cell_content_cm(cell, grid_cm):
 
 
 def plan_fill(template_path, values, autofit=True,
-              title_shape='trapezoid_down', title_lines=None):
+              title_shape='trapezoid_down', title_lines=None, offsets=None):
     """只算不存：返回预览所需的版面数据，与 fill_form 走同一条填充路径。
 
     blocks 按文档真实顺序给出（段落与表格交替）——套打单里成文日期在
@@ -900,9 +1005,11 @@ def plan_fill(template_path, values, autofit=True,
     from docx.table import Table
     from docx.text.paragraph import Paragraph
     doc = Document(template_path)
-    _used, notes, reports = _fill_doc(doc, values, autofit=autofit, log=None,
-                                      title_shape=title_shape,
-                                      title_lines=title_lines)
+    if offsets is None:
+        offsets = load_offsets(template_path)
+    _used, notes, reports, field_pos, adjustable = _fill_doc(
+        doc, values, autofit=autofit, log=None, title_shape=title_shape,
+        title_lines=title_lines, offsets=offsets)
 
     sec = doc.sections[0]
     page = {
@@ -1006,7 +1113,8 @@ def plan_fill(template_path, values, autofit=True,
     paras = [b for b in blocks if b['kind'] == 'para']
     rows_flat = [r for b in blocks if b['kind'] == 'table' for r in b['rows']]
     return {'page': page, 'content_w_cm': content_w, 'grid_cm': grid_cm,
-            'blocks': blocks, 'paras': paras, 'rows': rows_flat, 'notes': notes}
+            'blocks': blocks, 'paras': paras, 'rows': rows_flat, 'notes': notes,
+            'field_pos': field_pos, 'adjustable': adjustable}
 
 
 # ---------------- 模板发现 ----------------
