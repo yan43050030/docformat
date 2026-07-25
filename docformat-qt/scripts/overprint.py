@@ -590,10 +590,22 @@ def plan_fill(template_path, values, autofit=True):
                 h, exact = _row_height_cm(row)
                 cells = []
                 seen = []
-                for cell in row.cells:
+                # 本行自己的 tc（含 vMerge continue 的空壳），用来判断
+                # 这一格是不是纵向合并的延续格
+                own_tcs = row._tr.findall(qn('w:tc'))
+                for ci2, cell in enumerate(row.cells):
                     if any(cell._tc is x for x in seen):
                         continue
                     seen.append(cell._tc)
+                    # 纵向合并：python-docx 对 continue 格返回**合并源**的
+                    # cell，文字会在每一行各画一遍（预览里出现两个"承办部门"）。
+                    # 延续格应画成空格子、且不画与上一行之间的横线。
+                    cont = False
+                    if ci2 < len(own_tcs):
+                        _tcpr = own_tcs[ci2].find(qn('w:tcPr'))
+                        _vm = _tcpr.find(qn('w:vMerge')) if _tcpr is not None else None
+                        if _vm is not None and (_vm.get(qn('w:val')) or 'continue') == 'continue':
+                            cont = True
                     rep = None
                     for r in reports:
                         if r['tc'] is cell._tc:
@@ -605,9 +617,11 @@ def plan_fill(template_path, values, autofit=True):
                             segs.append({'text': '\n', 'white': True, 'pt': 1})
                         segs.extend(_segs_of(pp))
                     cells.append({
-                        'segs': segs,
+                        'segs': [] if cont else segs,
+                        'vmerge_cont': cont,
                         'width_cm': _cell_width_cm(table, cell),
-                        'content_cm': _cell_content_cm(cell, grid_cm),
+                        # 延续格的内容属于合并源那一行，不能再拿来抬高本行
+                        'content_cm': 0.0 if cont else _cell_content_cm(cell, grid_cm),
                         'font_pt': (rep or {}).get('font_pt'),
                         'orig_font_pt': (rep or {}).get('orig_font_pt'),
                         'shrunk': (rep or {}).get('shrunk', False),
@@ -715,7 +729,9 @@ def _label_pattern(label):
 
 
 _DATE_PATTERNS = [
-    re.compile(r'(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日'),
+    # 日可缺省：送审单常见"2026 年 7 月   日"，日留空待手签，
+    # 要求必须有"日"的数字会让整个日期都识别不出来
+    re.compile(r'(\d{4})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*日)?'),
     re.compile(r'(\d{4})\s*[-./]\s*(\d{1,2})\s*[-./]\s*(\d{1,2})'),
 ]
 
@@ -770,13 +786,21 @@ def parse_date(text):
 
     套打模板里年/月/日是三个独立位置，必须拆开分别落位，
     直接把"2026年6月25日"整串塞进"年"格会把后面全顶歪。
+
+    取**最后**一个匹配：成文日期在文末，标题里可能另有日期
+    （"关于开展2026年6月专项检查的请示"），取第一个会抓错。
     """
-    text = _normalize_digits(text)
+    text = _normalize_digits(text or '')
     for pat in _DATE_PATTERNS:
-        m = pat.search(text or '')
+        m = None
+        for m in pat.finditer(text):
+            pass
         if m:
-            return m.group(1), str(int(m.group(2))), str(int(m.group(3)))
-    m = _CN_DATE_RE.search(text or '')
+            d = m.group(3)
+            return m.group(1), str(int(m.group(2))), (str(int(d)) if d else '')
+    m = None
+    for m in _CN_DATE_RE.finditer(text):
+        pass
     if m:
         y = _cn_year(m.group(1))
         mo = _cn_number(m.group(2))
@@ -797,6 +821,65 @@ def _blocks_of(doc):
 
 def _strip_placeholders(text):
     return PLACEHOLDER_RE.sub('', text or '')
+
+
+def _date_candidates(doc):
+    """产出可能含成文日期的文本，按"从局部到整篇"由细到粗排列。
+
+    日期识别失败的原因几乎都是"日期被切碎了"，而不是格式不认识：
+
+    * 年/月/日被排在同一行的**不同单元格**里（"2026│年│7│月│25│日"），
+      逐格看每格都不成日期 → 补一份"整行拼起来"的文本；
+    * 日期在**文本框**里（套打单常把落款做成文本框），
+      doc.paragraphs 根本看不到 → 直接遍历 body 下所有 w:p；
+    * 日期在**页脚**或**嵌套表格**里 → 分别补上；
+    * 上面都不成立时，还有"整篇文字拼成一串"兜底。
+
+    与分页无关：这里读的是 XML 里的全部内容，日期落在第几页都能取到。
+    """
+    from docx.oxml.ns import qn as _qn
+    texts = []
+
+    def _p_text(p_el):
+        return ''.join(t.text or '' for t in p_el.iter(_qn('w:t')))
+
+    def _harvest(root):
+        # 所有段落（含表格内、嵌套表格内、文本框内）
+        for p_el in root.iter(_qn('w:p')):
+            texts.append(_p_text(p_el))
+        # 每一行整行拼接：年/月/日分列在不同格时唯一能拼出日期的形态
+        for tr in root.iter(_qn('w:tr')):
+            texts.append(''.join(t.text or '' for t in tr.iter(_qn('w:t'))))
+
+    _harvest(doc.element.body)
+    for sec in doc.sections:
+        for part in (sec.footer, sec.header,
+                     sec.even_page_footer, sec.first_page_footer):
+            try:
+                if part is not None:
+                    _harvest(part._element)
+            except (AttributeError, ValueError):
+                continue
+    # 兜底：整篇拼成一串（日期被拆到相邻段落时仍能拼出）
+    texts.append(''.join(texts))
+    return [_strip_placeholders(t) for t in texts if t and t.strip()]
+
+
+def _extract_date(doc):
+    """从整篇文档里取成文日期，返回 (年, 月, 日) 或 None。
+
+    带"日"的匹配优先于只有年月的匹配——两者都在时前者更完整。
+    """
+    best = None
+    for txt in _date_candidates(doc):
+        d = parse_date(txt)
+        if not d:
+            continue
+        if best is None or (d[2] and not best[2]):
+            best = d
+        elif bool(d[2]) == bool(best[2]):
+            best = d          # 同样完整则取更靠后的
+    return best
 
 
 def extract_values(source_path, fields=None):
@@ -897,15 +980,9 @@ def extract_values(source_path, fields=None):
             break
 
     # --- 日期：拆成年/月/日三格，避免整串塞进一格把版面顶歪 ---
-    # 取**最后**一个日期：成文日期在文末，而标题/正文里可能出现别的日期
-    # （如"关于开展2026年6月专项检查的请示"），取第一个会抓错。
-    last = None
-    for txt, _in_cell, _cell in blocks:
-        d = parse_date(txt)
-        if d:
-            last = d
-    if last:
-        values['年'], values['月'], values['日'] = last
+    got_date = _extract_date(doc)
+    if got_date:
+        values['年'], values['月'], values['日'] = got_date
 
     return {k: v for k, v in values.items() if k in wanted and str(v).strip()}
 

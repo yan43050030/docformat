@@ -527,6 +527,10 @@ def render_overprint_html(plan, scale=1.0):
                 w = widths[ci] / total * 100.0
                 top = LINE if (ri == 0 and b.get('top') != 'none') or \
                     (ri > 0 and b.get('insideH') != 'none') else NONE
+                # 纵向合并的延续格：它和上一行本是同一个格子，
+                # 中间不该有横线
+                if c.get('vmerge_cont'):
+                    top = NONE
                 bottom = LINE if (ri == len(rows) - 1 and b.get('bottom') != 'none') \
                     else NONE
                 left = LINE if (ci == 0 and b.get('left') != 'none') or \

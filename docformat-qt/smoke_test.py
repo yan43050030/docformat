@@ -947,7 +947,75 @@ def test_overprint():
     assert any(c['overflow'] for r in plan2['rows'] for c in r['cells']), \
         '极长内容预览应标为放不下'
 
-    print('[7o] 套打：填充/几何锁定/自适应/空值留白/预览与输出一致 + docx 适配 通过')
+    # 纵向合并的延续格不得重复画出合并源的文字（曾出现两个"承办部门"）
+    _conts = [c for r in plan['rows'] for c in r['cells'] if c.get('vmerge_cont')]
+    assert _conts, '模板里承办部门是纵向合并的，应识别出延续格'
+    assert all(not c['segs'] for c in _conts), '纵向合并的延续格不应重复渲染文字'
+    _bxs = [''.join(s['text'] for s in c['segs'])
+            for r in plan['rows'] for c in r['cells']]
+    assert sum('承办部门' in t for t in _bxs) == 1, \
+        '预览里"承办部门"只应出现一次：{}'.format(_bxs)
+
+    # 日期识别：日期被"切碎"的各种真实写法都要认得出来
+    def _mkdoc(name, build):
+        _d = Document()
+        build(_d)
+        _p = os.path.join(OUT_DIR, 'date_' + name + '.docx')
+        _d.save(_p)
+        return _p
+
+    def _split_cells(_d):        # 年/月/日分列在不同单元格
+        _t = _d.add_table(rows=1, cols=6)
+        for _c, _v in zip(_t.rows[0].cells, ['2026', '年', '7', '月', '25', '日']):
+            _c.text = _v
+
+    def _in_footer(_d):
+        _d.add_paragraph('正文')
+        _d.sections[0].footer.paragraphs[0].text = '2026年7月25日'
+
+    def _in_textbox(_d):         # 落款常做成文本框，doc.paragraphs 看不到
+        from docx.oxml import parse_xml
+        _p = _d.add_paragraph()
+        _p._p.append(parse_xml(
+            '<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml'
+            '/2006/main"><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:'
+            'vml"><v:textbox><w:txbxContent><w:p><w:r><w:t>2026年7月25日</w:t>'
+            '</w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>'))
+
+    def _nested(_d):
+        _t = _d.add_table(rows=1, cols=1)
+        _t.rows[0].cells[0].add_table(rows=1, cols=1) \
+            .rows[0].cells[0].text = '2026年7月25日'
+
+    def _page2(_d):              # 字数多、日期被挤到第二页，仍须识别
+        for _ in range(60):
+            _d.add_paragraph('某单位某单位某单位某单位某单位某单位某单位某单位。')
+        _d.add_paragraph('2026年7月25日')
+
+    _date_cases = {
+        '普通段落': lambda _d: _d.add_paragraph('  2026年7月25日   某单位办公室制'),
+        '全角数字': lambda _d: _d.add_paragraph('２０２６年７月２５日'),
+        '中文数字': lambda _d: _d.add_paragraph('二〇二六年七月二十五日'),
+        '日留空': lambda _d: _d.add_paragraph('  2026 年  7 月     日'),
+        '分列单元格': _split_cells,
+        '页脚': _in_footer,
+        '文本框': _in_textbox,
+        '嵌套表格': _nested,
+        '日期在第二页': _page2,
+        '标题另有日期': lambda _d: [_d.add_paragraph('关于开展2026年3月检查的请示'),
+                                _d.add_paragraph('2026年7月25日')],
+    }
+    for _name, _build in _date_cases.items():
+        _got = op.extract_values(_mkdoc(_name, _build), fields=['年', '月', '日'])
+        assert _got.get('年') == '2026' and _got.get('月') == '7', \
+            '日期识别失败（{}）：{}'.format(_name, _got)
+    # "日留空"是唯一允许日为空的：留空待手签
+    assert not op.extract_values(
+        _mkdoc('日留空', _date_cases['日留空']), fields=['日']).get('日'), \
+        '日未填写时不应臆造日期'
+
+    print('[7o] 套打：填充/几何锁定/自适应/空值留白/预览与输出一致 + docx 适配'
+          ' + 纵向合并去重 + 日期识别 10 种写法 通过')
 
 
 def test_gb_header_record():
