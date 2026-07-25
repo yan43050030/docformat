@@ -338,7 +338,9 @@ def test_cleaner():
         assert stat.get(need), '清洗项 {} 未生效'.format(need)
     c = Document(out); q = c.paragraphs[0]
     rp = q.runs[0]._r.find(qn('w:rPr')); pp = q._p.find(qn('w:pPr'))
-    assert q.runs[0].font.size is None and q.runs[0].font.color.rgb is None, '字符格式未清'
+    assert q.runs[0].font.size is None, '字号未清'
+    assert str(q.runs[0].font.color.rgb) == '000000', \
+        '颜色应清成确定的黑色（样式若自带颜色，置 None 会继承出彩字）'
     assert rp is None or rp.find(qn('w:spacing')) is None, '字符间距未清'
     assert rp is None or rp.find(qn('w:em')) is None, '着重号未清'
     assert pp is None or pp.find(qn('w:pBdr')) is None, '段落边框未清'
@@ -425,7 +427,65 @@ def test_cleaner():
         '认可后应用预设字号'
     assert preview_spec_after(be, ['para:body:size'])['font'] == be['actual']['font'], \
         '只认可字号不应连字体一起改'
-    print('[7k] 格式清洗：全文/部分段落/不伤识别/排版默认清洗+合规预览 通过')
+    # --- 白色文字是套打的预印占位，不是脏格式，默认必须保护 ---
+    import shutil as _sh3
+    _otpl = os.path.join(os.path.dirname(__file__), 'templates', '套打', '文件送审单.docx')
+    if os.path.exists(_otpl):
+        _c1 = os.path.join(OUT_DIR, 'clean_overprint.docx')
+        _sh3.copyfile(_otpl, _c1)
+
+        def _count_white(path):
+            _d = Document(path)
+            _n = 0
+            for _p in _d.paragraphs:
+                _n += sum(1 for _r in _p.runs
+                          if _r.text.strip() and cleaner._is_white_run(_r))
+            for _t in _d.tables:
+                _seen = []
+                for _row in _t.rows:
+                    for _cl in _row.cells:
+                        if any(_cl._tc is _x for _x in _seen):
+                            continue
+                        _seen.append(_cl._tc)
+                        for _p in _cl.paragraphs:
+                            _n += sum(1 for _r in _p.runs
+                                      if _r.text.strip() and cleaner._is_white_run(_r))
+            return _n
+
+        _w0 = _count_white(_c1)
+        assert _w0 > 0, '套打模板应含白色占位文字'
+        assert cleaner.looks_like_overprint(Document(_c1)), '应识别为套打表单'
+        _c2 = os.path.join(OUT_DIR, 'clean_overprint_out.docx')
+        cleaner.clean_file(_c1, _c2)
+        assert _count_white(_c2) == _w0, \
+            '套打表单的白色预印占位被清成黑字，打印时会全印出来、整张表报废'
+        # 显式强制才归一
+        _c3 = os.path.join(OUT_DIR, 'clean_overprint_force.docx')
+        cleaner.clean_file(_c1, _c3, items={'white_text': True, 'char_format': True})
+
+    from docx.shared import RGBColor as _RGB
+    # 普通文档里的白字是看不见的垃圾，应转黑显形
+    _dw = Document(); _pw = _dw.add_paragraph()
+    _rw = _pw.add_run('隐藏白字'); _rw.font.color.rgb = _RGB(0xFF, 0xFF, 0xFF)
+    _s5 = os.path.join(OUT_DIR, 'clean_white_in.docx'); _dw.save(_s5)
+    assert not cleaner.looks_like_overprint(Document(_s5)), '普通文档不应误判为套打'
+    _o5 = os.path.join(OUT_DIR, 'clean_white_out.docx')
+    cleaner.clean_file(_s5, _o5)
+    assert str(Document(_o5).paragraphs[0].runs[0].font.color.rgb) == '000000', \
+        '普通文档的白字应转为黑色显形'
+
+    # 样式自带颜色时，清洗须给出确定的黑色（而非继承样式色）
+    _dh = Document()
+    _dh.styles['Heading 1'].font.color.rgb = _RGB(0x1F, 0x5F, 0xA9)
+    _ph = _dh.add_paragraph(); _ph.style = _dh.styles['Heading 1']
+    _rh = _ph.add_run('标题'); _rh.font.color.rgb = _RGB(0xFF, 0, 0)
+    _s6 = os.path.join(OUT_DIR, 'clean_style_in.docx'); _dh.save(_s6)
+    _o6 = os.path.join(OUT_DIR, 'clean_style_out.docx')
+    cleaner.clean_file(_s6, _o6)
+    assert str(Document(_o6).paragraphs[0].runs[0].font.color.rgb) == '000000', \
+        '样式带颜色时清洗仍应确保黑色，公文不能继承出蓝字'
+
+    print('[7k] 格式清洗：全文/部分段落/不伤识别/排版默认清洗+套打白字豁免 通过')
 
 
 def test_toc():

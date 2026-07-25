@@ -26,6 +26,9 @@ logger = logging.getLogger('docformat.cleaner')
 CLEAN_GROUPS = [
     ('字符层', [
         ('char_format', '字符直接格式', '颜色、高亮、字号、加粗、斜体、下划线、删除线、上下标'),
+        ('white_text', '白色文字转为黑色',
+         '普通文档里白字是看不见的垃圾，转黑让它显形；'
+         '识别为套打模板的文件会自动豁免，不会破坏预印占位'),
         ('char_spacing', '字符间距与缩放', 'w:spacing / w:w / w:position / w:kern，常见的"字挤在一起"元凶'),
         ('emphasis', '着重号与拼音指南', 'w:em 着重号、w:ruby 拼音指南'),
         ('empty_runs', '空 run 与残留属性', '清掉没有文字的 run 和它们携带的格式'),
@@ -54,6 +57,7 @@ DEFAULT_CLEAN = {k: True for k, _n, _d in CLEAN_ITEMS}
 DEFAULT_CLEAN['para_align'] = False      # 会削弱自动识别
 DEFAULT_CLEAN['revisions'] = False       # 涉及内容取舍，让用户显式选
 DEFAULT_CLEAN['fields'] = False          # 域固化不可逆，让用户显式选
+DEFAULT_CLEAN['white_text'] = True       # 普通文档里白字是看不见的垃圾，清成黑字让它显形
 
 CLEAN_LABELS = {k: n for k, n, _d in CLEAN_ITEMS}
 
@@ -131,10 +135,22 @@ def _drop(parent, tag):
 
 # ---------------- 各清洗项 ----------------
 
-def _clean_char_format(para, stat):
+def _is_white_run(run):
+    c = run.font.color.rgb if run.font.color and run.font.color.rgb else None
+    return str(c) == 'FFFFFF'
+
+
+def _clean_char_format(para, stat, opts=None):
     for run in para.runs:
         f = run.font
         if f.color is not None and f.color.rgb is not None:
+            # 白色文字在套打模板里是"预印内容占位"，不是脏格式：
+            # 清成黑字会被真的打印出来，整张套打表作废。普通文档里
+            # 白字是看不见的垃圾，清成黑字让它显形才对——故按文档类型区分。
+            if _is_white_run(run) and not (opts or {}).get('white_text', True):
+                continue
+            # 用显式黑而非 rgb=None：样式若自带颜色（如标题样式是蓝色），
+            # 移除直接色会让文字继承成蓝色；公文要求黑色，显式设更确定。
             from docx.shared import RGBColor
             f.color.rgb = RGBColor(0, 0, 0)
             stat['char_format'] += 1
@@ -153,7 +169,7 @@ def _clean_char_format(para, stat):
                 continue
 
 
-def _clean_char_spacing(para, stat):
+def _clean_char_spacing(para, stat, opts=None):
     for run in para.runs:
         rpr = _rpr_of(run)
         if rpr is None:
@@ -162,7 +178,7 @@ def _clean_char_spacing(para, stat):
             stat['char_spacing'] += _drop(rpr, tag)
 
 
-def _clean_emphasis(para, stat):
+def _clean_emphasis(para, stat, opts=None):
     for run in para.runs:
         rpr = _rpr_of(run)
         if rpr is not None:
@@ -183,7 +199,7 @@ def _clean_emphasis(para, stat):
         stat['emphasis'] += 1
 
 
-def _clean_empty_runs(para, stat):
+def _clean_empty_runs(para, stat, opts=None):
     for run in list(para.runs):
         r = run._r
         if run.text:
@@ -200,7 +216,7 @@ def _clean_empty_runs(para, stat):
             stat['empty_runs'] += 1
 
 
-def _clean_para_format(para, stat):
+def _clean_para_format(para, stat, opts=None):
     pf = para.paragraph_format
     touched = False
     for attr in ('space_before', 'space_after', 'left_indent', 'right_indent',
@@ -232,13 +248,13 @@ def _clean_para_format(para, stat):
         stat['para_format'] += 1
 
 
-def _clean_para_align(para, stat):
+def _clean_para_align(para, stat, opts=None):
     if para.paragraph_format.alignment is not None:
         para.paragraph_format.alignment = None
         stat['para_align'] += 1
 
 
-def _clean_styles(para, stat):
+def _clean_styles(para, stat, opts=None):
     from .font import _force_normal_style
     try:
         before = para.style.name if para.style is not None else None
@@ -253,7 +269,7 @@ def _clean_styles(para, stat):
         stat['styles'] += 1
 
 
-def _clean_borders_shading(para, stat):
+def _clean_borders_shading(para, stat, opts=None):
     # 字符级边框底纹（rPr 里的 w:bdr/w:shd）——set_font 不会清，
     # 排版后残留会让文字带着黄底/方框，是常见的"排版后还是花的"来源
     for run in para.runs:
@@ -266,14 +282,14 @@ def _clean_borders_shading(para, stat):
     stat['borders_shading'] += _drop(ppr, 'w:pBdr') + _drop(ppr, 'w:shd')
 
 
-def _clean_frame(para, stat):
+def _clean_frame(para, stat, opts=None):
     ppr = para._p.find(qn('w:pPr'))
     if ppr is None:
         return
     stat['frame'] += _drop(ppr, 'w:framePr')
 
 
-def _clean_fields(para, stat):
+def _clean_fields(para, stat, opts=None):
     """把域代码折叠成它当前显示的文字（丢弃 instrText 与域字符）。"""
     p = para._p
     children = list(p)
@@ -317,7 +333,7 @@ def _clean_fields(para, stat):
         stat['fields'] += 1
 
 
-def _clean_bookmarks(para, stat):
+def _clean_bookmarks(para, stat, opts=None):
     p = para._p
     for tag in ('w:bookmarkStart', 'w:bookmarkEnd'):
         for el in p.findall(qn(tag)):
@@ -325,7 +341,7 @@ def _clean_bookmarks(para, stat):
             stat['bookmarks'] += 1
 
 
-def _clean_comments(para, stat):
+def _clean_comments(para, stat, opts=None):
     p = para._p
     for tag in ('w:commentRangeStart', 'w:commentRangeEnd'):
         for el in p.findall(qn(tag)):
@@ -339,7 +355,7 @@ def _clean_comments(para, stat):
                 stat['comments'] += 1
 
 
-def _clean_revisions(para, stat):
+def _clean_revisions(para, stat, opts=None):
     """接受修订：保留插入内容、删除被删内容、去掉格式修订记录。"""
     p = para._p
     # 删除标记 w:del：整个 run 连同内容移除
@@ -368,7 +384,7 @@ def _clean_revisions(para, stat):
                 stat['revisions'] += 1
 
 
-def _clean_breaks(para, stat):
+def _clean_breaks(para, stat, opts=None):
     """移除手动换行/分页符（w:br）。分页符所在的空段落由排版流程另行处理。"""
     for run in para.runs:
         for br in run._r.findall(qn('w:br')):
@@ -379,7 +395,7 @@ def _clean_breaks(para, stat):
 _MULTI_SPACE = re.compile(r'[ 　]{2,}')
 
 
-def _clean_whitespace(para, stat):
+def _clean_whitespace(para, stat, opts=None):
     changed = False
     for run in para.runs:
         # 制表符元素
@@ -429,6 +445,43 @@ _CLEANERS = [
 ]
 
 
+def looks_like_overprint(doc):
+    """判断文档是否为套打表单：白色文字 + 白色/无框线的表格。
+
+    套打表靠"白字占位、白线占格"复刻预印纸的版式，两者同时出现基本不会
+    是巧合。命中就豁免白字归一，免得把人家的套打模板清成一张会全印出来
+    的废纸。
+    """
+    has_white_text = False
+    for p in doc.paragraphs:
+        if any(r.text.strip() and _is_white_run(r) for r in p.runs):
+            has_white_text = True
+            break
+    if not has_white_text:
+        for t in doc.tables:
+            for row in t.rows:
+                for cell in row.cells:
+                    for p in cell.paragraphs:
+                        if any(r.text.strip() and _is_white_run(r) for r in p.runs):
+                            has_white_text = True
+                            break
+    if not has_white_text:
+        return False
+    for t in doc.tables:
+        tblPr = t._tbl.find(qn('w:tblPr'))
+        if tblPr is None:
+            continue
+        b = tblPr.find(qn('w:tblBorders'))
+        if b is None:
+            continue
+        for el in b:
+            color = el.get(qn('w:color'))
+            val = el.get(qn('w:val'))
+            if color == 'FFFFFF' or val == 'none':
+                return True
+    return False
+
+
 def clean_document(doc, items=None, scope_indices=None, protect_media=True):
     """清洗文档格式，返回各项改动计数 {键: 次数}。
 
@@ -444,13 +497,19 @@ def clean_document(doc, items=None, scope_indices=None, protect_media=True):
     if not active:
         return {}
 
+    # 套打表单自动豁免白字归一——它的白字是有效数据，不是垃圾
+    if opts.get('white_text', True) and looks_like_overprint(doc):
+        opts['white_text'] = False
+        logger.info('识别为套打表单，已保护白色预印占位文字')
+
     stat = {k: 0 for k, _fn in _CLEANERS}
+    stat.setdefault('white_text', 0)
     for para in _iter_paragraphs(doc, scope_indices):
         if protect_media and paragraph_has_media(para):
             continue
         for _k, fn in active:
             try:
-                fn(para, stat)
+                fn(para, stat, opts)
             except Exception as exc:      # 单段失败不影响整篇
                 logger.warning('清洗段落失败(%s): %s', _k, exc)
     return {k: v for k, v in stat.items() if v}
