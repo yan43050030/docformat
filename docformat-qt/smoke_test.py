@@ -782,7 +782,34 @@ def test_overprint():
                     log=lambda l, m: lg.append(m))
     assert any('自适应' in m for m in lg), '适配长文时应缩字号: {}'.format(lg)
 
-    # --- 标题栏/拟办意见栏不得被撑高：无论内容多长，几何必须恒定 ---
+    # --- 一页保证：缩下边距留分页余量，且不移动任何内容位置 ---
+    _tplsec = Document(tpl).sections[0]
+    _outsec = Document(out_s).sections[0]
+    assert _outsec.bottom_margin.cm < _tplsec.bottom_margin.cm, \
+        '应缩小下边距以避免末行被挤到第二页'
+    for _attr in ('top_margin', 'left_margin', 'right_margin',
+                  'page_width', 'page_height'):
+        assert abs(getattr(_outsec, _attr).cm - getattr(_tplsec, _attr).cm) < 0.001, \
+            '{} 被改动——只应调下边距，其余会移动内容位置'.format(_attr)
+
+    # --- 日期：全角数字归一，且取文末的成文日期而非正文里的其它日期 ---
+    assert op.parse_date('２０２６年６月２５日') == ('2026', '6', '25'), '全角数字未归一'
+    assert op.parse_date('２０２６年6月２５日') == ('2026', '6', '25'), '全半角混排未归一'
+    _dd2 = Document()
+    _dd2.add_paragraph('标题：关于开展2026年3月专项检查工作的请示')
+    _dd2.add_paragraph('拟办意见：'); _dd2.add_paragraph('拟同意。请审示。')
+    _dd2.add_paragraph('承办部门：办公室')
+    _dd2.add_paragraph('２０２６年７月２５日')
+    _ds = os.path.join(OUT_DIR, 'overprint_date_src.docx'); _dd2.save(_ds)
+    _dv = op.extract_values(_ds)
+    assert (_dv.get('年'), _dv.get('月'), _dv.get('日')) == ('2026', '7', '25'), \
+        '应取文末成文日期而非标题里的日期: {}'.format(_dv)
+
+    # --- 自带模板目录应在软件目录下，方便用户找到 ---
+    assert os.path.normpath(op.bundled_overprint_dir()).startswith(
+        os.path.normpath(op.app_dir())), '自带模板应放在软件所在目录内'
+
+    # --- 标题栏/拟办意见栏不得被撑高：几何必须恒定 ---
     tpl_geo = [op._row_height_cm(r) for r in Document(tpl).tables[0].rows]
     geos = []
     for mult, tmult in ((1, 1), (16, 1), (40, 4)):
@@ -888,10 +915,16 @@ def test_overprint():
     _pd = Document(tpl)
     for _pp in _pd.paragraphs:
         _paras_h += op.paragraph_height_cm(_pp, _g)
+    # 整单必须放得进一页，且留有余量——Word 的实际排版高度受字体度量、
+    # 网格吸附等影响，从 XML 精确预测屡试屡错，故要求明确的安全余量而非
+    # "正好占满"（此前按"正好占满"设计，实机就溢出到了第二页）
     _end = _pg['top_cm'] + _paras_h + _tbl_h
-    _limit = _pg['height_cm'] - _pg['bottom_cm']
-    assert _limit - 1.5 < _end <= _limit + 0.2, \
-        '整单应基本占满一页：末端 {:.2f}cm，可用到 {:.2f}cm'.format(_end, _limit)
+    _filled_sec = Document(out_s).sections[0]
+    _limit = _pg['height_cm'] - _filled_sec.bottom_margin.cm
+    assert _end <= _limit, \
+        '整单放不进一页：末端 {:.2f}cm，可用到 {:.2f}cm'.format(_end, _limit)
+    assert _limit - _end >= 1.0, \
+        '一页余量仅 {:.2f}cm，太紧张，实机容易溢出到第二页'.format(_limit - _end)
     shrunk = [c for r in plan['rows'] for c in r['cells'] if c['shrunk']]
     assert shrunk, '长内容预览应标出已缩小'
     pv_out = os.path.join(OUT_DIR, 'overprint_pv.docx')

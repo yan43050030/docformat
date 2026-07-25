@@ -310,6 +310,29 @@ def autofit_cell(table, cell, warn=None):
     return True, final, not fits
 
 
+def fit_one_page(doc, min_bottom_cm=0.6):
+    """给套打表单留足分页余量：把下边距压到较小值。
+
+    为什么改下边距是安全的：内容自上而下排布，位置只由上边距和内容本身
+    决定；下边距只影响"哪一行放不下要翻页"这个阈值。缩小它**不会移动
+    任何已有内容**，套打对位分毫不变，却能把原本被挤到第二页的末行
+    （成文日期）留在第一页。
+
+    这比"预测内容总高再调整"可靠得多——Word 的实际排版高度受字体度量、
+    网格吸附、单元格内边距等多重影响，从 XML 精确预测屡试屡错；而这里
+    根本不需要预测，只是把阈值放宽到肯定够用。
+
+    返回 (是否调整, 原下边距cm, 新下边距cm)。
+    """
+    from docx.shared import Cm
+    sec = doc.sections[0]
+    old = sec.bottom_margin.cm if sec.bottom_margin else None
+    if old is None or old <= min_bottom_cm:
+        return False, old, old
+    sec.bottom_margin = Cm(min_bottom_cm)
+    return True, round(old, 2), min_bottom_cm
+
+
 def lock_row_heights(doc):
     """把所有已设高度的行改为固定高度（hRule=exact），返回锁定的行数。
 
@@ -363,7 +386,8 @@ def strip_empty_runs(doc):
     return n
 
 
-def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False):
+def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
+              one_page=True):
     """在内存 Document 上完成填充→自适应→锁高，返回 (已填数, 提示, 单元格报告)。
 
     预览与实际输出共用这一条路径，保证"预览看到的字号"就是"打印出来的字号"，
@@ -416,6 +440,12 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False):
     if stripped and log:
         log('info', '清理模板残留空标记 {} 处'.format(stripped))
 
+    if one_page:
+        adjusted, old_b, new_b = fit_one_page(doc)
+        if adjusted and log:
+            log('info', '下边距 {}cm → {}cm，避免末行（成文日期）被挤到第二页；'
+                        '此调整不移动任何内容位置，套打对位不受影响'.format(old_b, new_b))
+
     if lock_heights:
         locked = lock_row_heights(doc)
         if locked and log:
@@ -426,12 +456,12 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False):
 
 
 def fill_form(template_path, values, output_path, autofit=True, log=None,
-              lock_heights=False):
+              lock_heights=False, one_page=True):
     """按 values 填充套打模板并另存，返回 (已填字段数, 提示列表)。"""
     from docx import Document
     doc = Document(template_path)
     used, notes, _reports = _fill_doc(doc, values, autofit=autofit, log=log,
-                                      lock_heights=lock_heights)
+                                      lock_heights=lock_heights, one_page=one_page)
     doc.save(output_path)
     return used, notes
 
@@ -599,14 +629,49 @@ def plan_fill(template_path, values, autofit=True):
 
 # ---------------- 模板发现 ----------------
 
-def bundled_overprint_dir():
-    """软件自带的套打模板目录"""
+def app_dir():
+    """软件所在目录（打包后是 exe 所在目录，开发时是项目目录）"""
     import sys as _sys
     if getattr(_sys, 'frozen', False):
-        base = getattr(_sys, '_MEIPASS', os.path.dirname(_sys.executable))
-        return os.path.join(base, 'templates', '套打')
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(here, 'templates', '套打')
+        return os.path.dirname(os.path.abspath(_sys.executable))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _packed_overprint_dir():
+    """打包内置的只读模板目录（PyInstaller 解压临时目录）"""
+    import sys as _sys
+    if getattr(_sys, 'frozen', False):
+        base = getattr(_sys, '_MEIPASS', None)
+        if base:
+            return os.path.join(base, 'templates', '套打')
+    return os.path.join(app_dir(), 'templates', '套打')
+
+
+def bundled_overprint_dir():
+    """自带套打模板目录——放在**软件所在目录**下的 templates/套打，方便找。
+
+    打包后 PyInstaller 会把资源解压到临时目录，用户根本找不到；
+    故首次运行时把内置模板复制到 exe 同级的 templates/套打 下，
+    之后一直用这个看得见、改得动的目录。
+    """
+    visible = os.path.join(app_dir(), 'templates', '套打')
+    packed = _packed_overprint_dir()
+    if os.path.normpath(visible) == os.path.normpath(packed):
+        return visible
+    try:
+        os.makedirs(visible, exist_ok=True)
+        if os.path.isdir(packed):
+            import shutil
+            for name in os.listdir(packed):
+                if not name.lower().endswith('.docx'):
+                    continue
+                dst = os.path.join(visible, name)
+                if not os.path.exists(dst):
+                    shutil.copyfile(os.path.join(packed, name), dst)
+    except Exception as exc:      # 目录不可写（如装在 Program Files）时退回打包目录
+        logger.warning('无法在软件目录建立模板文件夹（%s），改用内置目录', exc)
+        return packed
+    return visible
 
 
 def user_overprint_dir():
@@ -692,12 +757,21 @@ def _cn_number(text):
     return _CN_DIGITS.get(text)
 
 
+_FULLWIDTH_DIGITS = {chr(0xFF10 + i): str(i) for i in range(10)}
+
+
+def _normalize_digits(text):
+    """全角数字转半角——公文里日期常写成 ２０２６年６月２５日"""
+    return ''.join(_FULLWIDTH_DIGITS.get(ch, ch) for ch in (text or ''))
+
+
 def parse_date(text):
     """从文本里抽出 (年, 月, 日) 字符串；抽不到返回 None。
 
     套打模板里年/月/日是三个独立位置，必须拆开分别落位，
     直接把"2026年6月25日"整串塞进"年"格会把后面全顶歪。
     """
+    text = _normalize_digits(text)
     for pat in _DATE_PATTERNS:
         m = pat.search(text or '')
         if m:
@@ -823,11 +897,15 @@ def extract_values(source_path, fields=None):
             break
 
     # --- 日期：拆成年/月/日三格，避免整串塞进一格把版面顶歪 ---
+    # 取**最后**一个日期：成文日期在文末，而标题/正文里可能出现别的日期
+    # （如"关于开展2026年6月专项检查的请示"），取第一个会抓错。
+    last = None
     for txt, _in_cell, _cell in blocks:
         d = parse_date(txt)
         if d:
-            values['年'], values['月'], values['日'] = d
-            break
+            last = d
+    if last:
+        values['年'], values['月'], values['日'] = last
 
     return {k: v for k, v in values.items() if k in wanted and str(v).strip()}
 

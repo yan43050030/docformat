@@ -24,6 +24,8 @@ class OverprintDialog(QDialog):
         self.resize(1120, 720)
         self._editors = {}
         self._template_path = None
+        # 导入内容的源文件目录——生成时默认存到那里，省得每次翻文件夹
+        self._source_dir = None
         # 输入后延迟重算预览，避免每敲一个字就跑一遍填充
         self._pv_timer = QTimer(self)
         self._pv_timer.setSingleShot(True)
@@ -270,6 +272,7 @@ class OverprintDialog(QDialog):
         if not self._template_path:
             QMessageBox.information(self, "提示", "请先选择套打模板")
             return
+        self._source_dir = os.path.dirname(os.path.abspath(path))
         from PyQt5.QtWidgets import QApplication
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
@@ -413,6 +416,10 @@ class OverprintDialog(QDialog):
         stem = os.path.splitext(os.path.basename(self._template_path))[0]
         title = values.get('标题', '').strip()
         default = '{}{}.docx'.format(stem, '_' + title[:16] if title else '')
+        # 默认存到导入内容的那个文件夹；没导入过则用上次保存的位置
+        base_dir = self._source_dir or settings().value('overprint/last_dir', '') or ''
+        if base_dir:
+            default = os.path.join(base_dir, default)
         out, _ = QFileDialog.getSaveFileName(self, "保存套打文件", default,
                                              "Word 文档 (*.docx)")
         if not out:
@@ -429,6 +436,7 @@ class OverprintDialog(QDialog):
             QApplication.restoreOverrideCursor()
 
         s = settings()
+        s.setValue('overprint/last_dir', os.path.dirname(os.path.abspath(out)))
         for name, val in values.items():
             if name not in _NO_MEMORY and val:
                 s.setValue('overprint/{}'.format(name), val)
