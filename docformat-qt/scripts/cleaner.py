@@ -135,7 +135,8 @@ def _clean_char_format(para, stat):
     for run in para.runs:
         f = run.font
         if f.color is not None and f.color.rgb is not None:
-            f.color.rgb = None
+            from docx.shared import RGBColor
+            f.color.rgb = RGBColor(0, 0, 0)
             stat['char_format'] += 1
         if f.highlight_color is not None:
             f.highlight_color = None
