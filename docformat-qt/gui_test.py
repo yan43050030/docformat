@@ -518,7 +518,9 @@ try:
         assert _n in _flds, '套打字段缺失 {}：{}'.format(_n, _flds)
     from PyQt5.QtWidgets import QPlainTextEdit as _QPTE, QLineEdit as _QLE
     assert isinstance(_od._editors['拟办意见'], _QPTE), '长文本字段应为多行输入'
-    assert isinstance(_od._editors['标题'], _QLE), '短字段应为单行输入'
+    # 标题也是多行框：按回车即在该处手动分行
+    assert isinstance(_od._editors['标题'], _QPTE), '标题应为多行输入以便手动分行'
+    assert isinstance(_od._editors['承办部门'], _QLE), '短字段应为单行输入'
     # 从已有 docx 导入内容：字段自动填好，日期拆成年/月/日
     from docx import Document as _D2
     from scripts import overprint as _op
@@ -664,9 +666,47 @@ try:
         '正梯形应上长下短：{}'.format(_shape_w['trapezoid_down'])
     assert _shape_w['trapezoid_up'][0] < _shape_w['trapezoid_up'][1], \
         '倒梯形应上短下长：{}'.format(_shape_w['trapezoid_up'])
+
+    # 指定行数：选几行就分几行，且输出与预览断在同一处
+    _od4.shape_combo.setCurrentIndex(0)
+    import tempfile as _tf
+    from scripts import overprint as _op4
+    from docx import Document as _D4
+    for _li in range(1, _od4.lines_combo.count()):
+        _want = _od4.lines_combo.itemData(_li)
+        _od4.lines_combo.setCurrentIndex(_li)
+        _od4._refresh_preview()
+        _pv = [l.strip() for l in _od4._title_line_texts(_od4._last_plan)]
+        assert len(_pv) == _want, '指定 {} 行，预览实得 {} 行'.format(_want, len(_pv))
+        _o4 = os.path.join(_tf.mkdtemp(), 'title.docx')
+        _op4.fill_form(_od4._template_path, _od4._values(), _o4,
+                       title_shape='trapezoid_down', title_lines=_want)
+        for _c4 in _op4._iter_cells(_D4(_o4).tables[0]):
+            if _c4.text.strip().startswith('关于'):
+                assert [l.strip() for l in _c4.text.split('\n') if l.strip()] == _pv, \
+                    '输出断行与预览不一致（{} 行）'.format(_want)
+                break
+
+    # 手动回车分行优先于自动回行，且两个下拉置灰以示已让位
+    _od4.lines_combo.setCurrentIndex(0)
+    (_e.setPlainText if hasattr(_e, 'setPlainText') else _e.setText)(
+        '关于对某单位某部门\n张三李四王五赵六的请示')
+    _od4._refresh_preview()
+    _pv_m = [l.strip() for l in _od4._title_line_texts(_od4._last_plan)]
+    assert _pv_m == ['关于对某单位某部门', '张三李四王五赵六的请示'], \
+        '手动断点未被采用：{}'.format(_pv_m)
+    assert not _od4.shape_combo.isEnabled() and not _od4.lines_combo.isEnabled(), \
+        '手动分行时自动回行的下拉应置灰'
+    _o5 = os.path.join(_tf.mkdtemp(), 'title_manual.docx')
+    _op4.fill_form(_od4._template_path, _od4._values(), _o5)
+    for _c5 in _op4._iter_cells(_D4(_o5).tables[0]):
+        if _c5.text.strip().startswith('关于'):
+            assert [l.strip() for l in _c5.text.split('\n') if l.strip()] == _pv_m, \
+                '手动断点未写进输出'
+            break
 finally:
     _od4.reject()
-print('[24] 套打预览：块顺序一致 + 栏宽比例与模板一致 + 长标题梯形回行可切换 ✓')
+print('[24] 套打预览：块顺序一致 + 栏宽比例 + 梯形回行 + 指定行数 + 手动断点 ✓')
 
 # ---------- 22. 模板目录入口与"修改模板" ----------
 from scripts import overprint as _op2

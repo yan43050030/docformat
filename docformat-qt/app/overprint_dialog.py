@@ -114,8 +114,24 @@ class OverprintDialog(QDialog):
             "选“不回行”则交给 Word 自动折行，可能把词拆断。")
         self.shape_combo.currentIndexChanged.connect(self._schedule_preview)
         shape_row.addWidget(self.shape_combo)
+        shape_row.addWidget(QLabel("分"))
+        self.lines_combo = QComboBox()
+        self.lines_combo.addItem("自动", None)
+        # 不放"1 行"：一行放不下时 Word 照样会折，标不了它做不到的承诺；
+        # "只占一行、不主动断"由左边的"不回行"表达
+        for _n in (2, 3, 4):
+            self.lines_combo.addItem("{} 行".format(_n), _n)
+        self.lines_combo.setToolTip(
+            "标题分成几行。选“自动”按长度决定；指定行数则一定分成那么多行。\n"
+            "想精确控制断在哪个字，直接在左边标题框里按回车。")
+        self.lines_combo.currentIndexChanged.connect(self._schedule_preview)
+        shape_row.addWidget(self.lines_combo)
         shape_row.addStretch(1)
         pv_lay.addLayout(shape_row)
+        self.shape_hint = QLabel("")
+        self.shape_hint.setProperty("muted", "true")
+        self.shape_hint.setWordWrap(True)
+        pv_lay.addWidget(self.shape_hint)
         self.preview = QTextBrowser()
         pv_lay.addWidget(self.preview, 1)
         self.pv_note = QLabel("")
@@ -211,7 +227,15 @@ class OverprintDialog(QDialog):
             return
         s = settings()
         for name in fields:
-            if name in _LONG_FIELDS:
+            if name in overprint.TITLE_FIELDS:
+                # 标题给多行框：按回车即在该处强制分行，优先于自动梯形回行
+                ed = QPlainTextEdit()
+                ed.setMinimumHeight(56)
+                ed.setMaximumHeight(80)
+                ed.setPlaceholderText("按回车可在指定位置手动分行；不分行则按右侧设置自动回行")
+                if name not in _NO_MEMORY:
+                    ed.setPlainText(s.value('overprint/{}'.format(name), '') or '')
+            elif name in _LONG_FIELDS:
                 ed = QPlainTextEdit()
                 ed.setMinimumHeight(110)
                 ed.setPlaceholderText("内容过长会自动缩小字号，仍放不下会提示")
@@ -238,7 +262,8 @@ class OverprintDialog(QDialog):
             return
         try:
             plan = overprint.plan_fill(self._template_path, self._values(),
-                                       title_shape=self._title_shape())
+                                       title_shape=self._title_shape(),
+                                       title_lines=self._title_lines())
         except Exception as e:
             self.preview.setHtml('<body style="color:#888;font-family:SimSun">'
                                  '预览失败：{}</body>'.format(e))
@@ -253,11 +278,43 @@ class OverprintDialog(QDialog):
                 if c.get('overflow'):
                     msgs.append('有内容缩到最小仍放不下，建议精简文字')
                     break
+        self._refresh_shape_hint(plan)
         shrunk = sum(1 for row in plan['rows'] for c in row['cells'] if c.get('shrunk'))
         if shrunk and not msgs:
             msgs.append('{} 处已自动缩小字号以放进预留格'.format(shrunk))
         self.pv_note.setText('；'.join(dict.fromkeys(msgs)) or
                              '各栏内容均能正常放下')
+
+    def _title_line_texts(self, plan):
+        """从预览数据里取标题格的各行文字（预览怎么断，输出就怎么断）"""
+        for blk in plan.get('blocks') or []:
+            if blk['kind'] != 'table':
+                continue
+            for row in blk['rows']:
+                for c in row['cells']:
+                    if not c.get('is_title') or c.get('vmerge_cont'):
+                        continue
+                    txt = ''.join(s['text'] for s in c['segs'])
+                    return [l for l in txt.split('\n') if l.strip()]
+        return []
+
+    def _refresh_shape_hint(self, plan):
+        """手动分行时把自动回行的两个下拉置灰——否则用户会以为没生效"""
+        manual = self._manual_title()
+        for cb in (self.shape_combo, self.lines_combo):
+            cb.setEnabled(not manual)
+        lines = self._title_line_texts(plan)
+        if manual:
+            self.shape_hint.setText(
+                "标题已按你在标题框里的回车分成 {} 行；清掉回车即可恢复自动回行。"
+                .format(len(lines) or 1))
+        elif len(lines) > 1:
+            self.shape_hint.setText(
+                "标题自动分成 {} 行（{}）；想改断点就在标题框里按回车。".format(
+                    len(lines), '、'.join('{} 字'.format(len(l.strip()))
+                                          for l in lines)))
+        else:
+            self.shape_hint.setText("标题一行放得下；想强制分行可指定行数或在标题框里按回车。")
 
     def _pv_scale(self, plan):
         """让整幅版面填满预览区：几何和字号同倍放大，比例与行数不变。
@@ -275,6 +332,19 @@ class OverprintDialog(QDialog):
         if cb is None:
             return 'trapezoid_down'
         return cb.itemData(cb.currentIndex()) or 'none'
+
+    def _title_lines(self):
+        cb = getattr(self, 'lines_combo', None)
+        return cb.itemData(cb.currentIndex()) if cb is not None else None
+
+    def _manual_title(self):
+        """标题里有没有用户自己敲的回车"""
+        for name in overprint.TITLE_FIELDS:
+            ed = self._editors.get(name)
+            if ed is not None and isinstance(ed, QPlainTextEdit):
+                if '\n' in ed.toPlainText().strip():
+                    return True
+        return False
 
     def _values(self):
         out = {}
@@ -462,7 +532,8 @@ class OverprintDialog(QDialog):
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             n, notes = overprint.fill_form(self._template_path, values, out,
-                                           title_shape=self._title_shape())
+                                           title_shape=self._title_shape(),
+                                           title_lines=self._title_lines())
         except Exception as e:
             QApplication.restoreOverrideCursor()
             QMessageBox.warning(self, "生成失败", str(e))

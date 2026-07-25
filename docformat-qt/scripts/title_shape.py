@@ -43,23 +43,29 @@ def _find_break(text, target, hard_max):
     return min(int(target) if target >= 1 else 1, hard_max)
 
 
-def split_title_lines(text, chars_per_line, shape='trapezoid_down'):
+def split_title_lines(text, chars_per_line, shape='trapezoid_down', lines_n=None):
     """把标题文本拆成多行，形成梯形。返回行列表（≥1 行）。
 
     shape: 'trapezoid_down' 正梯形(上长下短) / 'trapezoid_up' 倒梯形(上短下长)
     chars_per_line: 版心可容纳的全角字符数（每行上限）
+    lines_n: 指定分成几行；None 表示按长度自动决定。
+             指定行数时即使一行放得下也照分——用户想要几行就是几行。
     """
     text = text.strip()
     if not text:
         return [text]
     total = _text_width(text)
-    # 能一行放下就不折
-    if total <= chars_per_line:
-        return [text]
-
-    # 目标行数：尽量 2 行，过长才 3 行
-    lines_n = 2 if total <= chars_per_line * 2 - 2 else 3
-    lines_n = min(lines_n, 3)
+    if lines_n is not None:
+        lines_n = max(1, int(lines_n))
+        if lines_n == 1:
+            return [text]
+    else:
+        # 能一行放下就不折
+        if total <= chars_per_line:
+            return [text]
+        # 目标行数：尽量 2 行，过长才 3 行
+        lines_n = 2 if total <= chars_per_line * 2 - 2 else 3
+        lines_n = min(lines_n, 3)
 
     # 目标各行宽度：正梯形递减、倒梯形递增，和为 total
     base = total / lines_n

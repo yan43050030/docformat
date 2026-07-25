@@ -335,8 +335,10 @@ def autofit_cell(table, cell, warn=None):
     return True, final, not fits
 
 
-def shape_title_cell(table, cell, shape='trapezoid_down'):
+def shape_title_cell(table, cell, shape='trapezoid_down', lines_n=None):
     """长标题在格子里按梯形回行，返回 (是否改动, 行数)。
+
+    lines_n 指定分成几行；None 表示按长度自动决定。
 
     公文标题回行要求"词意完整、排列对称、长短适宜"（GB/T 9704），
     靠 Word 自动折行只会齐头齐尾、还可能把词拆断。这里主动算好断点并
@@ -362,7 +364,7 @@ def shape_title_cell(table, cell, shape='trapezoid_down'):
     per_line = usable / (font_pt / PT_PER_CM) if font_pt else 0
     if per_line <= 0:
         return False, 0
-    lines = split_title_lines(text, per_line, shape)
+    lines = split_title_lines(text, per_line, shape, lines_n)
     if len(lines) <= 1:
         # 一行放得下：若之前插过 br，要还原成单行
         if '\n' in para.text:
@@ -471,7 +473,8 @@ def strip_empty_runs(doc):
 
 
 def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
-              one_page=True, title_shape='trapezoid_down'):
+              one_page=True, title_shape='trapezoid_down',
+              title_lines=None):
     """在内存 Document 上完成填充→自适应→锁高，返回 (已填数, 提示, 单元格报告)。
 
     预览与实际输出共用这一条路径，保证"预览看到的字号"就是"打印出来的字号"，
@@ -493,6 +496,9 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
     def _is_title_cell(cell, _tcs=title_tcs):
         return any(cell._tc is x for x in _tcs)
 
+    # 用户在标题里自己敲了回车 = 指定了断点，自动回行让位
+    manual_title = any('\n' in str(values.get(k, '')) for k in TITLE_FIELDS)
+
     for t in doc.tables:
         for cell in _iter_cells(t):
             label = (cell.text.strip().splitlines() or [''])[0][:12]
@@ -507,10 +513,12 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
             orig = _para_font_pt(mp) if mp is not None else None
             shrunk = overflow = False
             # 标题梯形回行：先按原字号断行，让自适应看到真实行数；
-            # 自适应若缩了字号，一行能多放字，再按新字号重断一次
-            is_title = _is_title_cell(cell)
-            if is_title and title_shape and title_shape != 'none':
-                shape_title_cell(t, cell, title_shape)
+            # 自适应若缩了字号，一行能多放字，再按新字号重断一次。
+            # 用户在标题里自己敲了回车就完全照他的断法来——手动优先于自动。
+            is_title = _is_title_cell(cell) and not manual_title
+            do_shape = is_title and title_shape and title_shape != 'none'
+            if do_shape:
+                shape_title_cell(t, cell, title_shape, title_lines)
             if autofit and cell.text.strip():
                 def _warn(msg, _l=label):
                     notes.append('【{}】{}'.format(_l, msg))
@@ -518,8 +526,8 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
                 if shrunk and log:
                     log('info', '套打自适应：{} 区字号调整为 {}pt{}'.format(
                         label, _size, '（仍偏长）' if overflow else ''))
-            if is_title and title_shape and title_shape != 'none':
-                _ch, _n = shape_title_cell(t, cell, title_shape)
+            if do_shape:
+                _ch, _n = shape_title_cell(t, cell, title_shape, title_lines)
                 if _n > 1 and log:
                     log('info', '标题按{}回行为 {} 行'.format(
                         '正梯形' if title_shape == 'trapezoid_down' else '倒梯形', _n))
@@ -527,6 +535,7 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
             final = _para_font_pt(mp2) if mp2 is not None else None
             reports.append({
                 'tc': cell._tc,
+                'is_title': _is_title_cell(cell),
                 'label': label,
                 'text': cell.text,
                 'width_cm': _cell_width_cm(t, cell),
@@ -577,13 +586,14 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
 
 
 def fill_form(template_path, values, output_path, autofit=True, log=None,
-              lock_heights=False, one_page=True, title_shape='trapezoid_down'):
+              lock_heights=False, one_page=True, title_shape='trapezoid_down',
+              title_lines=None):
     """按 values 填充套打模板并另存，返回 (已填字段数, 提示列表)。"""
     from docx import Document
     doc = Document(template_path)
     used, notes, _reports = _fill_doc(doc, values, autofit=autofit, log=log,
                                       lock_heights=lock_heights, one_page=one_page,
-                                      title_shape=title_shape)
+                                      title_shape=title_shape, title_lines=title_lines)
     doc.save(output_path)
     return used, notes
 
@@ -700,7 +710,7 @@ def _cell_content_cm(cell, grid_cm):
 
 
 def plan_fill(template_path, values, autofit=True,
-              title_shape='trapezoid_down'):
+              title_shape='trapezoid_down', title_lines=None):
     """只算不存：返回预览所需的版面数据，与 fill_form 走同一条填充路径。
 
     blocks 按文档真实顺序给出（段落与表格交替）——套打单里成文日期在
@@ -712,7 +722,8 @@ def plan_fill(template_path, values, autofit=True,
     from docx.text.paragraph import Paragraph
     doc = Document(template_path)
     _used, notes, reports = _fill_doc(doc, values, autofit=autofit, log=None,
-                                      title_shape=title_shape)
+                                      title_shape=title_shape,
+                                      title_lines=title_lines)
 
     sec = doc.sections[0]
     page = {
@@ -802,6 +813,7 @@ def plan_fill(template_path, values, autofit=True,
                         'orig_font_pt': (rep or {}).get('orig_font_pt'),
                         'shrunk': (rep or {}).get('shrunk', False),
                         'overflow': (rep or {}).get('overflow', False),
+                        'is_title': (rep or {}).get('is_title', False),
                     })
                 # 行的实际渲染高度：atLeast 取"声明高度"与"内容自然高度"较大者
                 natural = max([c['content_cm'] for c in cells] or [0])
@@ -1165,7 +1177,7 @@ def extract_values(source_path, fields=None):
 
 def fit_document(source_path, template_path, output_path,
                  overrides=None, autofit=True, log=None,
-                 title_shape='trapezoid_down'):
+                 title_shape='trapezoid_down', title_lines=None):
     """把一份已有 docx 的内容适配到套打模板并输出。
 
     overrides: 手工修正/补充的字段，优先级高于自动抽取的值。
@@ -1179,7 +1191,8 @@ def fit_document(source_path, template_path, output_path,
         got = '、'.join('{}={}'.format(k, str(v)[:12]) for k, v in sorted(values.items()))
         log('info', '套打适配：识别到 {} 个字段（{}）'.format(len(values), got or '无'))
     _n, notes = fill_form(template_path, values, output_path,
-                          autofit=autofit, log=log, title_shape=title_shape)
+                          autofit=autofit, log=log, title_shape=title_shape,
+                          title_lines=title_lines)
     missing = [f for f in fields if not str(values.get(f, '')).strip()]
     if missing:
         notes = list(notes) + ['未能自动识别：{}（可在对话框里手工补填）'.format('、'.join(missing))]
