@@ -333,12 +333,14 @@ def lock_row_heights(doc):
     return n
 
 
-def fill_form(template_path, values, output_path, autofit=True, log=None,
-              lock_heights=True):
-    """按 values 填充套打模板并另存，返回 (已填字段数, 提示列表)。"""
-    from docx import Document
-    doc = Document(template_path)
+def _fill_doc(doc, values, autofit=True, log=None, lock_heights=True):
+    """在内存 Document 上完成填充→自适应→锁高，返回 (已填数, 提示, 单元格报告)。
+
+    预览与实际输出共用这一条路径，保证"预览看到的字号"就是"打印出来的字号"，
+    两边各写一套迟早会走样。
+    """
     notes = []
+    reports = []
 
     filled = set()
     for p, _cell in _iter_paragraphs(doc):
@@ -346,30 +348,134 @@ def fill_form(template_path, values, output_path, autofit=True, log=None,
             filled.add(m.group(1).strip())
         _replace_in_paragraph(p, values)
 
-    if autofit:
-        for t in doc.tables:
-            for cell in _iter_cells(t):
-                if not cell.text.strip():
-                    continue
-
-                def _warn(msg, _c=cell):
-                    label = (_c.text.strip().splitlines() or [''])[0][:12]
-                    notes.append('【{}】{}'.format(label, msg))
-
-                shrunk, size, overflow = autofit_cell(t, cell, warn=_warn)
+    for t in doc.tables:
+        for cell in _iter_cells(t):
+            label = (cell.text.strip().splitlines() or [''])[0][:12]
+            row = _row_of_cell(t, cell)
+            h, exact = _row_height_cm(row) if row is not None else (None, False)
+            # 取"正文最长的那段"而不是第一段——第一段常是标签
+            # （如"拟办意见："），报它的字号会让用户看不出正文到底多小
+            def _main_para(_c):
+                cands = [pp for pp in _c.paragraphs if pp.text.strip()]
+                return max(cands, key=lambda pp: len(pp.text)) if cands else None
+            mp = _main_para(cell)
+            orig = _para_font_pt(mp) if mp is not None else None
+            shrunk = overflow = False
+            if autofit and cell.text.strip():
+                def _warn(msg, _l=label):
+                    notes.append('【{}】{}'.format(_l, msg))
+                shrunk, _size, overflow = autofit_cell(t, cell, warn=_warn)
                 if shrunk and log:
                     log('info', '套打自适应：{} 区字号调整为 {}pt{}'.format(
-                        (cell.text.strip().splitlines() or [''])[0][:12],
-                        size, '（仍偏长）' if overflow else ''))
+                        label, _size, '（仍偏长）' if overflow else ''))
+            mp2 = _main_para(cell)
+            final = _para_font_pt(mp2) if mp2 is not None else None
+            reports.append({
+                'tc': cell._tc,
+                'label': label,
+                'text': cell.text,
+                'width_cm': _cell_width_cm(t, cell),
+                'height_cm': h or 0,
+                'font_pt': final,
+                'orig_font_pt': orig,
+                'shrunk': bool(shrunk),
+                'overflow': bool(overflow),
+            })
 
     if lock_heights:
         locked = lock_row_heights(doc)
         if locked and log:
             log('info', '已锁定 {} 行为固定高度，保证与预印栏位对齐'.format(locked))
 
-    doc.save(output_path)
     used = [k for k in values if k in filled and str(values.get(k, '')).strip()]
-    return len(used), notes
+    return len(used), notes, reports
+
+
+def fill_form(template_path, values, output_path, autofit=True, log=None,
+              lock_heights=True):
+    """按 values 填充套打模板并另存，返回 (已填字段数, 提示列表)。"""
+    from docx import Document
+    doc = Document(template_path)
+    used, notes, _reports = _fill_doc(doc, values, autofit=autofit, log=log,
+                                      lock_heights=lock_heights)
+    doc.save(output_path)
+    return used, notes
+
+
+def plan_fill(template_path, values, autofit=True):
+    """只算不存：返回预览所需的版面数据，与 fill_form 走同一条填充路径。
+
+    返回 {'page': {...}, 'paras': [...], 'rows': [...], 'notes': [...]}
+    """
+    from docx import Document
+    doc = Document(template_path)
+    _used, notes, reports = _fill_doc(doc, values, autofit=autofit, log=None)
+
+    sec = doc.sections[0]
+    page = {
+        'width_cm': sec.page_width.cm, 'height_cm': sec.page_height.cm,
+        'left_cm': sec.left_margin.cm, 'right_cm': sec.right_margin.cm,
+        'top_cm': sec.top_margin.cm, 'bottom_cm': sec.bottom_margin.cm,
+    }
+    content_w = page['width_cm'] - page['left_cm'] - page['right_cm']
+
+    def _is_white(run):
+        c = run.font.color.rgb if run.font.color and run.font.color.rgb else None
+        return str(c) == 'FFFFFF'
+
+    paras = []
+    for p in doc.paragraphs:
+        if not p.text.strip():
+            continue
+        segs = []
+        for r in p.runs:
+            if not r.text:
+                continue
+            segs.append({'text': r.text, 'white': _is_white(r),
+                         'pt': r.font.size.pt if r.font.size else 14})
+        al = p.paragraph_format.alignment
+        paras.append({'segs': segs,
+                      'align': {1: 'center', 2: 'right'}.get(
+                          int(al) if al is not None else 0, 'left')})
+
+    rows = []
+    ri = 0
+    for t in doc.tables:
+        for row in t.rows:
+            h, exact = _row_height_cm(row)
+            cells = []
+            seen = []
+            for cell in row.cells:
+                if any(cell._tc is x for x in seen):
+                    continue
+                seen.append(cell._tc)
+                # 按元素身份匹配，不能按文本+行高——纵向合并的单元格
+                # 会出现在多行里，行高不同会匹配不上而丢掉报告
+                rep = None
+                for r in reports:
+                    if r['tc'] is cell._tc:
+                        rep = r
+                        break
+                segs = []
+                for p in cell.paragraphs:
+                    for r in p.runs:
+                        if r.text:
+                            segs.append({'text': r.text, 'white': _is_white(r),
+                                         'pt': r.font.size.pt if r.font.size else 14})
+                    segs.append({'text': '\n', 'white': True, 'pt': 1})
+                cells.append({
+                    'segs': segs,
+                    'width_cm': _cell_width_cm(t, cell),
+                    'font_pt': (rep or {}).get('font_pt'),
+                    'orig_font_pt': (rep or {}).get('orig_font_pt'),
+                    'shrunk': (rep or {}).get('shrunk', False),
+                    'overflow': (rep or {}).get('overflow', False),
+                })
+            rows.append({'height_cm': h or 0, 'exact': exact, 'cells': cells})
+            ri += 1
+
+    return {'page': page, 'content_w_cm': content_w,
+            'paras': paras, 'rows': rows, 'notes': notes}
 
 
 # ---------------- 模板发现 ----------------

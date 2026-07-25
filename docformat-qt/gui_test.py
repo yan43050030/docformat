@@ -543,6 +543,33 @@ finally:
     _od.reject()
 print('[21] 套打填写：模板/字段/长短区分 + 从 docx 导入内容与日期拆格 ✓')
 
+# ---------- 19. 套打版面预览：随输入实时反映、字号变小可见 ----------
+_od2 = _OD()
+try:
+    def _setv(**kw):
+        for _k, _v in kw.items():
+            _e = _od2._editors[_k]
+            (_e.setPlainText if hasattr(_e, 'setPlainText') else _e.setText)(_v)
+        _od2._refresh_preview()
+
+    _setv(标题='关于某事项的请示', 拟办意见='因工作需要，拟报请审批。', 承办部门='办公室')
+    assert '关于某事项的请示' in _od2.preview.toPlainText(), '预览未反映输入内容'
+    assert '正常放下' in _od2.pv_note.text(), '短内容不应提示缩放: {}'.format(_od2.pv_note.text())
+    # 长内容 → 提示已缩小
+    _setv(拟办意见='因某某事项需要进一步开展调查核实工作。' * 16)
+    assert '缩小字号' in _od2.pv_note.text(), '长内容应提示已缩小: {}'.format(_od2.pv_note.text())
+    # 极长 → 红底警示 + 明确提示放不下
+    _setv(拟办意见='因某某事项需要进一步开展调查核实工作。' * 40)
+    assert '放不下' in _od2.pv_note.text(), '极长内容应提示放不下'
+    assert 'fdecea' in _od2.preview.toHtml().lower(), '放不下的格子应有红底警示'
+    # 留空（手写签字）不应报错，预览照常
+    _setv(经办人='', 文字校核='', 拟办意见='因工作需要，拟报请审批。')
+    assert _od2._values()['经办人'] == '', '留空字段应为空值'
+    assert len(_od2.preview.toPlainText()) > 30, '留空后预览应照常渲染'
+finally:
+    _od2.reject()
+print('[22] 套打版面预览：实时刷新 + 缩字号可见 + 放不下警示 + 留空可用 ✓')
+
 
 
 # ---------- 12. v3.0 易用性 ----------

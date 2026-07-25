@@ -709,7 +709,49 @@ def test_overprint():
     assert all(exact for h, exact in geos[0]), \
         '所有行都应锁为固定高度，否则会被内容撑高: {}'.format(geos[0])
 
-    print('[7o] 套打：填充/几何锁定/自适应 + docx 适配/日期拆格/中文数字日期 通过')
+    # --- 空值：经办人等留空供手写签字，应干净留白 ---
+    import re as _re
+    blank = dict(base); blank['拟办意见'] = '因工作需要，拟报请审批。'
+    for k in ('经办人', '文字校核', '紧急程度', '密级'):
+        blank.pop(k, None)
+    bout = os.path.join(OUT_DIR, 'overprint_blank.docx')
+    op.fill_form(tpl, blank, bout)
+    bdoc = Document(bout)
+    balltext = '\n'.join(p.text for p in bdoc.paragraphs)
+    for cell in op._iter_cells(bdoc.tables[0]):
+        balltext += '\n' + cell.text
+    assert not _re.findall(r'\{\{[^}]*\}\}', balltext), \
+        '留空字段残留占位符: {}'.format(_re.findall(r'\{\{[^}]*\}\}', balltext))
+    assert '经 办 人：' in balltext, '留空后标签仍应在（打印出来是空白供手写）'
+
+    # --- 预览：与实际输出同一条填充路径，字号必须一致 ---
+    pv_vals = dict(base)
+    pv_vals['拟办意见'] = '因某某事项需要进一步开展调查核实工作。' * 16
+    plan = op.plan_fill(tpl, pv_vals)
+    assert plan['rows'] and plan['paras'], '预览数据为空'
+    shrunk = [c for r in plan['rows'] for c in r['cells'] if c['shrunk']]
+    assert shrunk, '长内容预览应标出已缩小'
+    pv_out = os.path.join(OUT_DIR, 'overprint_pv.docx')
+    op.fill_form(tpl, pv_vals, pv_out)
+    real = None
+    for cell in op._iter_cells(Document(pv_out).tables[0]):
+        if '拟办意见' in cell.text:
+            cands = [pp for pp in cell.paragraphs if pp.text.strip()]
+            real = op._para_font_pt(max(cands, key=lambda pp: len(pp.text)))
+            break
+    # 预览必须报正文字号而非标签字号，否则用户看不出正文到底多小
+    assert all(c['font_pt'] is not None for r in plan['rows'] for c in r['cells']), \
+        '合并单元格的字号报告丢失'
+    assert real is not None and abs(real - shrunk[0]['font_pt']) < 0.01, \
+        '预览字号({})与实际输出({})不一致'.format(shrunk[0]['font_pt'], real)
+    # 极长内容应在预览里标为放不下
+    huge = dict(base)
+    huge['拟办意见'] = '因某某事项需要进一步开展调查核实工作。' * 40
+    plan2 = op.plan_fill(tpl, huge)
+    assert any(c['overflow'] for r in plan2['rows'] for c in r['cells']), \
+        '极长内容预览应标为放不下'
+
+    print('[7o] 套打：填充/几何锁定/自适应/空值留白/预览与输出一致 + docx 适配 通过')
 
 
 def test_gb_header_record():

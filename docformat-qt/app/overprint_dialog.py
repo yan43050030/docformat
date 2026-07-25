@@ -2,11 +2,11 @@
 """套打填写：选套打模板 → 填字段 → 生成可直接打到预印纸上的文件"""
 import os
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (QComboBox, QDialog, QFileDialog, QFormLayout,
                              QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                              QPlainTextEdit, QPushButton, QScrollArea,
-                             QVBoxLayout, QWidget)
+                             QSplitter, QTextBrowser, QVBoxLayout, QWidget)
 
 from app.theme import settings
 from scripts import overprint
@@ -21,9 +21,14 @@ class OverprintDialog(QDialog):
     def __init__(self, parent=None):
         super(OverprintDialog, self).__init__(parent)
         self.setWindowTitle("套打填写 — 打到预印红头纸上")
-        self.resize(680, 640)
+        self.resize(1120, 720)
         self._editors = {}
         self._template_path = None
+        # 输入后延迟重算预览，避免每敲一个字就跑一遍填充
+        self._pv_timer = QTimer(self)
+        self._pv_timer.setSingleShot(True)
+        self._pv_timer.setInterval(350)
+        self._pv_timer.timeout.connect(self._refresh_preview)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 14)
@@ -66,9 +71,28 @@ class OverprintDialog(QDialog):
         src_row.addStretch(1)
         root.addLayout(src_row)
 
+        split = QSplitter(Qt.Horizontal)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
-        root.addWidget(self.scroll, 1)
+        split.addWidget(self.scroll)
+
+        pv_box = QWidget()
+        pv_lay = QVBoxLayout(pv_box)
+        pv_lay.setContentsMargins(6, 0, 0, 0)
+        pv_lay.setSpacing(4)
+        pv_head = QLabel("版面预览（灰字=纸上已预印，不会打印；黑字=本次打印内容）")
+        pv_head.setProperty("sectionTitle", "true")
+        pv_head.setWordWrap(True)
+        pv_lay.addWidget(pv_head)
+        self.preview = QTextBrowser()
+        pv_lay.addWidget(self.preview, 1)
+        self.pv_note = QLabel("")
+        self.pv_note.setProperty("muted", "true")
+        self.pv_note.setWordWrap(True)
+        pv_lay.addWidget(self.pv_note)
+        split.addWidget(pv_box)
+        split.setSizes([460, 640])
+        root.addWidget(split, 1)
 
         self.status = QLabel("")
         self.status.setProperty("muted", "true")
@@ -120,10 +144,43 @@ class OverprintDialog(QDialog):
                 ed = QLineEdit()
                 if name not in _NO_MEMORY:
                     ed.setText(s.value('overprint/{}'.format(name), '') or '')
+            if isinstance(ed, QPlainTextEdit):
+                ed.textChanged.connect(self._schedule_preview)
+            else:
+                ed.textChanged.connect(self._schedule_preview)
             self._editors[name] = ed
             form.addRow(name + '：', ed)
         self.scroll.setWidget(host)
+        self._refresh_preview()
         self.status.setText("共 {} 个可填字段；留空的字段打印出来就是空白。".format(len(fields)))
+
+    # ---------- 预览 ----------
+    def _schedule_preview(self, *_a):
+        self._pv_timer.start()
+
+    def _refresh_preview(self):
+        if not self._template_path or not hasattr(self, 'preview'):
+            return
+        try:
+            plan = overprint.plan_fill(self._template_path, self._values())
+        except Exception as e:
+            self.preview.setHtml('<body style="color:#888;font-family:SimSun">'
+                                 '预览失败：{}</body>'.format(e))
+            return
+        pos = self.preview.verticalScrollBar().value()
+        self.preview.setHtml(render_overprint_html(plan))
+        self.preview.verticalScrollBar().setValue(pos)
+        msgs = []
+        for row in plan['rows']:
+            for c in row['cells']:
+                if c.get('overflow'):
+                    msgs.append('有内容缩到最小仍放不下，建议精简文字')
+                    break
+        shrunk = sum(1 for row in plan['rows'] for c in row['cells'] if c.get('shrunk'))
+        if shrunk and not msgs:
+            msgs.append('{} 处已自动缩小字号以放进预留格'.format(shrunk))
+        self.pv_note.setText('；'.join(dict.fromkeys(msgs)) or
+                             '各栏内容均能正常放下')
 
     def _values(self):
         out = {}
@@ -138,6 +195,7 @@ class OverprintDialog(QDialog):
                 ed.setPlainText('')
             else:
                 ed.setText('')
+        self._refresh_preview()
 
     def _import_content(self):
         """从已有 docx 抽取内容填进字段（日期自动拆成年/月/日）"""
@@ -166,6 +224,7 @@ class OverprintDialog(QDialog):
                 ed.setPlainText(val)
             else:
                 ed.setText(val)
+        self._refresh_preview()
         missing = [n for n in self._editors if not values.get(n)]
         msg = "已识别 {} 个字段".format(len(values))
         if missing:
@@ -246,3 +305,82 @@ class OverprintDialog(QDialog):
         msg += "\n\n打印时请用预印红头纸，并确认打印机「按实际大小/100%」不缩放。"
         QMessageBox.information(self, "生成完成", msg)
         self.accept()
+
+
+# ---------------- 版面预览 ----------------
+
+_PX_PER_CM = 26          # 预览缩放：1cm ≈ 26px，A4 宽约 546px
+_PT_PER_CM = 28.3465
+
+
+def _esc(t):
+    return (t or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
+def _segs_html(segs, scale):
+    """白色（预印在纸上的）用浅灰示意，黑色（真正打印的）用黑色实体。"""
+    out = []
+    for s in segs:
+        txt = s.get('text', '')
+        if txt == '\n':
+            out.append('<br>')
+            continue
+        if not txt:
+            continue
+        px = max(5.0, (s.get('pt') or 14) / _PT_PER_CM * _PX_PER_CM * scale)
+        if s.get('white'):
+            style = 'color:#C9C4B8;font-size:{:.1f}px'.format(px)
+        else:
+            style = 'color:#111;font-weight:600;font-size:{:.1f}px'.format(px)
+        out.append('<span style="{}">{}</span>'.format(style, _esc(txt)))
+    return ''.join(out)
+
+
+def render_overprint_html(plan, scale=1.0):
+    """把 plan_fill 的结果画成版面示意图。
+
+    灰字 = 纸上已预印的内容（不会打印）；黑字 = 本次真正打印的内容。
+    格子按真实厘米比例绘制，字号按自适应后的实际磅值缩放——
+    所以"字变得特别小"在预览里就是肉眼可见的小。
+    """
+    page = plan['page']
+    cw = plan['content_w_cm']
+    parts = []
+    parts.append(
+        '<div style="width:{:.0f}px;background:#FFF;border:1px solid #D8D2C4;'
+        'padding:{:.0f}px {:.0f}px;">'.format(
+            cw * _PX_PER_CM * scale,
+            page['top_cm'] * _PX_PER_CM * scale * 0.35,
+            2))
+
+    for p in plan['paras']:
+        parts.append('<div style="text-align:{};margin:2px 0;white-space:pre-wrap">{}</div>'
+                     .format(p['align'], _segs_html(p['segs'], scale)))
+
+    parts.append('<table cellspacing="0" cellpadding="0" '
+                 'style="width:{:.0f}px;border-collapse:collapse;margin-top:4px">'
+                 .format(cw * _PX_PER_CM * scale))
+    for row in plan['rows']:
+        h = row['height_cm'] * _PX_PER_CM * scale
+        parts.append('<tr>')
+        for c in row['cells']:
+            w = c['width_cm'] * _PX_PER_CM * scale
+            bg = ''
+            if c.get('overflow'):
+                bg = 'background:#FDECEA;'          # 放不下：红底警示
+            elif c.get('shrunk'):
+                bg = 'background:#FFF6D8;'          # 已缩小：黄底提示
+            badge = ''
+            if c.get('shrunk'):
+                badge = ('<div style="color:#B8860B;font-size:9px;">字号 {}→{}pt{}</div>'
+                         .format(c.get('orig_font_pt'), c.get('font_pt'),
+                                 ' · 仍偏长' if c.get('overflow') else ''))
+            parts.append(
+                '<td style="width:{:.0f}px;height:{:.0f}px;{}border:1px solid #E0A0A0;'
+                'vertical-align:top;padding:2px 3px;overflow:hidden;">'
+                '<div style="white-space:pre-wrap;line-height:1.25;">{}</div>{}</td>'
+                .format(w, h, bg, _segs_html(c['segs'], scale), badge))
+        parts.append('</tr>')
+    parts.append('</table></div>')
+    return ('<html><body style="margin:6px;font-family:SimSun,serif;background:#F3F1EC">'
+            + ''.join(parts) + '</body></html>')
