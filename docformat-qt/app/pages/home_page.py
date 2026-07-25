@@ -16,7 +16,16 @@ from app.widgets.file_list import FileList
 from app.worker import (MODE_AI_PASTE, MODE_FULL,
                         MODE_PUNCTUATION, MODE_TOC_AUTO, MODE_TOC_MANUAL,
                         MODE_COMPLIANCE, MODE_CLEAN, MODE_TOC,
-                        AiPasteWorker, ProcessWorker)
+                        MODE_PDF, MODE_TO_DOCX, AiPasteWorker, ProcessWorker)
+
+# 转换与工具：与上面 6 个"排版加工"模式性质不同——不改排版内容，
+# 只做格式转换或对照。放在下方一行轻量按钮里，点了就对当前文件执行，
+# 不必再按「开始处理」，也不占用模式网格。
+TOOLS = [
+    (MODE_PDF, '导出 PDF', '用 Word/WPS 或 LibreOffice 导出，目录域会先更新为最终页码'),
+    (MODE_TO_DOCX, '转为 docx', '把 .doc/.wps 老文档批量转成 .docx，不做排版改动'),
+    ('compare', '版本比对', '选两个版本，输出改动对照件；有 Word/WPS 时用原生修订痕迹'),
+]
 
 # 说明文字长度保持相近，卡片换行行数一致、高度整齐
 MODES = [
@@ -200,6 +209,29 @@ class HomePage(QWidget):
             mode_grid.setRowStretch(_r, 1)
         self._mode_cards[MODE_FULL].set_selected(True)
         left_col.addLayout(mode_grid)
+
+        # ---- 转换与工具（轻量按钮行，不占模式网格）----
+        left_col.addSpacing(12)
+        tools_lab = QLabel("转换与工具")
+        tools_lab.setProperty("sectionTitle", "true")
+        left_col.addWidget(tools_lab)
+        left_col.addSpacing(4)
+        tools_row = QHBoxLayout()
+        tools_row.setSpacing(8)
+        self._tool_buttons = {}
+        for tid, label, tip in TOOLS:
+            tb = QPushButton(label)
+            tb.setCursor(Qt.PointingHandCursor)
+            tb.setToolTip(tip)
+            tb.clicked.connect(lambda _c=False, t=tid: self.run_tool(t))
+            self._tool_buttons[tid] = tb
+            tools_row.addWidget(tb)
+        tools_row.addStretch(1)
+        left_col.addLayout(tools_row)
+        tools_hint = QLabel("点击即对上方已选文件执行，无需再按「开始处理」")
+        tools_hint.setProperty("muted", "true")
+        tools_hint.setWordWrap(True)
+        left_col.addWidget(tools_hint)
         left_col.addStretch(1)
 
         # 右列：预设 + 后缀 + 徽章（独立竖排）
@@ -604,6 +636,90 @@ class HomePage(QWidget):
         self.worker.allFinished.connect(self._on_all_done)
         self._set_busy(True)
         self.worker.start()
+
+    # ---------- 转换与工具 ----------
+    def run_tool(self, tool_id):
+        """工具按钮：直接对当前文件执行，不经过模式切换"""
+        if self.worker is not None and self.worker.isRunning():
+            return
+        if tool_id == 'compare':
+            self._run_compare()
+            return
+        if not self.files:
+            QMessageBox.information(self, "提示", "请先选择要处理的文件")
+            return
+        label = dict((t[0], t[1]) for t in TOOLS).get(tool_id, '')
+        self._outputs = []
+        self.open_out_btn.setVisible(False)
+        self.file_list.reset_statuses()
+        preset_name, custom = self.mgr.engine_args(self.mgr.active_key)
+        self.worker = ProcessWorker(
+            self.files, tool_id, preset_name, custom,
+            self.suffix_edit.text().strip() or '_processed', parent=self)
+        self.worker.logMessage.connect(self.logMessage)
+        self.worker.progressChanged.connect(self.progress.setValue)
+        self.worker.fileStarted.connect(self._on_file_started)
+        self.worker.fileFinished.connect(self._on_file_finished)
+        self.worker.fileFailed.connect(self._on_file_failed)
+        self.worker.allFinished.connect(self._on_all_done)
+        self.logMessage.emit('info', '开始{}：{} 个文件'.format(label, len(self.files)))
+        self._set_busy(True)
+        self.worker.start()
+
+    def _run_compare(self):
+        """版本比对：另选两个文件，输出改动对照件"""
+        flt = "文档 (*.docx *.doc *.wps);;所有文件 (*.*)"
+        base, _ = QFileDialog.getOpenFileName(self, "选择【修改前】的文档", "", flt)
+        if not base:
+            return
+        rev, _ = QFileDialog.getOpenFileName(self, "选择【修改后】的文档", "", flt)
+        if not rev:
+            return
+        if os.path.normpath(base) == os.path.normpath(rev):
+            QMessageBox.information(self, "提示", "两次选择的是同一个文件，无法比对")
+            return
+        default = os.path.join(
+            os.path.dirname(rev),
+            '{}_比对.docx'.format(os.path.splitext(os.path.basename(rev))[0]))
+        out, _ = QFileDialog.getSaveFileName(self, "保存比对结果", default,
+                                             "Word 文档 (*.docx)")
+        if not out:
+            return
+        from PyQt5.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            from app.worker import ensure_docx
+            from scripts import compare
+            tmp_dirs = []
+            try:
+                wb, d1 = ensure_docx(base, lambda l, m: self.logMessage.emit(l, m))
+                wr, d2 = ensure_docx(rev, lambda l, m: self.logMessage.emit(l, m))
+                tmp_dirs = [d1, d2]
+                ok, info, _stat = compare.compare_documents(
+                    wb, wr, out, log=lambda l, m: self.logMessage.emit(l, m))
+            finally:
+                import shutil as _sh
+                for d in tmp_dirs:
+                    if d:
+                        _sh.rmtree(d, ignore_errors=True)
+        except Exception as e:
+            from app.worker import friendly_error
+            msg, _ = friendly_error(e)
+            QApplication.restoreOverrideCursor()
+            self.logMessage.emit('error', '比对失败：{}'.format(msg))
+            QMessageBox.warning(self, "比对失败", msg)
+            return
+        QApplication.restoreOverrideCursor()
+        if ok:
+            self._outputs = [out]
+            self.open_out_btn.setVisible(True)
+            self.status_label.setText('比对完成：{}'.format(os.path.basename(out)))
+            self.logMessage.emit('success', '比对完成：{}（{}）'.format(out, info))
+            QMessageBox.information(self, "比对完成", "{}\n\n{}".format(out, info))
+            self._auto_open_outputs()
+        else:
+            self.logMessage.emit('error', '比对失败：{}'.format(info))
+            QMessageBox.warning(self, "比对失败", info)
 
     def _on_file_started(self, path):
         self.file_list.set_status(path, 'processing')

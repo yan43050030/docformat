@@ -457,6 +457,30 @@ finally:
 assert os.path.exists(os.path.join(SMOKE, 'sample_tocgui.docx')), '目录未产出'
 print('[19] 模式卡片 6 张等高无空位 + 目录合并为单一入口 ✓')
 
+# ---------- 17. 转换与工具行（不占模式网格，点击即执行）----------
+from app.pages.home_page import TOOLS as _TOOLS
+from app.worker import MODE_PDF as _MPDF, MODE_TO_DOCX as _MDOCX
+assert len(_TOOLS) == 3, '工具应有 3 个: {}'.format(len(_TOOLS))
+for _tid, _lbl, _tip in _TOOLS:
+    assert _tid in home._tool_buttons, '缺少工具按钮 {}'.format(_tid)
+    assert home._tool_buttons[_tid].toolTip(), '工具按钮应有说明: {}'.format(_tid)
+# 工具不应混进模式网格
+assert _MPDF not in home._mode_cards and _MDOCX not in home._mode_cards, \
+    '工具不应占用模式卡片'
+assert len(_MODES) == 6, '加工具后模式数不应变化'
+# 转 docx：输入已是 docx 应跳过而不是报错
+home.files = []
+home.add_files([SAMPLE])
+home.run_tool(_MDOCX)
+_r = wait_for(home.worker.allFinished)
+assert _r is not None and _r[1] == 0, 'docx 输入应跳过而非失败: {}'.format(_r)
+# 导出 PDF：本环境无可用引擎时应失败但不崩溃，且给出原因
+home.run_tool(_MPDF)
+_r2 = wait_for(home.worker.allFinished)
+assert _r2 is not None, '导出 PDF 未正常结束'
+assert _r2[0] + _r2[1] == 1, '导出 PDF 应处理 1 个文件: {}'.format(_r2)
+print('[20] 转换与工具：3 个按钮独立于模式网格，转 docx/导出 PDF 均正常收尾 ✓')
+
 
 
 # ---------- 12. v3.0 易用性 ----------

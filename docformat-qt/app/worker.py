@@ -17,6 +17,8 @@ MODE_TOC_AUTO = 'toc_auto'       # 实际执行用（Word 目录域）
 MODE_TOC_MANUAL = 'toc_manual'   # 实际执行用（静态目录页）
 MODE_COMPLIANCE = 'compliance'
 MODE_CLEAN = 'clean'
+MODE_PDF = 'pdf'            # 导出 PDF
+MODE_TO_DOCX = 'to_docx'    # 批量转 docx
 
 # Windows/Linux 文件名中的非法字符
 _INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
@@ -318,6 +320,27 @@ class ProcessWorker(QThread):
                     if self.mode == MODE_DIAGNOSE:
                         reports.append(self._diagnose(work, base))
                         self.fileFinished.emit(path, '')
+                    elif self.mode == MODE_PDF:
+                        from scripts import exporter
+                        out = exporter.pdf_output_path(path, self.suffix
+                                                       if self.suffix != '_processed' else '')
+                        ok_pdf, info = exporter.export_pdf(work, out, self._log)
+                        if not ok_pdf:
+                            raise RuntimeError(info)
+                        self._log('success', '已导出 PDF: {} → {}（{}）'.format(
+                            base, os.path.basename(out), info))
+                        self.fileFinished.emit(path, out)
+                    elif self.mode == MODE_TO_DOCX:
+                        if os.path.splitext(path)[1].lower() == '.docx':
+                            self._log('info', '{} 已是 docx，跳过'.format(base))
+                            self.fileFinished.emit(path, '')
+                        else:
+                            out = output_path_for(path, self.suffix
+                                                  if self.suffix != '_processed' else '')
+                            shutil.copyfile(work, out)
+                            self._log('success', '已转换: {} → {}'.format(
+                                base, os.path.basename(out)))
+                            self.fileFinished.emit(path, out)
                     elif self.mode == MODE_CLEAN:
                         out = output_path_for(path, self.suffix)
                         from scripts import cleaner

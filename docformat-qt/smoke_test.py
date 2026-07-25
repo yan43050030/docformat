@@ -506,6 +506,60 @@ def test_toc():
     print('[7l] 目录：大纲级别/层级/点引导线制表位/页码匹配/降级 通过')
 
 
+def test_compare():
+    """版本比对：段落级 diff 识别增/删/改，产出对照件"""
+    from scripts import compare
+    a = Document()
+    for t in ['关于开展试点工作的通知', '各有关单位：', '一、总体要求',
+              '为深入贯彻落实上级决策部署，现就有关事项通知如下。',
+              '二、组织实施', '各单位要加强组织领导。', '特此通知。']:
+        a.add_paragraph(t)
+    pa = os.path.join(OUT_DIR, 'cmp_base.docx'); a.save(pa)
+    b = Document()
+    for t in ['关于开展试点工作的通知', '各有关单位：', '一、总体要求',
+              '为深入贯彻落实上级决策部署精神，现就有关事项通知如下，请遵照执行。',
+              '（一）新增的小节', '二、组织实施', '特此通知。']:
+        b.add_paragraph(t)
+    pb = os.path.join(OUT_DIR, 'cmp_rev.docx'); b.save(pb)
+
+    rows = compare.diff_paragraphs(
+        [p.text for p in Document(pa).paragraphs if p.text.strip()],
+        [p.text for p in Document(pb).paragraphs if p.text.strip()])
+    stat = compare.summarize(rows)
+    assert stat['chg'] == 1, '应识别出 1 处修改: {}'.format(stat)
+    assert stat['add'] == 1, '应识别出 1 处新增: {}'.format(stat)
+    assert stat['del'] == 1, '应识别出 1 处删除: {}'.format(stat)
+
+    out = os.path.join(OUT_DIR, 'cmp_diff.docx')
+    ok, info, _st = compare.compare_documents(pa, pb, out, prefer_office=False)
+    assert ok and os.path.exists(out), '比对文件未产出'
+    txt = '\n'.join(p.text for p in Document(out).paragraphs)
+    for mark in ('［改前］', '［改后］', '［新增］', '［删除］'):
+        assert mark in txt, '对照件缺少标记 {}'.format(mark)
+    # 相同文档比对应为零改动
+    same = os.path.join(OUT_DIR, 'cmp_same.docx')
+    _ok, _info, st2 = compare.compare_documents(pa, pa, same, prefer_office=False)
+    assert st2['add'] == 0 and st2['del'] == 0 and st2['chg'] == 0, \
+        '相同文档不应报改动: {}'.format(st2)
+    print('[7m] 版本比对：增/删/改识别 + 对照件产出 通过')
+
+
+def test_exporter():
+    """导出 PDF：路径规避重名，缺引擎时报错不崩"""
+    from scripts import exporter
+    p1 = exporter.pdf_output_path(os.path.join(OUT_DIR, 'sample.docx'))
+    assert p1.endswith('.pdf'), 'PDF 路径生成错误: {}'.format(p1)
+    open(p1, 'wb').close()
+    p2 = exporter.pdf_output_path(os.path.join(OUT_DIR, 'sample.docx'))
+    assert p2 != p1 and '(2)' in p2, '重名未自动避让: {}'.format(p2)
+    os.remove(p1)
+    ok, info = exporter.export_pdf(os.path.join(OUT_DIR, 'sample.docx'),
+                                   os.path.join(OUT_DIR, 'nope.pdf'))
+    assert isinstance(ok, bool) and isinstance(info, str), '导出应返回 (bool, str)'
+    assert ok or info, '失败时应给出原因'
+    print('[7n] 导出 PDF：路径避让 + 缺引擎时报错不崩 通过')
+
+
 def test_gb_header_record():
     """版头红线/版记分隔线（flags 开启）+ 副标题识别"""
     from docx.oxml.ns import qn
@@ -786,6 +840,8 @@ if __name__ == '__main__':
     test_compliance()
     test_cleaner()
     test_toc()
+    test_compare()
+    test_exporter()
     test_gb_header_record()
     test_image_protection()
     test_redaction()
