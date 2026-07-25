@@ -97,6 +97,29 @@ class PresetManager(object):
     def is_builtin(self, key):
         return key in BUILTIN_PRESETS
 
+    # ---------- 模板锁定 ----------
+    # 锁标记存在模板自身里，随导出/导入一起走：把定稿模板发给同事，
+    # 对方拿到的也是锁定状态，不会被顺手改掉。
+    def is_locked(self, key):
+        """自定义模板是否已锁定（内置模板本就只读，不参与锁定）"""
+        if key in BUILTIN_PRESETS:
+            return False
+        return bool(self.user.get(key, {}).get('_locked'))
+
+    def set_locked(self, key, locked):
+        if key not in self.user:
+            return False
+        if locked:
+            self.user[key]['_locked'] = True
+        else:
+            self.user[key].pop('_locked', None)
+        self.save()
+        return True
+
+    def is_editable(self, key):
+        """参数是否可编辑：非内置且未锁定"""
+        return key not in BUILTIN_PRESETS and not self.is_locked(key)
+
     def get(self, key):
         if key in BUILTIN_PRESETS:
             preset = copy.deepcopy(BUILTIN_PRESETS[key])
@@ -117,6 +140,7 @@ class PresetManager(object):
     # ---------- 修改 ----------
     def create(self, name, base_key='official'):
         preset = self.get(base_key)
+        preset.pop('_locked', None)     # 以锁定模板为底稿时，新模板应可编辑
         preset['name'] = name
         for k, v in EXTRA_DEFAULTS.items():
             preset.setdefault(k, v)
@@ -128,6 +152,8 @@ class PresetManager(object):
 
     def duplicate(self, key):
         src = self.get(key)
+        # 复制锁定模板正是为了得到一份可改的；副本不继承锁
+        src.pop('_locked', None)
         src['name'] = src.get('name', key) + ' (副本)'
         for k, v in EXTRA_DEFAULTS.items():
             src.setdefault(k, v)
@@ -138,18 +164,28 @@ class PresetManager(object):
         return new_key
 
     def delete(self, key):
+        if self.is_locked(key):
+            return False        # 锁定模板不可删除——误删比误改更难挽回
         if key in self.user:
             del self.user[key]
             if self.active_key == key:
                 self.active_key = 'official_gbk'
             self.save()
+            return True
+        return False
 
     def update(self, key, preset):
+        if self.is_locked(key):
+            return False        # 锁定后拒绝写入，防止误改
         if key in self.user:
             self.user[key] = preset
             self.save()
+            return True
+        return False
 
     def rename(self, key, name):
+        if self.is_locked(key):
+            return False        # 改名也是修改
         if key in self.user:
             self.user[key]['name'] = name
             self.save()

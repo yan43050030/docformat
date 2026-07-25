@@ -196,6 +196,16 @@ class PresetsPage(QWidget):
             bar.addWidget(btn)
 
         bar.addStretch()
+        # 模板锁：把定稿的自定义模板锁住，防止误改/误删
+        self.btn_tpl_lock = QPushButton("🔓 未锁定")
+        self.btn_tpl_lock.setCheckable(True)
+        self.btn_tpl_lock.setCursor(Qt.PointingHandCursor)
+        self.btn_tpl_lock.setToolTip(
+            "锁定本模板后，参数不可编辑、不可重命名、不可删除，防止误改；\n"
+            "锁定状态随模板保存，导出给同事也保持锁定。随时可解锁。")
+        self.btn_tpl_lock.toggled.connect(self._on_tpl_lock_toggled)
+        bar.addWidget(self.btn_tpl_lock)
+
         self.btn_lock = QPushButton("🔒 禁止滚轮修改参数")
         self.btn_lock.setCheckable(True)
         self.btn_lock.setChecked(True)
@@ -210,6 +220,13 @@ class PresetsPage(QWidget):
         self.builtin_hint = QLabel("内置预设参数只读（名称可通过「重命名」修改），点击「复制」可生成参数可编辑的自定义模板")
         self.builtin_hint.setProperty("muted", "true")
         root.addWidget(self.builtin_hint)
+
+        self.locked_hint = QLabel("此模板已锁定，参数只读（「规则测试」仍可用）。"
+                                  "需要修改请先点右上角「🔒 已锁定」解锁。")
+        self.locked_hint.setProperty("muted", "true")
+        self.locked_hint.setWordWrap(True)
+        self.locked_hint.setVisible(False)
+        root.addWidget(self.locked_hint)
 
         # ---- 编辑器（滚动） ----
         scroll = QScrollArea()
@@ -669,12 +686,29 @@ class PresetsPage(QWidget):
         self.combo.blockSignals(True)
         self.combo.clear()
         for key, name, is_builtin in self.mgr.list_all():
-            self.combo.addItem('{}{}'.format(name, '（内置）' if is_builtin else ''), key)
+            self.combo.addItem(self._combo_label(key, name, is_builtin), key)
         idx = self.combo.findData(current)
         self.combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.combo.blockSignals(False)
         self._loading = False
         self._load_preset(self.combo.currentData())
+
+    def _combo_label(self, key, name, is_builtin):
+        if is_builtin:
+            return '{}（内置）'.format(name)
+        return '{}{}'.format('🔒 ' if self.mgr.is_locked(key) else '', name)
+
+    def reload_combo_labels(self):
+        """只刷新下拉项文字（锁定标记），不重建选中项"""
+        self.combo.blockSignals(True)
+        for i in range(self.combo.count()):
+            key = self.combo.itemData(i)
+            if not key:
+                continue
+            is_builtin = self.mgr.is_builtin(key)
+            name = self.mgr.get(key).get('name', key)
+            self.combo.setItemText(i, self._combo_label(key, name, is_builtin))
+        self.combo.blockSignals(False)
 
     def _on_select(self, _idx):
         if self._loading:
@@ -785,11 +819,16 @@ class PresetsPage(QWidget):
             self._update_rule_tester()
 
         self._loading = False
+        is_locked = self.mgr.is_locked(self.current_key)
+        editable = not is_builtin and not is_locked
         for sec in self._sections:
-            sec.set_editable(not is_builtin)
+            sec.set_editable(editable)
         self.builtin_hint.setVisible(is_builtin)
-        self.delete_btn.setEnabled(not is_builtin)
-        self.rename_btn.setEnabled(True)   # 内置模板也允许改名（参数仍只读）
+        self.locked_hint.setVisible(is_locked)
+        self.delete_btn.setEnabled(not is_builtin and not is_locked)
+        # 内置模板允许改名（参数仍只读）；锁定的自定义模板连改名也挡住
+        self.rename_btn.setEnabled(not is_locked)
+        self._refresh_tpl_lock_button()
 
     @staticmethod
     def _set_combo_data(combo, value):
@@ -902,6 +941,35 @@ class PresetsPage(QWidget):
             self.btn_lock.setText("🔓 滚轮可修改参数")
             self.btn_lock.setToolTip("滚轮可修改参数值，翻阅页面时请注意勿误触")
 
+    # ---------- 模板锁 ----------
+    def _refresh_tpl_lock_button(self):
+        """按当前模板刷新锁按钮状态（内置模板本就只读，不参与锁定）"""
+        key = self.current_key
+        is_builtin = self.mgr.is_builtin(key)
+        locked = self.mgr.is_locked(key)
+        b = self.btn_tpl_lock
+        b.blockSignals(True)
+        b.setChecked(locked)
+        b.setText("🔒 已锁定" if locked else "🔓 未锁定")
+        b.setEnabled(not is_builtin)
+        if is_builtin:
+            b.setToolTip("内置预设参数本就只读，无需锁定")
+        elif locked:
+            b.setToolTip("本模板已锁定：参数不可编辑、不可重命名、不可删除。点击解锁")
+        else:
+            b.setToolTip("点击锁定本模板，防止误改误删；锁定状态随模板保存与导出")
+        b.blockSignals(False)
+
+    def _on_tpl_lock_toggled(self, checked):
+        key = self.current_key
+        if not key or self.mgr.is_builtin(key):
+            self._refresh_tpl_lock_button()
+            return
+        self.mgr.set_locked(key, checked)
+        self._load_preset(key)          # 重新套用只读状态
+        self.reload_combo_labels()
+        self.presetsChanged.emit()
+
     # ================= 工具条动作 =================
     def _new(self):
         name, ok = QInputDialog.getText(self, "新建模板", "模板名称：",
@@ -917,6 +985,12 @@ class PresetsPage(QWidget):
         self.presetsChanged.emit()
 
     def _rename(self):
+        if self.mgr.is_locked(self.current_key):
+            QMessageBox.information(self, "模板已锁定",
+                                    "「{}」已锁定，无法重命名。\n\n"
+                                    "如需修改，请先点击右上角「🔒 已锁定」解锁。".format(
+                                        self.preset.get('name', '')))
+            return
         name, ok = QInputDialog.getText(self, "重命名", "新名称：",
                                         text=self.preset.get('name', ''))
         if ok and name.strip():
@@ -926,6 +1000,12 @@ class PresetsPage(QWidget):
 
     def _delete(self):
         if self.mgr.is_builtin(self.current_key):
+            return
+        if self.mgr.is_locked(self.current_key):
+            QMessageBox.information(self, "模板已锁定",
+                                    "「{}」已锁定，无法删除。\n\n"
+                                    "如需删除，请先点击右上角「🔒 已锁定」解锁。".format(
+                                        self.preset.get('name', '')))
             return
         ret = QMessageBox.question(self, "删除模板",
                                    "确定删除「{}」？此操作不可恢复。".format(self.preset.get('name', '')))

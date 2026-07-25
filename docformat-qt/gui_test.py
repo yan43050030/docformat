@@ -161,6 +161,48 @@ assert '发文字号' in pp.rule_test_result.text(), '发文字号规则测试�
 pp.rule_test_edit.setText('')
 print('[6b] 内置模板规则测试开放（可测不可改） ✓')
 
+# ---------- 6c. 自定义模板锁：防误改/误删 ----------
+_lk = win.mgr.create('锁定测试模板')
+pp.reload()
+app.processEvents()
+assert pp.btn_tpl_lock.isEnabled(), '自定义模板应可锁定'
+assert not pp.btn_tpl_lock.isChecked(), '新建模板默认未锁定'
+assert pp.margin_spins['top'].isEnabled(), '未锁定时应可编辑'
+# 锁定
+pp.btn_tpl_lock.setChecked(True)
+app.processEvents()
+assert win.mgr.is_locked(_lk), '锁定状态未写入'
+assert not pp.margin_spins['top'].isEnabled(), '锁定后参数应只读'
+assert not pp.delete_btn.isEnabled(), '锁定后应禁止删除'
+assert not pp.rename_btn.isEnabled(), '锁定后应禁止重命名'
+assert pp.rule_test_edit.isEnabled(), '锁定后规则测试仍应可用'
+assert '🔒' in pp.combo.currentText(), '下拉应显示锁定标记'
+# 后端硬拦截（不只是界面禁用）
+_p = win.mgr.get(_lk); _p['page']['top'] = 9.9
+assert win.mgr.update(_lk, _p) is False, '锁定时 update 应被拒绝'
+assert win.mgr.rename(_lk, 'X') is False, '锁定时 rename 应被拒绝'
+assert win.mgr.delete(_lk) is False, '锁定时 delete 应被拒绝'
+assert abs(PresetManager().get(_lk)['page']['top'] - 9.9) > 0.01, '锁定模板不应被写入'
+# 锁定状态跨重载持久化
+assert PresetManager().is_locked(_lk), '锁定状态未持久化'
+# 复制锁定模板 → 副本可编辑（否则"复制"就失去意义）
+_dup = win.mgr.duplicate(_lk)
+assert not win.mgr.is_locked(_dup), '副本不应继承锁定'
+win.mgr.delete(_dup)
+# 解锁
+pp.btn_tpl_lock.setChecked(False)
+app.processEvents()
+assert not win.mgr.is_locked(_lk), '解锁失败'
+assert pp.margin_spins['top'].isEnabled(), '解锁后应可编辑'
+assert win.mgr.update(_lk, _p) is True, '解锁后应可写入'
+win.mgr.delete(_lk)
+pp.reload()
+# 内置模板不参与锁定
+pp.combo.setCurrentIndex(pp.combo.findData('official_gbk'))
+app.processEvents()
+assert not pp.btn_tpl_lock.isEnabled(), '内置模板本就只读，锁按钮应禁用'
+print('[6c] 自定义模板锁：只读/禁删禁改/后端硬拦截/副本不继承 ✓')
+
 # 导出/导入
 exp = os.path.join(SMOKE, 'preset_export.json')
 win.mgr.export_to(key, exp)
