@@ -12,8 +12,9 @@ MODE_FULL = 'full'
 MODE_DIAGNOSE = 'diagnose'
 MODE_PUNCTUATION = 'punctuation'
 MODE_AI_PASTE = 'ai_paste'
-MODE_TOC_AUTO = 'toc_auto'
-MODE_TOC_MANUAL = 'toc_manual'
+MODE_TOC = 'toc'                 # 首页统一入口，形式在对话框里选
+MODE_TOC_AUTO = 'toc_auto'       # 实际执行用（Word 目录域）
+MODE_TOC_MANUAL = 'toc_manual'   # 实际执行用（静态目录页）
 MODE_COMPLIANCE = 'compliance'
 MODE_CLEAN = 'clean'
 
@@ -239,6 +240,7 @@ class ProcessWorker(QThread):
         # 独立「格式清洗」模式用
         self.clean_items = None
         self.clean_scope_indices = {}
+        self.toc_levels = 3
         self._compliance_results = []
         self._cancelled = False
 
@@ -346,6 +348,7 @@ class ProcessWorker(QThread):
                         from scripts import toc
                         toc.generate_toc(work, out,
                                          mode='auto' if self.mode == MODE_TOC_AUTO else 'manual',
+                                         levels=self.toc_levels,
                                          log=self._log)
                         self._log('success', '已生成目录: {} → {}'.format(base, os.path.basename(out)))
                         self.fileFinished.emit(path, out)

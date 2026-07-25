@@ -403,6 +403,60 @@ finally:
     _dlg.reject()
 print('[18] 合规检查对比预览：现状/修正后随勾选联动 ✓')
 
+# ---------- 16. 处理模式卡片布局 + 目录合并为单一入口 ----------
+from app.pages.home_page import MODES as _MODES
+from app.worker import MODE_TOC as _MTOC, MODE_TOC_AUTO as _MTA, MODE_TOC_MANUAL as _MTM
+assert len(_MODES) == 6, '模式应为 6 个（目录已合并）: {}'.format(len(_MODES))
+assert len(_MODES) % 2 == 0, '模式数应为偶数，两列网格才无空位'
+assert _MTOC in home._mode_cards, '缺少统一的「生成目录」入口'
+assert _MTA not in home._mode_cards and _MTM not in home._mode_cards, \
+    '目录的两个子模式不应各占一张卡片'
+_hs = {home._mode_cards[m].minimumHeight() for m, _l, _d in _MODES}
+assert len(_hs) == 1, '模式卡片高度应统一: {}'.format(_hs)
+_dl = [len(d) for _m, _l, d in _MODES]
+assert max(_dl) - min(_dl) <= 10, '说明文字长度应相近以保证换行一致: {}'.format(_dl)
+# 旧的 toc_auto/toc_manual 记忆值应安全回退，不残留死模式
+from app.theme import settings as _st
+_st().setValue('home/mode', 'toc_auto')
+_w2 = MainWindow()
+assert _w2.home_page.current_mode() in home._mode_cards, '旧模式记忆未安全回退'
+_st().setValue('home/mode', 'full')
+# 目录对话框选择能转成实际执行模式
+import app.toc_dialog as _td
+
+
+class _FakeToc(object):
+    Accepted = 1
+
+    def __init__(self, *_a, **_k):
+        pass
+
+    def exec_(self):
+        return 1
+
+    def get_mode(self):
+        return 'manual'
+
+    def get_levels(self):
+        return 2
+
+
+home.add_files([SAMPLE])
+home.set_mode(_MTOC)
+_orig_td = _td.TocOptionsDialog
+_td.TocOptionsDialog = _FakeToc
+try:
+    home.suffix_edit.setText('_tocgui')
+    home.start_process()
+    assert home.worker.mode == _MTM, '静态目录选择未转成执行模式: {}'.format(home.worker.mode)
+    assert home.worker.toc_levels == 2, '收录层级未传递'
+    wait_for(home.worker.allFinished)
+finally:
+    _td.TocOptionsDialog = _orig_td
+    home.suffix_edit.setText('_gui')
+assert os.path.exists(os.path.join(SMOKE, 'sample_tocgui.docx')), '目录未产出'
+print('[19] 模式卡片 6 张等高无空位 + 目录合并为单一入口 ✓')
+
 
 
 # ---------- 12. v3.0 易用性 ----------

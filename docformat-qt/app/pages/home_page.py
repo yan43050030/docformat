@@ -15,16 +15,17 @@ from app.widgets.file_list import FileList
 # 序号/缩进类问题也已并入合规检查的完整核对。analyzer 仍作为后端库被合规检查调用。
 from app.worker import (MODE_AI_PASTE, MODE_FULL,
                         MODE_PUNCTUATION, MODE_TOC_AUTO, MODE_TOC_MANUAL,
-                        MODE_COMPLIANCE, MODE_CLEAN, AiPasteWorker, ProcessWorker)
+                        MODE_COMPLIANCE, MODE_CLEAN, MODE_TOC,
+                        AiPasteWorker, ProcessWorker)
 
+# 说明文字长度保持相近，卡片换行行数一致、高度整齐
 MODES = [
     (MODE_FULL, '智能一键处理', '标点修复 + 排版规范 + 样式清洗，一步到位'),
-    (MODE_COMPLIANCE, '公文合规检查', '逐段对照预设完整核对，勾选认可的问题即可精准修正，原文件不动'),
-    (MODE_CLEAN, '格式清洗', '排版出怪问题时用：清掉文档里看不见的脏格式，不改文字内容'),
+    (MODE_COMPLIANCE, '公文合规检查', '逐段对照预设核对，勾选认可的问题精准修正'),
+    (MODE_CLEAN, '格式清洗', '清掉看不见的脏格式，专治排版怪问题'),
     (MODE_PUNCTUATION, '标点修复', '仅修复中英文标点混用，保留原有段落格式'),
-    (MODE_AI_PASTE, 'AI 粘贴生成', '粘贴 AI 生成的文本或 Markdown，自动生成规范公文'),
-    (MODE_TOC_AUTO, '生成自动目录（域）', '插入 Word 目录域，排版已写入大纲级别，打开后右键更新域即得真实页码'),
-    (MODE_TOC_MANUAL, '生成手动目录页', '静态目录页，点引导线对齐；有 Word/WPS 或 LibreOffice 时自动填真实页码'),
+    (MODE_TOC, '生成目录', '按标题层级生成目录，可选自动域或静态页'),
+    (MODE_AI_PASTE, 'AI 粘贴生成', '粘贴 AI 文本或 Markdown，生成规范公文'),
 ]
 
 
@@ -45,6 +46,10 @@ class ModeCard(QFrame):
         self.setProperty("selected", "false")
         self.setProperty("modeId", mid)
         self.setCursor(Qt.PointingHandCursor)
+        # 统一高度与伸展策略，卡片大小一致、网格对齐
+        from PyQt5.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumHeight(72)
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 10, 12, 10)
         v.setSpacing(3)
@@ -53,8 +58,9 @@ class ModeCard(QFrame):
         d = QLabel(desc)
         d.setProperty("muted", "true")
         d.setWordWrap(True)
+        d.setAlignment(Qt.AlignTop)
         v.addWidget(t)
-        v.addWidget(d)
+        v.addWidget(d, 1)
 
     def set_selected(self, on):
         self.setProperty("selected", "true" if on else "false")
@@ -187,6 +193,11 @@ class HomePage(QWidget):
             card.clicked.connect(self.set_mode)
             self._mode_cards[mid] = card
             mode_grid.addWidget(card, i // 2, i % 2)
+        # 两列等宽、各行等高，卡片排布规整
+        for _c in (0, 1):
+            mode_grid.setColumnStretch(_c, 1)
+        for _r in range((len(MODES) + 1) // 2):
+            mode_grid.setRowStretch(_r, 1)
         self._mode_cards[MODE_FULL].set_selected(True)
         left_col.addLayout(mode_grid)
         left_col.addStretch(1)
@@ -539,6 +550,18 @@ class HomePage(QWidget):
         if not self.files:
             return
 
+        # 生成目录：先弹形式/层级面板，再转成实际执行模式
+        exec_mode = mode
+        toc_levels = 3
+        if mode == MODE_TOC:
+            from app.toc_dialog import TocOptionsDialog
+            dlg = TocOptionsDialog(self)
+            if dlg.exec_() != TocOptionsDialog.Accepted:
+                return
+            exec_mode = (MODE_TOC_AUTO if dlg.get_mode() == 'auto'
+                         else MODE_TOC_MANUAL)
+            toc_levels = dlg.get_levels()
+
         # 格式清洗：先弹清洗项面板
         clean_items = None
         if mode == MODE_CLEAN:
@@ -562,7 +585,7 @@ class HomePage(QWidget):
         self.open_out_btn.setVisible(False)
         self.file_list.reset_statuses()
         self.worker = ProcessWorker(
-            self.files, mode, preset_name, custom, suffix,
+            self.files, exec_mode, preset_name, custom, suffix,
             revision_mode=self.revision_check.isChecked(),
             type_overrides=self._type_overrides,
             title_shape=self._title_shape,
@@ -570,6 +593,7 @@ class HomePage(QWidget):
             parent=self)
         self.worker.compliance_options = compliance_options
         self.worker.clean_items = clean_items
+        self.worker.toc_levels = toc_levels
         self.worker.logMessage.connect(self.logMessage)
         self.worker.progressChanged.connect(self.progress.setValue)
         self.worker.diagnoseReady.connect(self._show_diagnose)
