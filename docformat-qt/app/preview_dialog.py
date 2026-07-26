@@ -10,9 +10,9 @@ import tempfile
 
 from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtGui import QCursor
-from PyQt5.QtWidgets import (QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel,
-                             QMenu, QPushButton, QSplitter, QTextBrowser,
-                             QVBoxLayout, QWidget)
+from PyQt5.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog,
+                             QHBoxLayout, QLabel, QMenu, QPushButton,
+                             QSplitter, QTextBrowser, QVBoxLayout, QWidget)
 
 from scripts.formatter import (_build_text_context, _compile_rules,
                                detect_para_type)
@@ -288,6 +288,122 @@ def render_after_html(paras, preset, overrides=None, title_shape=None, clean_mar
     return _html_shell(''.join(parts))
 
 
+def render_overlay_html(paras, preset, header_png_path, overrides=None,
+                        title_shape=None, clean_marks=None, page_cfg=None):
+    """生成叠加了套头 PDF 背景的 HTML 预览。
+
+    将套头 PNG 作为 A4 尺寸容器的背景图，文字按 preset 的页面边距排布在内。
+    使用 px 单位（与 PNG 的 150 DPI 渲染一致），QTextBrowser 可直接显示。
+    """
+    from scripts.header_overlay import _HEADER_OVERLAY_DPI, page_pixmap_size
+
+    overrides = overrides or {}
+    clean_marks = clean_marks or set()
+    types = compute_types(paras, preset, overrides)
+    shape = title_shape if title_shape is not None else preset.get('title_shape', 'none')
+    cpl = _preview_title_cpl(preset)
+
+    page = page_cfg or {}
+    pw_px, ph_px = page_pixmap_size(header_png_path) if header_png_path else (1240, 1754)
+
+    px_per_pt = _HEADER_OVERLAY_DPI / 72.0
+    px_per_cm = _HEADER_OVERLAY_DPI / 2.54
+
+    left_cm = page.get('left', 2.8)
+    right_cm = page.get('right', 2.8)
+    top_cm = page.get('top', 3.8)
+
+    left_px = int(left_cm * px_per_cm)
+    right_px = int(right_cm * px_per_cm)
+    top_px = int(top_cm * px_per_cm)
+
+    # 背景图 URL（QTextBrowser 用 file:/// 前缀）
+    bg_url = 'file:///{}'.format(header_png_path.replace('\\', '/'))
+
+    rows = []
+    # 天头留白
+    if top_px > 0:
+        rows.append('<tr><td colspan="3" height="{}"></td></tr>'.format(top_px))
+
+    for item, (ai, ptype) in zip(paras, types):
+        text = item[0]
+        if ptype is None:
+            rows.append('<tr><td colspan="3"><p style="margin:0;">&nbsp;</p></td></tr>')
+            continue
+
+        display = fix_text(text.strip())
+        fmt = preset.get(ptype if ptype in preset else 'body', preset.get('body', {}))
+
+        font_size_px = int(fmt.get('size', 16) * px_per_pt)
+        indent_pt = fmt.get('indent', 0) or 0
+        indent_px = int(indent_pt * px_per_pt)
+        ls = fmt.get('line_spacing')
+        lh_px = 'line-height:{}px;'.format(int(ls * px_per_pt)) if ls else ''
+        align = ALIGN_CSS.get(fmt.get('align', 'left'), 'left')
+        bold = 'font-weight:bold;' if fmt.get('bold') else ''
+        font_cn = _css_font(fmt.get('font_cn', '仿宋_GB2312'))
+
+        if ptype == 'title' and shape in ('trapezoid_down', 'trapezoid_up'):
+            from scripts.title_shape import split_title_lines
+            lines = split_title_lines(display, cpl, shape)
+            inner = '<br>'.join(_segment_font_html(
+                ln, fmt.get('font_en', 'Times New Roman'),
+                fmt.get('font_cn', '仿宋_GB2312')) for ln in lines)
+        else:
+            inner = _segment_font_html(
+                display, fmt.get('font_en', 'Times New Roman'),
+                fmt.get('font_cn', '仿宋_GB2312'))
+
+        tag = TYPE_LABELS.get(ptype, ptype)
+        cls = 'tagx' if ai in overrides else 'tag'
+        broom = '<span class="broom" title="已标记为待清洗">🧹</span>' if ai in clean_marks else ''
+
+        rows.append(
+            '<tr>'
+            '<td width="{}" style="width:{}px;"></td>'
+            '<td style="vertical-align:top;">'
+            '<p style="margin:0 0 4px 0; white-space:pre-wrap; '
+            'font-size:{}px; text-align:{}; text-indent:{}px; '
+            '{}{}font-family:{}; color:#111;">'
+            '<a class="{}" href="para:{}" title="点击修改此段类型">{}</a>{}{}</p>'
+            '</td>'
+            '<td width="{}" style="width:{}px;"></td>'
+            '</tr>'.format(
+                left_px, left_px,
+                font_size_px, align, indent_px,
+                bold, lh_px, font_cn,
+                cls, ai, tag, broom, inner,
+                right_px, right_px))
+
+    head = ('<html><head><style>'
+            'body {{ font-family: "SimSun", serif; margin: 14px; '
+            'background: #C9C4B8; }}'
+            'p {{ margin: 0 0 2px 0; white-space: pre-wrap; }}'
+            'a.tag {{ font-size: 8pt; color: #666; background: #F0EDE6; '
+            'border: 1px solid #D8D2C4; border-radius: 3px; padding: 0 4px; '
+            'margin-right: 4px; text-decoration: none; }}'
+            'a.tagx {{ font-size: 8pt; color: #FFFFFF; background: #C0392B; '
+            'border: 1px solid #A93226; border-radius: 3px; padding: 0 4px; '
+            'margin-right: 4px; text-decoration: none; }}'
+            '.broom {{ font-size: 8pt; margin-right: 4px; }}'
+            '</style></head><body>')
+
+    bg_div = (
+        '<div style="width:{}px; '
+        'background-image:url(\'{}\'); '
+        'background-repeat:no-repeat; '
+        'background-color:#FFFFFF;">').format(pw_px, bg_url)
+
+    table = '<table width="{}" cellspacing="0" cellpadding="0" ' \
+            'style="border-collapse:collapse;">'.format(pw_px)
+
+    footer = '</table></div>' \
+             '<div style="color:#8A8578; font-size:11px; margin-top:4px;">' \
+             'A4 预览 — 套头 PDF 叠加（{} DPI 等比缩放）</div>'.format(_HEADER_OVERLAY_DPI)
+
+    return head + bg_div + table + ''.join(rows) + footer + '</body></html>'
+
+
 def _esc(text):
     return (text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
 
@@ -313,6 +429,10 @@ class PreviewDialog(QDialog):
         self._current_paras = None
         self._converted = {}    # .doc/.wps 预览转换缓存: 原路径 -> 临时 docx
         self._tmp_dirs = []     # 对话框关闭时清理
+        # 套头 PDF 叠加
+        self._header_pdf_path = None
+        self._header_png_temp = None
+        self._tmp_header_pngs = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 12, 14, 12)
@@ -338,6 +458,23 @@ class PreviewDialog(QDialog):
 
         self.seal_check = QCheckBox("加盖公章（落款日期右空4字，署名居中于日期编排）")
         root.addWidget(self.seal_check)
+
+        # 套头 PDF 叠加：选一张扫描好的红头纸 PDF，预览时叠在排版文字后方
+        overlay_row = QHBoxLayout()
+        overlay_row.addWidget(QLabel("套头 PDF："))
+        self.header_pdf_label = QLabel("（未选择）")
+        self.header_pdf_label.setProperty("muted", "true")
+        self.pick_header_btn = QPushButton("选择…")
+        self.pick_header_btn.setCursor(Qt.PointingHandCursor)
+        self.pick_header_btn.clicked.connect(self._pick_header_pdf)
+        self.clear_header_btn = QPushButton("清除")
+        self.clear_header_btn.setCursor(Qt.PointingHandCursor)
+        self.clear_header_btn.clicked.connect(self._clear_header_pdf)
+        self.clear_header_btn.setVisible(False)
+        overlay_row.addWidget(self.header_pdf_label, 1)
+        overlay_row.addWidget(self.pick_header_btn)
+        overlay_row.addWidget(self.clear_header_btn)
+        root.addLayout(overlay_row)
 
         # 标题梯形回行：预览里可选并即时预览、确认后应用（覆盖模板设置）
         ts_row = QHBoxLayout()
@@ -441,6 +578,54 @@ class PreviewDialog(QDialog):
         """返回预览里选择的标题梯形（None=按模板，不覆盖）"""
         val = self.title_shape_combo.currentData()
         return None if val == '__preset__' else val
+
+    def get_header_pdf_path(self):
+        """返回选中的套头 PDF 路径，或 None"""
+        return self._header_pdf_path
+
+    def _pick_header_pdf(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择套头 PDF（红头/分隔线在纸上的扫描件）",
+            "", "PDF 文件 (*.pdf)")
+        if path:
+            self._set_header_pdf(path)
+
+    def _set_header_pdf(self, path):
+        self._header_pdf_path = path
+        self.header_pdf_label.setText(os.path.basename(path))
+        self.header_pdf_label.setProperty("muted", "false")
+        self.clear_header_btn.setVisible(True)
+        self._refresh_header_png()
+        self._render_after()
+
+    def _clear_header_pdf(self):
+        self._header_pdf_path = None
+        self.header_pdf_label.setText("（未选择）")
+        self.header_pdf_label.setProperty("muted", "true")
+        self.clear_header_btn.setVisible(False)
+        self._cleanup_header_png()
+        self._render_after()
+
+    def _refresh_header_png(self):
+        """渲染套头 PDF 第一页为临时 PNG"""
+        self._cleanup_header_png()
+        if not self._header_pdf_path:
+            return
+        try:
+            from scripts.header_overlay import render_page_to_png
+            self._header_png_temp = render_page_to_png(self._header_pdf_path, page_number=0)
+            self._tmp_header_pngs.append(self._header_png_temp)
+        except Exception as e:
+            self.notice.setText("套头 PDF 预览失败：{}".format(str(e)[:80]))
+            self.notice.setVisible(True)
+
+    def _cleanup_header_png(self):
+        if self._header_png_temp:
+            try:
+                os.unlink(self._header_png_temp)
+            except Exception:
+                pass
+            self._header_png_temp = None
 
     def _current_path(self):
         return self.file_combo.currentData()
@@ -555,8 +740,14 @@ class PreviewDialog(QDialog):
         ts = self.get_title_shape() if hasattr(self, 'title_shape_combo') else None
         marks = self._clean_marks.get(path, set()) \
             if self.clean_combo.currentData() == 'selected' else set()
-        self.view_after.setHtml(
-            render_after_html(self._current_paras, self.preset, ovr, ts, marks))
+        if self._header_pdf_path and self._header_png_temp:
+            html = render_overlay_html(
+                self._current_paras, self.preset, self._header_png_temp,
+                overrides=ovr, title_shape=ts, clean_marks=marks,
+                page_cfg=self.preset.get('page', {}))
+        else:
+            html = render_after_html(self._current_paras, self.preset, ovr, ts, marks)
+        self.view_after.setHtml(html)
         bar.setValue(pos)
         self.reset_btn.setEnabled(bool(ovr) or bool(self._clean_marks.get(path)))
 
@@ -608,6 +799,12 @@ class PreviewDialog(QDialog):
         for d in self._tmp_dirs:
             _shutil.rmtree(d, ignore_errors=True)
         self._tmp_dirs = []
+        for p in self._tmp_header_pngs:
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
+        self._tmp_header_pngs = []
         super(PreviewDialog, self).done(r)
 
     def _load_current(self):

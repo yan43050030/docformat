@@ -223,7 +223,7 @@ class ProcessWorker(QThread):
 
     def __init__(self, files, mode, preset_name, custom_settings, suffix,
                  revision_mode=False, type_overrides=None, title_shape=None,
-                 clean_specs=None, parent=None):
+                 clean_specs=None, header_pdf_path=None, parent=None):
         super(ProcessWorker, self).__init__(parent)
         self.files = list(files)
         self.mode = mode
@@ -238,6 +238,7 @@ class ProcessWorker(QThread):
         # {文件路径: clean_spec}，来自预览中的格式清洗选择
         self.clean_specs = {os.path.normpath(k): v
                             for k, v in (clean_specs or {}).items()}
+        self.header_pdf_path = header_pdf_path
         self.compliance_options = None
         # 独立「格式清洗」模式用
         self.clean_items = None
@@ -327,6 +328,17 @@ class ProcessWorker(QThread):
                         ok_pdf, info = exporter.export_pdf(work, out, self._log)
                         if not ok_pdf:
                             raise RuntimeError(info)
+                        # 套头 PDF 叠加
+                        if self.header_pdf_path and os.path.exists(self.header_pdf_path):
+                            from scripts.header_overlay import overlay_content_on_header
+                            overlay_out = exporter.pdf_output_path(
+                                path, (self.suffix
+                                       if self.suffix != '_processed' else '') + '_带套头')
+                            overlay_content_on_header(
+                                self.header_pdf_path, out, overlay_out)
+                            self._log('success', '已叠加套头 PDF: {} → {}'.format(
+                                base, os.path.basename(overlay_out)))
+                            out = overlay_out
                         self._log('success', '已导出 PDF: {} → {}（{}）'.format(
                             base, os.path.basename(out), info))
                         self.fileFinished.emit(path, out)

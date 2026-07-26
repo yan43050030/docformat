@@ -97,6 +97,7 @@ class HomePage(QWidget):
         self._title_shape = None    # 预览中选择的标题梯形（覆盖模板）
         self._clean_specs = {}      # 预览中选择的格式清洗 {路径: spec}
         self._seal = False          # 是否加盖公章落款布局
+        self._header_pdf_path = None  # 套头 PDF 路径（预览中选择，导出时叠加）
         self.font_check_enabled = True   # 处理前检查排版字体是否安装（测试时可关闭）
         self._build()
         self.reload_presets()
@@ -515,6 +516,7 @@ class HomePage(QWidget):
             self._seal = dlg.seal_check.isChecked()
             self._title_shape = dlg.get_title_shape()
             self._clean_specs = dlg.get_clean_spec()
+            self._header_pdf_path = dlg.get_header_pdf_path()
             try:
                 self.start_process()
             finally:
@@ -522,6 +524,7 @@ class HomePage(QWidget):
                 self._seal = False
                 self._title_shape = None
                 self._clean_specs = {}
+                self._header_pdf_path = None
 
     # ---------- 字体检查 ----------
     def _missing_fonts(self):
@@ -630,6 +633,7 @@ class HomePage(QWidget):
             type_overrides=self._type_overrides,
             title_shape=self._title_shape,
             clean_specs=self._clean_specs,
+            header_pdf_path=self._header_pdf_path,
             parent=self)
         self.worker.compliance_options = compliance_options
         self.worker.clean_items = clean_items
@@ -672,7 +676,9 @@ class HomePage(QWidget):
         preset_name, custom = self.mgr.engine_args(self.mgr.active_key)
         self.worker = ProcessWorker(
             self.files, tool_id, preset_name, custom,
-            self.suffix_edit.text().strip() or '_processed', parent=self)
+            self.suffix_edit.text().strip() or '_processed',
+            header_pdf_path=getattr(self, '_header_pdf_path', None),
+            parent=self)
         self.worker.logMessage.connect(self.logMessage)
         self.worker.progressChanged.connect(self.progress.setValue)
         self.worker.fileStarted.connect(self._on_file_started)

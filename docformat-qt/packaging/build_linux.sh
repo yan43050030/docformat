@@ -14,6 +14,7 @@ python3 -m PyInstaller --noconfirm --clean --onefile --windowed \
     --hidden-import scripts.formatter \
     --hidden-import scripts.punctuation \
     --hidden-import scripts.analyzer \
+    --hidden-import fitz \
     main.py
 
 echo ""

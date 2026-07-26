@@ -19,6 +19,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --hidden-import scripts.converter ^
     --hidden-import win32com.client ^
     --hidden-import pythoncom ^
+    --hidden-import fitz ^
     main.py
 
 echo.
