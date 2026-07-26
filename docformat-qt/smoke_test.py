@@ -1241,6 +1241,36 @@ def test_overprint():
         assert any('没有套头底图' in _s for _s in _n3b), \
             '超出页应说明：{}'.format(_n3b)
 
+        # 缺 PyMuPDF 时必须给人话、且不是 ImportError——
+        # 套头叠加是附加功能，不该甩底层异常给用户
+        import builtins as _bi
+        from scripts import header_overlay as _HO
+        _real_imp = _bi.__import__
+
+        def _no_fitz(name, *a, **k):
+            if name == 'fitz' or name.startswith('fitz.'):
+                raise ImportError("No module named 'fitz'")
+            return _real_imp(name, *a, **k)
+        _bi.__import__ = _no_fitz
+        try:
+            _ok, _why = _HO.available()
+            assert not _ok and 'PyMuPDF' in _why, '缺库时 available() 应说明原因'
+            for _fn, _args in (('page_count', (_lh,)), ('page_size_cm', (_lh,)),
+                               ('render_page_to_png', (_lh,)),
+                               ('overlay_content_on_header', (_lh, _lh, _lh))):
+                try:
+                    getattr(_HO, _fn)(*_args)
+                    raise AssertionError('{} 缺库时应抛错'.format(_fn))
+                except RuntimeError as _e:
+                    assert 'PyMuPDF' in str(_e), '{} 的报错要提到 PyMuPDF'.format(_fn)
+                except ImportError:
+                    raise AssertionError('{} 不该把 ImportError 甩给上层'.format(_fn))
+            assert _ovl.page_count(_lh) == 0, '缺库时 page_count 应返回 0 而不是抛错'
+            assert _ovl.page_size_cm(_lh) is None, '缺库时 page_size_cm 应返回 None'
+        finally:
+            _bi.__import__ = _real_imp
+        assert _HO.available()[0], '恢复后应重新可用'
+
         # 渲染出图（预览靠它）
         _png = _ovl.render_page_png(_merged, 0)
         assert os.path.exists(_png) and os.path.getsize(_png) > 1000, '渲染 PNG 异常'

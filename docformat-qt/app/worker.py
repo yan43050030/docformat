@@ -328,17 +328,27 @@ class ProcessWorker(QThread):
                         ok_pdf, info = exporter.export_pdf(work, out, self._log)
                         if not ok_pdf:
                             raise RuntimeError(info)
-                        # 套头 PDF 叠加
+                        # 套头 PDF 叠加。叠加是附加动作：PDF 此时已经导出成功，
+                        # 叠不上只降级为警告，绝不能连累它——否则用户会因为
+                        # 一个附加功能（比如目标机器没装上 PyMuPDF）
+                        # 丢掉本来已经导好的 PDF。
                         if self.header_pdf_path and os.path.exists(self.header_pdf_path):
-                            from scripts.header_overlay import overlay_content_on_header
-                            overlay_out = exporter.pdf_output_path(
-                                path, (self.suffix
-                                       if self.suffix != '_processed' else '') + '_带套头')
-                            overlay_content_on_header(
-                                self.header_pdf_path, out, overlay_out)
-                            self._log('success', '已叠加套头 PDF: {} → {}'.format(
-                                base, os.path.basename(overlay_out)))
-                            out = overlay_out
+                            try:
+                                from scripts.header_overlay import overlay_content_on_header
+                                overlay_out = exporter.pdf_output_path(
+                                    path, (self.suffix
+                                           if self.suffix != '_processed' else '')
+                                    + '_带套头')
+                                overlay_content_on_header(
+                                    self.header_pdf_path, out, overlay_out)
+                                self._log('success', '已叠加套头 PDF: {} → {}'.format(
+                                    base, os.path.basename(overlay_out)))
+                                out = overlay_out
+                            except Exception as _oe:
+                                self._log('warning',
+                                          '{}：套头叠加未完成（{}），'
+                                          'PDF 已正常导出，可稍后单独叠加'
+                                          .format(base, str(_oe)[:80]))
                         self._log('success', '已导出 PDF: {} → {}（{}）'.format(
                             base, os.path.basename(out), info))
                         self.fileFinished.emit(path, out)

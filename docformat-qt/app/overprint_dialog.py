@@ -417,6 +417,29 @@ class OverprintDialog(QDialog):
                 "位置已保存到：\n{}\n\n先生成一份试打，对不准再回来微调。"
                 .format(overprint.offsets_path(self._template_path)))
 
+    def _also_build_alignment(self, docx_out, values):
+        """生成套打件时顺手产出对位 PDF，放在 docx 旁边。
+
+        纯属附加：失败只记一句提示，绝不影响已经生成好的 docx——
+        用户要的是那份能打印的文件，对位件只是方便核对。
+        """
+        from scripts import overlay
+        ok, why = overlay.can_merge()
+        if not ok:
+            self.status.setText('未生成对位件：{}'.format(why))
+            return None
+        out = os.path.splitext(docx_out)[0] + '_对位.pdf'
+        try:
+            overlay.build_alignment_pdf(
+                self._template_path, values,
+                overprint.load_letterhead(self._template_path), out,
+                title_shape=self._title_shape(),
+                title_lines=self._title_lines())
+            return out
+        except Exception as e:
+            self.status.setText('未生成对位件：{}'.format(str(e)[:120]))
+            return None
+
     def _check_align(self):
         if not self._template_path:
             return
@@ -697,8 +720,17 @@ class OverprintDialog(QDialog):
             if name not in _NO_MEMORY and val:
                 s.setValue('overprint/{}'.format(name), val)
 
+        # 绑定过套头纸就顺手多出一份对位件，省得再开一次窗口去点
+        align_out = None
+        if overprint.load_letterhead(self._template_path):
+            align_out = self._also_build_alignment(out, values)
+
         self.result_path = out
         msg = "已生成：\n{}\n\n共填入 {} 个字段。".format(out, n)
+        if align_out:
+            msg += ("\n\n同时生成了对位件（套头纸 + 本次内容）：\n{}\n"
+                    "它只用于核对位置，真正打印仍用上面的 docx 打到预印纸上。"
+                    .format(align_out))
         if notes:
             msg += "\n\n注意：\n" + "\n".join('· ' + x for x in notes)
         msg += "\n\n打印时请用预印红头纸，并确认打印机「按实际大小/100%」不缩放。"

@@ -474,6 +474,16 @@ class PreviewDialog(QDialog):
         overlay_row.addWidget(self.header_pdf_label, 1)
         overlay_row.addWidget(self.pick_header_btn)
         overlay_row.addWidget(self.clear_header_btn)
+        # 快预览是 HTML 重排，是近似值；定稿前用这个走一遍真实排版引擎
+        self.exact_btn = QPushButton("精确核对…")
+        self.exact_btn.setCursor(Qt.PointingHandCursor)
+        self.exact_btn.setToolTip(
+            "上面的叠加预览是按页边距重排的近似图，用于快速比划。\n"
+            "点这里会真正走一遍「排版 → 导出 PDF → 叠到套头上」，\n"
+            "看到的就是打印出来的样子（需要本机装有 Word/WPS/LibreOffice）。")
+        self.exact_btn.setVisible(False)
+        self.exact_btn.clicked.connect(self._exact_check)
+        overlay_row.addWidget(self.exact_btn)
         root.addLayout(overlay_row)
 
         # 标题梯形回行：预览里可选并即时预览、确认后应用（覆盖模板设置）
@@ -595,6 +605,7 @@ class PreviewDialog(QDialog):
         self.header_pdf_label.setText(os.path.basename(path))
         self.header_pdf_label.setProperty("muted", "false")
         self.clear_header_btn.setVisible(True)
+        self.exact_btn.setVisible(True)
         self._refresh_header_png()
         self._render_after()
 
@@ -603,8 +614,63 @@ class PreviewDialog(QDialog):
         self.header_pdf_label.setText("（未选择）")
         self.header_pdf_label.setProperty("muted", "true")
         self.clear_header_btn.setVisible(False)
+        self.exact_btn.setVisible(False)
         self._cleanup_header_png()
         self._render_after()
+
+    def _exact_check(self):
+        """走真实排版引擎核对：排版 → 导出 PDF → 叠到套头上 → 看结果。
+
+        上方的叠加预览是 HTML 按页边距重排出来的近似图，快但会骗人
+        （本项目里它误报过标题行数、栏宽、折行）。这里改用本机真正的
+        Word/WPS/LibreOffice 排一遍，所见即所印。
+        """
+        import tempfile
+        from PyQt5.QtWidgets import QApplication, QMessageBox
+        from scripts import overlay
+
+        src = self._current_path()
+        if not src or not self._header_pdf_path:
+            return
+        ok, why = overlay.can_merge()
+        if not ok:
+            QMessageBox.information(self, "精确核对不可用", why)
+            return
+
+        tmp = tempfile.mkdtemp(prefix='exact_')
+        docx_out = os.path.join(tmp, 'formatted.docx')
+        pdf_out = os.path.join(tmp, 'formatted.pdf')
+        merged = os.path.join(tmp, '精确核对.pdf')
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            from scripts.engine import format_document
+            from scripts.exporter import export_pdf
+            preset_name, custom = self._engine_args()
+            format_document(src, docx_out, preset_name, custom,
+                            type_overrides=self.get_type_overrides().get(src),
+                            title_shape=self.get_title_shape())
+            ok_pdf, info = export_pdf(docx_out, pdf_out)
+            if not ok_pdf:
+                raise RuntimeError(info)
+            notes = overlay.merge_overlay(pdf_out, self._header_pdf_path, merged)
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "精确核对失败", str(e)[:300])
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        from app.align_dialog import MergedPdfViewer
+        MergedPdfViewer(merged, notes, self).exec_()
+
+    def _engine_args(self):
+        """取当前预设的引擎参数；预览对话框没存的话从管理器现取"""
+        mgr = getattr(self, 'mgr', None)
+        if mgr is not None and hasattr(mgr, 'engine_args'):
+            return mgr.engine_args(mgr.active_key)
+        from app.presets import PresetManager
+        m = PresetManager()
+        return m.engine_args(m.active_key)
 
     def _refresh_header_png(self):
         """渲染套头 PDF 第一页为临时 PNG"""

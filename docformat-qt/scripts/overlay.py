@@ -30,19 +30,9 @@ LETTERHEAD_EXTS = ('.pdf',)
 
 
 def _probe():
-    """PyMuPDF 在不在。
-
-    import 失败不一定是 ImportError：这类带二进制扩展的包在依赖坏掉时
-    可能抛出别的异常，甚至是 BaseException（本项目遇到过 pyo3 panic），
-    普通 except Exception 拦不住，所以这里兜到 BaseException。
-    """
-    try:
-        import fitz            # noqa: F401  PyMuPDF
-        return True, ''
-    except BaseException as e:  # noqa: BLE001 - 见上
-        if isinstance(e, (KeyboardInterrupt, SystemExit)):
-            raise
-        return False, '缺少 PyMuPDF（{}）'.format(e)
+    """PyMuPDF 在不在——统一由 header_overlay.available() 判定，不各探各的"""
+    from scripts.header_overlay import available
+    return available()
 
 
 def can_merge():

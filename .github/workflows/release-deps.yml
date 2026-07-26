@@ -45,7 +45,14 @@ jobs:
               python3-pip python3-setuptools python3-wheel python3-pyqt5 python3-lxml binutils
 
             pip3 install --no-cache-dir --upgrade "pip<24.1"
-            pip3 install --no-cache-dir "python-docx==0.8.11" "pyinstaller==5.13.2" "PyMuPDF>=1.23.0"
+            pip3 install --no-cache-dir "python-docx==0.8.11" "pyinstaller==5.13.2"
+            # 套头叠加/对位校验用 PyMuPDF。它是二进制轮子，老容器或 ARM 上
+            # 未必有现成 wheel；装不上不该让整个构建失败——那两个功能会在
+            # 软件里置灰并说明原因，其余功能照常。
+            pip3 install --no-cache-dir "PyMuPDF>=1.23.0" \
+              || echo "PyMuPDF 装不上，跳过（套头叠加/对位校验将不可用）"
+            FITZ_ARG=""
+            python3 -c "import fitz" 2>/dev/null && FITZ_ARG="--hidden-import fitz"
 
             python3 smoke_test.py
 
@@ -57,7 +64,7 @@ jobs:
               --hidden-import scripts.formatter \
               --hidden-import scripts.punctuation \
               --hidden-import scripts.analyzer \
-              --hidden-import fitz \
+              $FITZ_ARG \
               main.py
 
             # 提取所有运行时依赖 .so

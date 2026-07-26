@@ -10,12 +10,136 @@ from PyQt5.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog,
 
 from scripts import overlay, overprint
 
+# 显示倍率：0 = 适应宽度
+ZOOMS = [('适应宽度', 0), ('50%', 0.5), ('75%', 0.75), ('100%', 1.0),
+         ('150%', 1.5), ('200%', 2.0)]
+
+
+class MergedPdfViewer(QDialog):
+    """看一份已经合成好的对位 PDF：缩放、翻页、另存。
+
+    正文流程的「精确核对」与套打流程的对位校验共用它——两边看到的
+    是同一种东西，没必要各写一套。
+    """
+
+    def __init__(self, pdf_path, notes=None, parent=None):
+        super(MergedPdfViewer, self).__init__(parent)
+        self.setWindowTitle("精确核对 — 排版叠在套头纸上的实际效果")
+        self.resize(880, 900)
+        self._pdf = pdf_path
+        self._page = 0
+
+        root = QVBoxLayout(self)
+        tip = QLabel("这是走真实排版引擎排出来的结果，"
+                     "<span style='color:#C0392B'>红色</span>是纸上已印好的，"
+                     "<b>黑色</b>是打印机这次要印的——所见即所印。")
+        tip.setWordWrap(True)
+        tip.setProperty("muted", "true")
+        root.addWidget(tip)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("显示："))
+        self.zoom = QComboBox()
+        for text, val in ZOOMS:
+            self.zoom.addItem(text, val)
+        self.zoom.currentIndexChanged.connect(self._redraw)
+        row.addWidget(self.zoom)
+        self.page_combo = QComboBox()
+        n = overlay.page_count(pdf_path)
+        self.page_combo.setVisible(n > 1)
+        for i in range(n):
+            self.page_combo.addItem('第 {} 页'.format(i + 1), i)
+        self.page_combo.currentIndexChanged.connect(self._on_page)
+        row.addWidget(self.page_combo)
+        row.addStretch(1)
+        btn_save = QPushButton("另存为 PDF…")
+        btn_save.clicked.connect(self._save)
+        row.addWidget(btn_save)
+        root.addLayout(row)
+
+        self.canvas = QLabel("")
+        self.canvas.setAlignment(Qt.AlignCenter)
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setWidget(self.canvas)
+        self.area = area
+        root.addWidget(area, 1)
+
+        if notes:
+            lab = QLabel('；'.join(notes))
+            lab.setWordWrap(True)
+            lab.setProperty("muted", "true")
+            root.addWidget(lab)
+
+        bottom = QHBoxLayout()
+        bottom.addStretch(1)
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(self.reject)
+        bottom.addWidget(btn_close)
+        root.addLayout(bottom)
+        self._redraw()
+
+    def _on_page(self, idx):
+        self._page = max(0, idx)
+        self._redraw()
+
+    _redraw = None      # 见下方赋值：与 AlignDialog 共用同一套绘制逻辑
+
+    def _save(self):
+        out, _ = QFileDialog.getSaveFileName(
+            self, "另存对位 PDF", os.path.basename(self._pdf), "PDF 文件 (*.pdf)")
+        if not out:
+            return
+        import shutil
+        try:
+            shutil.copyfile(self._pdf, out)
+        except Exception as e:
+            QMessageBox.warning(self, "保存失败", str(e))
+            return
+        QMessageBox.information(self, "已保存", out)
+
+
+def _draw_pdf_page(self):
+    """把 self._pdf 的第 self._page 页画到 self.canvas 上。
+
+    渲染固定 150dpi；"100%" 指按真实纸张大小显示，换算到屏幕要按 96dpi
+    折一下，否则 100% 会大得离谱。
+    """
+    pdf = getattr(self, '_pdf', None) or getattr(self, '_merged', None)
+    if not pdf:
+        return
+    ok, why = overlay.can_render()
+    if not ok:
+        self.canvas.setText('本机无法在窗口里渲染 PDF（{}）。\n'
+                            '请另存后用 PDF 阅读器打开核对。'.format(why))
+        return
+    try:
+        png = overlay.render_page_png(pdf, self._page)
+    except Exception as e:
+        self.canvas.setText('渲染失败：{}'.format(e))
+        return
+    pix = QPixmap(png)
+    try:
+        os.remove(png)          # 渲染件是临时文件，读进内存就删
+    except OSError:
+        pass
+    if pix.isNull():
+        self.canvas.setText('渲染结果为空')
+        return
+    zoom = self.zoom.currentData()
+    target = (max(200, self.area.viewport().width() - 24) if not zoom
+              else int(pix.width() * zoom * 96.0 / 150.0))
+    if target and abs(target - pix.width()) > 2:
+        pix = pix.scaledToWidth(target, Qt.SmoothTransformation)
+    self.canvas.setPixmap(pix)
+    self.canvas.setText('')
+
+
+MergedPdfViewer._redraw = _draw_pdf_page
+
 
 class AlignDialog(QDialog):
     """选套头 PDF → 叠加预览 → 导出合并 PDF"""
-
-    ZOOMS = [('适应宽度', 0), ('50%', 0.5), ('75%', 0.75), ('100%', 1.0),
-             ('150%', 1.5), ('200%', 2.0)]
 
     def __init__(self, template_path, values, title_shape='trapezoid_down',
                  title_lines=None, parent=None):
@@ -65,7 +189,7 @@ class AlignDialog(QDialog):
         row2.addWidget(self.btn_export)
         row2.addWidget(QLabel("显示："))
         self.zoom = QComboBox()
-        for text, val in self.ZOOMS:
+        for text, val in ZOOMS:
             self.zoom.addItem(text, val)
         self.zoom.currentIndexChanged.connect(self._redraw)
         row2.addWidget(self.zoom)
@@ -177,39 +301,7 @@ class AlignDialog(QDialog):
         self._page = max(0, idx)
         self._redraw()
 
-    def _redraw(self):
-        if not self._merged:
-            return
-        ok_render, why = overlay.can_render()
-        if not ok_render:
-            self.canvas.setText(
-                '本机无法在窗口里渲染 PDF（{}）。\n'
-                '请点「导出合并 PDF…」，用看图软件或 PDF 阅读器打开核对。'.format(why))
-            return
-        try:
-            png = overlay.render_page_png(self._merged, self._page)
-        except Exception as e:
-            self.canvas.setText('渲染失败：{}'.format(e))
-            return
-        pix = QPixmap(png)
-        try:
-            os.remove(png)          # 渲染件是临时文件，读进内存就删
-        except OSError:
-            pass
-        if pix.isNull():
-            self.canvas.setText('渲染结果为空')
-            return
-        zoom = self.zoom.currentData()
-        if not zoom:                # 适应宽度
-            target = max(200, self.area.viewport().width() - 24)
-        else:
-            # 渲染固定 150dpi，100% 指的是"按真实纸张尺寸显示"，
-            # 换算成屏幕像素要按 96dpi 折一下，否则 100% 会大得离谱
-            target = int(pix.width() * zoom * 96.0 / 150.0)
-        if target and abs(target - pix.width()) > 2:
-            pix = pix.scaledToWidth(target, Qt.SmoothTransformation)
-        self.canvas.setPixmap(pix)
-        self.canvas.setText('')
+    _redraw = _draw_pdf_page      # 与 MergedPdfViewer 共用同一套绘制
 
     def _export(self):
         if not self._merged:
