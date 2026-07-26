@@ -412,7 +412,10 @@ class OverprintDialog(QDialog):
                 for c in row['cells']:
                     if not c.get('is_title') or c.get('vmerge_cont'):
                         continue
-                    txt = ''.join(s['text'] for s in c['segs'])
+                    # 只取标题正文：同格里还有白色栏目名「标  题」，
+                    # 它是纸上预印的，不属于标题内容
+                    txt = ''.join(s['text'] for s in c['segs']
+                                  if not s.get('white'))
                     return [l for l in txt.split('\n') if l.strip()]
         return []
 

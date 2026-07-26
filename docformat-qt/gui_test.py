@@ -672,8 +672,19 @@ try:
     for _si in range(_od4.shape_combo.count()):
         _od4.shape_combo.setCurrentIndex(_si)
         _od4._refresh_preview()
-        _tc = _od4._last_plan['blocks'][3]['rows'][0]['cells'][1]
-        _ls = [l for l in ''.join(s['text'] for s in _tc['segs']).split('\n') if l]
+        _tc = None
+        for _bb in _od4._last_plan['blocks']:
+            if _bb['kind'] != 'table':
+                continue
+            for _rr in _bb['rows']:
+                for _cc in _rr['cells']:
+                    if _cc.get('is_title'):
+                        _tc = _cc
+        assert _tc is not None, 'plan 里找不到标题格'
+        # 只量标题正文：同格里还有白色栏目名「标  题」，算进去首行会虚胖
+        _ls = [l for l in ''.join(
+            s['text'] for s in _tc['segs'] if not s.get('white')).split('\n')
+            if l.strip()]
         _shape_w[_od4.shape_combo.itemData(_si)] = [_twu(l) for l in _ls]
     assert len(_shape_w['trapezoid_down']) == 2, '长标题应回成两行'
     assert _shape_w['trapezoid_down'][0] > _shape_w['trapezoid_down'][1], \

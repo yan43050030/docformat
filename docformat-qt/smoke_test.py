@@ -645,6 +645,19 @@ def test_exporter():
     print('[7n] 导出 PDF：路径避让 + 缺引擎时报错不崩 通过')
 
 
+def _title_cell(plan):
+    """按 is_title 标记找标题格——别写死行列下标：模板改版后
+    标题行已是整行合并的一格，硬下标会直接越界"""
+    for _b in plan['blocks']:
+        if _b['kind'] != 'table':
+            continue
+        for _r in _b['rows']:
+            for _c in _r['cells']:
+                if _c.get('is_title'):
+                    return _c
+    raise AssertionError('plan 里找不到标题格')
+
+
 def test_overprint():
     """套打：字段扫描/填充保留几何/合并宽度/长文自适应/固定行不误缩"""
     from docx.oxml.ns import qn
@@ -683,8 +696,12 @@ def test_overprint():
                 return v
         return 0
     assert _w('领导批示') > 15, '整行合并单元格宽度应接近表宽: {}'.format(widths)
-    assert _w('承办部门') > 6, '跨两列的单元格宽度应累加: {}'.format(widths)
-    assert _w('标  题') < 3, '未合并的窄列不应被算宽: {}'.format(widths)
+    # 承办部门/经办人 那一行是左右两栏，竖线在距纸右侧 12cm 处（实测），
+    # 即左栏 6.9cm、右栏 9.9cm——不能被读成"平均分"
+    assert 6.5 < _w('承办部门') < 7.3, '左栏宽应约 6.9cm: {}'.format(widths)
+    assert 9.5 < _w('经 办 人') < 10.3, '右栏宽应约 9.9cm: {}'.format(widths)
+    assert abs(_w('承办部门') + _w('经 办 人') - _w('领导批示')) < 0.1, \
+        '两栏之和应等于表宽: {}'.format(widths)
 
     base = {'紧急程度': '特急', '密级': '秘密★1年', '标题': '关于报送年度总结的请示',
             '承办部门': '办公室', '经办人': '张三', '电话': '12345678',
@@ -785,8 +802,11 @@ def test_overprint():
     # --- 一页保证：缩下边距留分页余量，且不移动任何内容位置 ---
     _tplsec = Document(tpl).sections[0]
     _outsec = Document(out_s).sections[0]
-    assert _outsec.bottom_margin.cm < _tplsec.bottom_margin.cm, \
-        '应缩小下边距以避免末行被挤到第二页'
+    # 模板本身已按实测尺寸把下边距做到很小；这里要的是**结果**——
+    # 下边距足够小、末行不会被挤到第二页，而不是"必须被改小过"
+    assert _outsec.bottom_margin.cm <= max(0.6, _tplsec.bottom_margin.cm) + 0.001, \
+        '下边距应压到 0.6cm 以内以免末行被挤到第二页：{:.2f}'.format(
+            _outsec.bottom_margin.cm)
     for _attr in ('top_margin', 'left_margin', 'right_margin',
                   'page_width', 'page_height'):
         assert abs(getattr(_outsec, _attr).cm - getattr(_tplsec, _attr).cm) < 0.001, \
@@ -822,12 +842,17 @@ def test_overprint():
     assert geos[0] == geos[1] == geos[2] == tpl_geo, \
         '内容长短改变了表格几何，套打会错位: {} vs 模板 {}'.format(geos, tpl_geo)
 
-    # 模板里不应残留空 run（无文字也无图片/换行等结构），
-    # 它们是转模板时清空黑字留下的垃圾
-    import zipfile as _zf
-    import re as _re2
-    _x = _zf.ZipFile(tpl).read('word/document.xml').decode('utf-8')
-    _empty = _re2.findall(r'<w:r>(?:(?!<w:t[ >]).)*?</w:r>', _x, _re2.S)
+    # 模板里不应残留空 run（无文字、也不承载制表/换行/图片等结构），
+    # 它们是转模板时清空黑字留下的垃圾。判定口径要和 strip_empty_runs
+    # 一致：只放过**没有结构标记**的空 run，别把定位用的制表符 run 也算进来
+    _empty = []
+    for _p9, _c9 in op._iter_paragraphs(Document(tpl)):
+        for _r9 in _p9.runs:
+            if _r9.text:
+                continue
+            if any(_r9._r.find(qn(_t9)) is not None for _t9 in op._STRUCT_TAGS):
+                continue
+            _empty.append(_r9)
     assert not _empty, '模板残留 {} 个空 run'.format(len(_empty))
 
     # 用户自带的模板可能残留空 run，填充时也应清掉（防御）
@@ -841,16 +866,24 @@ def test_overprint():
             if _p.runs:
                 _r = _OE('w:r'); _r.append(_OE('w:rPr')); _p.runs[0]._r.addnext(_r)
     _dd.save(dirty)
+    import re as _re2
+    import zipfile as _zf
     _before = len(_re2.findall(r'<w:r>(?:(?!<w:t[ >]).)*?</w:r>',
                                _zf.ZipFile(dirty).read('word/document.xml').decode('utf-8'),
                                _re2.S))
     assert _before, '注入空 run 失败，测试无效'
     dclean = os.path.join(OUT_DIR, 'overprint_dirty_out.docx')
     op.fill_form(dirty, {'标题': '关于某事项的请示', '拟办意见': '内容。'}, dclean)
-    _after = len(_re2.findall(r'<w:r>(?:(?!<w:t[ >]).)*?</w:r>',
-                              _zf.ZipFile(dclean).read('word/document.xml').decode('utf-8'),
-                              _re2.S))
-    assert _after == 0, '填充后仍残留 {} 个空 run'.format(_after)
+    # 同上：制表符 run 是定位用的结构，不算"空 run"
+    _after_junk = []
+    for _p8, _c8 in op._iter_paragraphs(Document(dclean)):
+        for _r8 in _p8.runs:
+            if _r8.text:
+                continue
+            if any(_r8._r.find(qn(_t8)) is not None for _t8 in op._STRUCT_TAGS):
+                continue
+            _after_junk.append(_r8)
+    assert not _after_junk, '填充后仍残留 {} 个空 run'.format(len(_after_junk))
 
     # --- 空值：经办人等留空供手写签字，应干净留白 ---
     import re as _re
@@ -892,20 +925,21 @@ def test_overprint():
             assert r['height_cm'] == r['declared_cm'], '固定行应用声明高度'
         else:
             assert r['height_cm'] >= r['declared_cm'], 'atLeast 行不应小于声明高度'
-    assert plan['grid_cm'], '应读到文档网格行高（留白区按它估高）'
-
-    # 网格吸附：行高超过一个网格行要占两格。按一格算会把留白区算成一半，
-    # 整单看起来只占大半页（领导批示 11 段：一格 6.05cm vs 吸附 12.11cm）
-    _g = plan['grid_cm']
+    # 新模板按实测尺寸重建，各行都是 hRule=exact 的固定高度，
+    # 不再依赖文档网格来估留白区高度（网格已移除，纵向由段前距说了算）。
+    # 网格吸附的算法仍要能用——用户自带的老模板可能有网格。
+    _g = 0.55
     _mk = Document().add_paragraph('测')
     from docx.shared import Pt as _Pt
     _mk.runs[0].font.size = _Pt(14)
     _h = op.paragraph_height_cm(_mk, _g)
     assert abs(_h - 2 * _g) < 0.01, \
         '14pt 段落自然行高 0.69cm > 网格 0.55cm，应吸附占 2 格: {:.3f}'.format(_h)
+    # 领导批示留白区：实测红线 8.0 → 20.2，应为 12.2cm 的固定高度
     _lead = [r for r in tb['rows'] if r['declared_cm'] > 6][0]
-    assert _lead['height_cm'] > 11, \
-        '留白区（领导批示）高度应按吸附算约 12cm，实得 {:.2f}'.format(_lead['height_cm'])
+    assert _lead['exact'], '留白区应是固定高度行'
+    assert abs(_lead['height_cm'] - 12.2) < 0.1, \
+        '留白区高度应为实测的 12.2cm，实得 {:.2f}'.format(_lead['height_cm'])
 
     # 整单应正好占满一页：内容末端接近页高减下边距
     _tbl_h = sum(r['height_cm'] for b in plan['blocks'] if b['kind'] == 'table'
@@ -1020,8 +1054,12 @@ def test_overprint():
     for _shape, _cmp in (('trapezoid_down', lambda a, b: a > b),
                          ('trapezoid_up', lambda a, b: a < b)):
         _pl = op.plan_fill(tpl, _long, title_shape=_shape)
-        _tc = _pl['blocks'][3]['rows'][0]['cells'][1]
-        _lines = [l for l in ''.join(s['text'] for s in _tc['segs']).split('\n') if l]
+        _tc = _title_cell(_pl)
+        # 只量标题正文那一段：同格里还有白色栏目名「标  题」，
+        # 把它算进去会让首行凭空变宽
+        _lines = [l for l in ''.join(
+            s['text'] for s in _tc['segs'] if not s.get('white')
+        ).split('\n') if l.strip()]
         assert len(_lines) == 2, '{}：长标题应回成 2 行，实得 {}'.format(_shape, _lines)
         _w = [op._text_width_units(l) for l in _lines]
         assert _cmp(_w[0], _w[1]), '{}：两行宽度 {} 不符合梯形'.format(_shape, _w)
@@ -1049,16 +1087,24 @@ def test_overprint():
     for _k in range(2, 40, 3):
         _tt = '关于' + '某单位' * _k + '的请示'
         _pl2 = op.plan_fill(tpl, dict(base, 标题=_tt))
-        _r0 = _pl2['blocks'][3]['rows'][0]
-        _tc2 = _r0['cells'][1]
+        _tc2 = _title_cell(_pl2)
+        _r0 = None
+        for _bb2 in _pl2['blocks']:
+            if _bb2['kind'] != 'table':
+                continue
+            for _rr2 in _bb2['rows']:
+                if any(_cc2.get('is_title') for _cc2 in _rr2['cells']):
+                    _r0 = _rr2
+        assert _r0 is not None, '找不到标题所在行'
         _cap = _cap or _tc2['max_lines']
         assert _tc2['max_lines'] == 2, \
             '自带模板标题栏应只放得下 2 行，实得 {}'.format(_tc2['max_lines'])
         assert _r0['height_cm'] <= _r0['declared_cm'] + 0.02, \
             '标题 {} 字把标题栏撑高了：{:.2f} > 声明 {:.2f}'.format(
                 len(_tt), _r0['height_cm'], _r0['declared_cm'])
-        _ls2 = [l for l in ''.join(s['text'] for s in _tc2['segs']).split('\n')
-                if l.strip()]
+        _ls2 = [l for l in ''.join(
+            s['text'] for s in _tc2['segs'] if not s.get('white')).split('\n')
+            if l.strip()]
         _o2 = os.path.join(OUT_DIR, 'overprint_cap.docx')
         _n3, _notes3 = op.fill_form(tpl, dict(base, 标题=_tt), _o2)
         if len(_ls2) > 2:
@@ -1087,17 +1133,34 @@ def test_overprint():
             _right(_pp1), _right(_pp2))
 
     # ---- 打印位置微调：指定"距纸左边几厘米"，黑字就落在那儿 ----
-    import shutil as _sh3
+    # 自带模板已按实测尺寸把位置做进制表位里，无需微调；位置微调这套机制
+    # 是给**别的**模板用的，所以拿一份不含制表位的简易模板来测。
+    from docx import Document as _D7
+    from docx.shared import Pt as _Pt7, RGBColor as _RGB7
     _tdir = os.path.join(OUT_DIR, 'offtpl')
     os.makedirs(_tdir, exist_ok=True)
-    _tpl2 = os.path.join(_tdir, '送审单.docx')
-    _sh3.copyfile(tpl, _tpl2)
+    _tpl2 = os.path.join(_tdir, '简易单.docx')
+    _d7 = _D7()
+    from docx.shared import Cm as _Cm7
+    _s7 = _d7.sections[0]
+    _s7.left_margin = _Cm7(2.1); _s7.right_margin = _Cm7(2.1)
+    _p7 = _d7.add_paragraph()
+    for _t7, _w7 in (('   ', True), ('{{年}}', False), ('年', True),
+                     ('   ', True), ('{{月}}', False), ('月', True),
+                     (' ', True), ('{{日}}', False), ('日', True)):
+        _r7 = _p7.add_run(_t7)
+        _r7.font.size = _Pt7(14)
+        if _w7:
+            _r7.font.color.rgb = _RGB7(0xFF, 0xFF, 0xFF)
+    _p8 = _d7.add_paragraph()
+    _r8 = _p8.add_run('紧急程度：')
+    _r8.font.size = _Pt7(14); _r8.font.color.rgb = _RGB7(0xFF, 0xFF, 0xFF)
+    _r8 = _p8.add_run('{{紧急程度}}'); _r8.font.size = _Pt7(14)
+    _d7.save(_tpl2)
     _dv = {'年': '2026', '月': '1', '日': '11'}
     _pl3 = op.plan_fill(_tpl2, _dv)
-    # 表格外的字段才可调；格子里的横向位置由格子定死
     assert '年' in _pl3['adjustable'] and '月' in _pl3['adjustable'], \
         '年/月应可微调：{}'.format(_pl3['adjustable'])
-    assert '承办部门' not in _pl3['adjustable'], '格子里的字段不该列为可微调'
 
     # 定位靠**制表位**（缇为单位、与字体无关），不是补空格：空格宽度随
     # 字体变（实测 TNR 里只有数字的一半），补空格定位实测错位 0.49~0.96cm
@@ -1105,7 +1168,7 @@ def test_overprint():
     for _want, _dvv in (
             ({'月': 6.5, '日': 9.0}, {'年': '2026', '月': '1', '日': '11'}),
             ({'月': 6.5, '日': 9.0}, {'年': '2026', '月': '12', '日': '5'}),
-            ({'年': 3.0, '月': 5.6, '日': 8.2}, {'年': '2026', '月': '7', '日': '25'})):
+            ({'年': 4.0, '月': 7.2, '日': 10.4}, {'年': '2026', '月': '7', '日': '25'})):
         _p3 = op.save_offsets(_tpl2, _want)
         assert os.path.exists(_p3), '位置表未落盘'
         assert op.load_offsets(_tpl2) == _want, '位置表读回不一致'
@@ -1139,14 +1202,16 @@ def test_overprint():
     # ---- 预览折行按真实几何：一行放不下就必须断开 ----
     # Qt 富文本无视表格像素宽度、会把表拉满可视区，靠它折行必然偏长，
     # 所以折行在 plan 阶段按 cm 算好
-    _cell_w = _pl['blocks'][3]['rows'][0]['cells'][1]['width_cm']
+    _cell_w = _title_cell(_pl)['width_cm']
     for _l in _lines:
         assert op._text_width_units(_l) * (16.0 / op.PT_PER_CM) <= _cell_w, \
             '预览行 {!r} 超出格子宽度 {:.2f}cm'.format(_l, _cell_w)
 
     # ---- 年/月/日定宽：位数变化不得挪动预印的"年月日" ----
     def _white_pos(_path):
-        _p4 = Document(_path).paragraphs[4]
+        _cands4 = [q for q in Document(_path).paragraphs
+                   if '年' in q.text and '月' in q.text]
+        _p4 = _cands4[-1] if _cands4 else Document(_path).paragraphs[0]
         _acc, _out = 0.0, {}
         for _r in _p4.runs:
             _c = _r.font.color.rgb if _r.font.color and _r.font.color.rgb else None
@@ -1197,7 +1262,8 @@ def test_overprint():
         assert '某地市' in _dt.text, '收窄把白色单位名也删了'
     # 值太长把某行撑出版心时要如实告警，而不是闷声折行
     _ov = os.path.join(OUT_DIR, 'overprint_wide.docx')
-    _n2, _notes2 = op.fill_form(tpl, dict(base, 密级='绝密★长期特别提示补充说明'), _ov)
+    _n2, _notes2 = op.fill_form(
+        tpl, dict(base, 密级='绝密★长期' + '补充说明事项' * 6), _ov)
     assert any('超出版心' in _s for _s in _notes2), \
         '某行超出版心时应告警：{}'.format(_notes2)
 

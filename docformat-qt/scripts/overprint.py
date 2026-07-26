@@ -536,10 +536,22 @@ def max_title_lines(table, cell):
     if not paras:
         return 3
     para = max(paras, key=lambda p: len(p.text))
-    line_cm = _para_line_spacing_pt(para, _para_font_pt(para)) / PT_PER_CM
+    # 用**标题正文**的字号算行高：同段里还有更小的白色栏目名，
+    # 按它算会以为一格能塞进四五行小字
+    vr = [r for r in para.runs if r.text.strip() and _run_prints(r)]
+    fs = (vr[-1].font.size.pt if vr and vr[-1].font.size
+          else _para_font_pt(para))
+    line_cm = _para_line_spacing_pt(para, fs) / PT_PER_CM
     if line_cm <= 0:
         return 3
-    avail = height_cm - min(0.15, height_cm * 0.08)
+    # 扣掉段前距：标题不是从格子顶端开始排的，上面那段留白也占高度
+    before = 0.0
+    try:
+        sb = para.paragraph_format.space_before
+        before = sb.pt / PT_PER_CM if sb else 0.0
+    except Exception:
+        before = 0.0
+    avail = height_cm - before - min(0.15, height_cm * 0.08)
     return max(1, int(avail / line_cm))
 
 
@@ -565,11 +577,28 @@ def shape_title_cell(table, cell, shape='trapezoid_down', lines_n=None,
     if not paras:
         return False, 0, False
     para = max(paras, key=lambda p: len(p.text))
-    text = para.text.replace('\n', '').strip()
+    # 只对**标题正文那个 run** 回行。新模板里"标  题"这个白色栏目名与
+    # 标题正文同在一段，整段重排会把栏目名一起搬走、还会丢掉它的白色与
+    # 定位制表符——预印的栏目名一移位，整张单子就废了。
+    value_runs = [r for r in para.runs if r.text.strip() and _run_prints(r)]
+    if not value_runs:
+        return False, 0, False
+    vrun = value_runs[-1]
+    text = vrun.text.replace('\n', '').strip()
     if not text:
         return False, 0, False
-    font_pt = _para_font_pt(para)
+    font_pt = vrun.font.size.pt if vrun.font.size else _para_font_pt(para)
     usable = _cell_width_cm(table, cell) - _cell_margins_cm(cell)
+    # 减去同一行上排在标题正文**之前**的东西（白色栏目名、定位制表符），
+    # 否则会以为整格都归标题用，长标题该回行却没回
+    lead_cm = 0.0
+    for _x0, _x1, _r in _run_positions(para):
+        # 比 _r 的底层元素，别比代理对象：每次访问 para.runs 都会新建代理，
+        # 用 is 比代理永远不相等（本项目已在别处栽过同一个坑）
+        if _r._r is vrun._r:
+            lead_cm = _x0
+            break
+    usable = max(1.0, usable - lead_cm)
     per_line = usable / (font_pt / PT_PER_CM) if font_pt else 0
     if per_line <= 0:
         return False, 0, False
@@ -605,12 +634,28 @@ def shape_title_cell(table, cell, shape='trapezoid_down', lines_n=None,
     too_wide = max(_text_width_units(l) for l in lines) > per_line
     if len(lines) <= 1:
         # 一行放得下：若之前插过 br，要还原成单行
-        if '\n' in para.text:
-            _rebuild_lines(para, [text])
+        if '\n' in vrun.text:
+            _rebuild_run_lines(vrun, [text])
             return True, 1, too_wide
         return False, 1, too_wide
-    _rebuild_lines(para, lines)
+    _rebuild_run_lines(vrun, lines)
     return True, len(lines), too_wide
+
+
+def _rebuild_run_lines(run, lines):
+    """把单个 run 重排成若干行（w:br 分隔），不动同段的其它 run。"""
+    from docx.oxml import OxmlElement
+    r = run._r
+    for child in list(r):
+        if child.tag in (qn('w:t'), qn('w:br'), qn('w:cr')):
+            r.remove(child)
+    for i, line in enumerate(lines):
+        t = OxmlElement('w:t')
+        t.text = line
+        t.set(qn('xml:space'), 'preserve')
+        r.append(t)
+        if i < len(lines) - 1:
+            r.append(OxmlElement('w:br'))
 
 
 def _rebuild_lines(para, lines):
@@ -1561,6 +1606,18 @@ def extract_values(source_path, fields=None):
                 break
         if got:
             values[field] = got
+
+    # --- 标题：同一格里"标  题"后面直接跟正文（无冒号）的写法 ---
+    # 送审单的标题栏常是"标  题"加几个空格再写内容，没有冒号，
+    # 按"标签：值"的模式抽不到
+    if '标题' not in values:
+        for txt, _in_cell, _cell in blocks:
+            m = re.match(r'^\s*(标\s*题|题\s*目)\s+(\S.*)$', txt.strip(), re.S)
+            if m:
+                cand = re.sub(r'\s*\n\s*', '', m.group(2)).strip()
+                if cand and not PLACEHOLDER_RE.search(cand):
+                    values['标题'] = cand
+                    break
 
     # --- 标题：标签抽不到时，取"标题"标签相邻单元格 ---
     if '标题' not in values:
