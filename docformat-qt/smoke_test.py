@@ -1099,25 +1099,36 @@ def test_overprint():
         '年/月应可微调：{}'.format(_pl3['adjustable'])
     assert '承办部门' not in _pl3['adjustable'], '格子里的字段不该列为可微调'
 
-    _want = {'月': 6.5, '日': 9.0}
-    _p3 = op.save_offsets(_tpl2, _want)
-    assert os.path.exists(_p3), '位置表未落盘'
-    assert op.load_offsets(_tpl2) == _want, '位置表读回不一致'
-    _pl4 = op.plan_fill(_tpl2, _dv)
-    for _k, _v in _want.items():
-        _got = _pl4['field_pos'][_k]
-        # 以半角空格为步进推移，允许一个步进的量化误差
-        assert abs(_got - _v) <= 0.26, \
-            '{} 目标 {:.2f}cm，实得 {:.2f}cm'.format(_k, _v, _got)
-    # 输出的 docx 与预览报的位置一致
-    _o5 = os.path.join(OUT_DIR, 'overprint_off.docx')
-    op.fill_form(_tpl2, _dv, _o5)
-    _blk = {t.strip(): (a, b) for a, b, t in op.print_positions(Document(_o5))}
-    assert abs(_blk['1'][0] - _pl4['field_pos']['月']) < 0.01, \
-        '输出位置与预览不一致：{} vs {}'.format(_blk['1'][0], _pl4['field_pos']['月'])
-    # 目标定在左边够不着时要告警，而不是把前面的字挤走
-    op.save_offsets(_tpl2, {'年': 0.5})
-    _n5, _notes5 = op.fill_form(_tpl2, _dv, _o5)
+    # 定位靠**制表位**（缇为单位、与字体无关），不是补空格：空格宽度随
+    # 字体变（实测 TNR 里只有数字的一半），补空格定位实测错位 0.49~0.96cm
+    # 且逐个累积。这里要求设定值 / 预览 / 输出报告三者严丝合缝。
+    for _want, _dvv in (
+            ({'月': 6.5, '日': 9.0}, {'年': '2026', '月': '1', '日': '11'}),
+            ({'月': 6.5, '日': 9.0}, {'年': '2026', '月': '12', '日': '5'}),
+            ({'年': 3.0, '月': 5.6, '日': 8.2}, {'年': '2026', '月': '7', '日': '25'})):
+        _p3 = op.save_offsets(_tpl2, _want)
+        assert os.path.exists(_p3), '位置表未落盘'
+        assert op.load_offsets(_tpl2) == _want, '位置表读回不一致'
+        _pl4 = op.plan_fill(_tpl2, _dvv)
+        _o5 = os.path.join(OUT_DIR, 'overprint_off.docx')
+        op.fill_form(_tpl2, _dvv, _o5)
+        _blk = {t.strip(): a for a, _b, t in op.print_positions(Document(_o5))}
+        for _k, _v in _want.items():
+            assert abs(_pl4['field_pos'][_k] - _v) < 0.01, \
+                '{} 预览 {:.3f} ≠ 设定 {:.2f}'.format(_k, _pl4['field_pos'][_k], _v)
+            assert abs(_blk[_dvv[_k]] - _v) < 0.01, \
+                '{} 输出 {:.3f} ≠ 设定 {:.2f}'.format(_k, _blk[_dvv[_k]], _v)
+    # 位数变化不得影响落点（制表位是绝对位置）
+    op.save_offsets(_tpl2, {'月': 6.5})
+    _a = os.path.join(OUT_DIR, 'off_a.docx'); _b = os.path.join(OUT_DIR, 'off_b.docx')
+    op.fill_form(_tpl2, {'年': '2026', '月': '1', '日': '11'}, _a)
+    op.fill_form(_tpl2, {'年': '2026', '月': '12', '日': '5'}, _b)
+    _pa = {t.strip(): a for a, _x, t in op.print_positions(Document(_a))}
+    _pb = {t.strip(): a for a, _x, t in op.print_positions(Document(_b))}
+    assert abs(_pa['1'] - _pb['12']) < 0.01, '一位数/两位数的落点应一致'
+    # 目标落在预印栏目名之内时够不着：要告警并给出真实的最小可用值
+    op.save_offsets(_tpl2, {'紧急程度': 3.0})
+    _n5, _notes5 = op.fill_form(_tpl2, dict(_dv, 紧急程度='平急'), _o5)
     assert any('顶不过去' in _s for _s in _notes5), \
         '够不着的位置应告警：{}'.format(_notes5)
     # 恢复默认 = 删掉位置表

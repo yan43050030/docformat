@@ -25,7 +25,7 @@ class OffsetDialog(QDialog):
     把数值填进来，存成模板旁边的 .位置.json，跟着模板走。
     """
 
-    STEP_CM = 0.25      # 一个半角空格的宽度（14pt 下约 0.247cm）
+    STEP_CM = 0.05      # 微调步进；定位靠制表位，精度不受此限
 
     def __init__(self, template_path, fields, current, parent=None):
         super(OffsetDialog, self).__init__(parent)
@@ -44,8 +44,10 @@ class OffsetDialog(QDialog):
             "单位一律是 <b>厘米(cm)</b>，从纸张左边缘算起（含页边距），"
             "不是从版心或表格边算起。<br>"
             "留空（0.00）表示不指定，按模板原样排。<br>"
-            "位置以空格为单位推移，最小步进约 {:.2f}cm；"
-            "填完下面会显示实际落点，以它为准。".format(self.STEP_CM))
+            "填多少就印在多少——定位用的是 Word 制表位，与字体无关，"
+            "实测误差小于 0.01cm。<br>"
+            "◀ ▶ 每次微调 {:.2f}cm。若某栏的预印栏目名本身就压过了你填的位置，"
+            "保存后会明确提示“顶不过去”并告诉你最小可用值。".format(self.STEP_CM))
         tip.setWordWrap(True)
         tip.setProperty("muted", "true")
         root.addWidget(tip)
@@ -58,15 +60,32 @@ class OffsetDialog(QDialog):
             sp = QDoubleSpinBox()
             sp.setRange(0.0, 21.0)
             sp.setDecimals(2)
-            sp.setSingleStep(0.1)
+            sp.setSingleStep(self.STEP_CM)
             sp.setSuffix(" cm")
             sp.setSpecialValueText("不指定")     # 0.00 显示成"不指定"
             sp.setValue(float(saved.get(name, 0.0)))
-            sp.setToolTip("距纸张左边缘的厘米数；0 = 不指定，按模板原样")
+            sp.setToolTip("距纸张左边缘的厘米数；0 = 不指定，按模板原样。\n"
+                          "键盘上下箭头也能微调")
             self._spins[name] = sp
+            # 左右各一个微调键：对着实物一点一点挪，比反复键入数字快
+            for _txt, _d in (('◀', -self.STEP_CM), ('▶', self.STEP_CM)):
+                b = QPushButton(_txt)
+                b.setFixedWidth(28)
+                b.setToolTip('向{}移 {:.2f}cm'.format('左' if _d < 0 else '右',
+                                                    abs(_d)))
+                b.clicked.connect(
+                    lambda _c=False, _s=sp, _dd=_d: _s.setValue(
+                        max(0.0, (_s.value() or 0.0) + _dd)))
+                row.addWidget(b)
             row.addWidget(sp)
             cur = current.get(name)
-            lab = QLabel("当前实际：{:.2f} cm".format(cur) if cur is not None else "")
+            if cur is not None:
+                b2 = QPushButton("取当前 {:.2f}".format(cur))
+                b2.setToolTip("把这一栏现在的实际落点填进去，再在此基础上微调")
+                b2.clicked.connect(
+                    lambda _c=False, _s=sp, _v=float(cur): _s.setValue(_v))
+                row.addWidget(b2)
+            lab = QLabel("")
             lab.setProperty("muted", "true")
             row.addWidget(lab)
             row.addStretch(1)
@@ -755,6 +774,12 @@ def _segs_html(segs, scale):
         txt = s.get('text', '')
         if txt == '\n':
             out.append('<br>')
+            continue
+        pad = s.get('pad_cm')
+        if pad is not None:
+            # 制表位空白：按算好的厘米数留白，不当普通空格排
+            out.append('<span style="display:inline-block;width:{:.0f}px">'
+                       '</span>'.format(max(0.0, pad) * _PX_PER_CM * scale))
             continue
         if not txt:
             continue

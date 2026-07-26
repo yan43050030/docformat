@@ -113,13 +113,20 @@ def _pad_to_width(value, slot_units):
 def _replace_in_paragraph(para, values, offsets=None, left_cm=0.0):
     """把段落里的占位符替换为取值，保留该 run 的字体/颜色/字号。
 
-    同时记录每个字段最终落在**距纸张左边多少厘米**，并支持用 offsets
-    指定目标位置：offsets={'年': 2.5} 表示"年的数字要从距纸左边 2.5cm
-    处开始印"，函数据此补足前导空格。这是套打对位的核心——纸上的空格
-    印在哪儿是死的，只能靠调整前面的空白把黑字顶到位。
+    同时记录每个字段最终落在**距纸张左边多少厘米**。offsets 指定目标位置
+    时（offsets={'年': 2.5} = "年的数字从距纸左边 2.5cm 处开始印"），
+    用**制表位**把值顶过去，而不是补空格。
 
-    位置要边替换边累计：前一个字段补了多少空格，会把后面所有字段一起
-    右推，所以必须按从左到右的实际结果算，不能各算各的。
+    为什么必须用制表位而不是空格
+    ----------------------------
+    空格的宽度随字体变：实测 Times New Roman 里一个空格正好是数字的 50%，
+    而 CJK 字体里往往接近一个全角宽。靠补空格定位，等于把位置押在
+    "空格有多宽"这个未知数上——本项目实测过错位 0.49/0.69/0.96cm，
+    且逐个累积。制表位的位置以缇为单位绝对指定，与字体无关，说 2.5cm
+    就是 2.5cm。
+
+    没有指定位置的字段仍走原来的定宽补空格（行为不变），
+    这样没配过位置的模板与此前完全一致。
 
     返回 (是否改动, {字段: 起始位置cm})。
     """
@@ -127,10 +134,19 @@ def _replace_in_paragraph(para, values, offsets=None, left_cm=0.0):
     offsets = offsets or {}
     changed = False
     pos_map = {}
+    tab_stops = []                  # 本段要加的制表位（cm，相对左边距）
+    seen_ws = []                    # 本段里出现过的纯空白 run（填充用）
     acc = 0.0                       # 已排过的宽度（全角单位）
+    # 只计"看得见的字"的宽度。判断目标位置够不够得着时用它，不用 acc：
+    # 空格的实际宽度随字体变（实测 TNR 里只有数字的一半），拿含空格的
+    # 估算去挡，会把明明够得着的位置误判成"顶不过去"而拒绝设置。
+    acc_ink = 0.0
     for run in para.runs:
         if '{{' not in run.text:
             acc += _text_width_units(run.text)
+            acc_ink += _text_width_units(run.text.replace(' ', ''))
+            if run.text and not run.text.strip():
+                seen_ws.append(run)
             continue
         out = []
         cur = 0
@@ -138,32 +154,76 @@ def _replace_in_paragraph(para, values, offsets=None, left_cm=0.0):
             lead = run.text[cur:m.start()]
             out.append(lead)
             acc += _text_width_units(lead)
+            acc_ink += _text_width_units(lead.replace(' ', ''))
             key = m.group(1).strip()
             val = str(values.get(key, ''))
             target = offsets.get(key)
             if target is not None and char_cm > 0:
-                want = (float(target) - left_cm) / char_cm
-                pad = want - acc
-                if pad > 0:
-                    val = ' ' * int(round(pad / 0.5)) + val
-                # pad <= 0 说明目标位置在前面内容的左边，顶不过去；
-                # 不硬塞（会把前面的字挤走），由调用方据 pos_map 告警
-            elif key in _FIXED_WIDTH_FIELDS:
-                val = _pad_to_width(val, _FIXED_WIDTH_FIELDS[key])
-            # 记的是"值本身"的起点，前导空格不算——用户量的是数字的左沿
-            lead_sp = len(val) - len(val.lstrip(' '))
-            pos_map[key] = left_cm + (acc + lead_sp * 0.5) * char_cm
+                # 该字段前面的填充空格一律撤掉——它们本就是"把字顶到位"的
+                # 土办法，制表位一来就该让位。必须连**整个空白 run** 一起撤，
+                # 只撤紧邻的那点不够：模板里常有几十个空格的长填充，而空格
+                # 的实际宽度随字体变（实测 TNR 里只有数字的一半），留着它
+                # 就可能把笔位顶过目标、制表位反而跳到下一站，结果差出一截
+                # （实测目标 11.50cm 落到了 12.72cm）。
+                # 这些空格和它们顶开的白字都不打印，撤掉不影响印出来的东西。
+                while out and out[-1] and not out[-1].strip():
+                    acc -= _text_width_units(out.pop())
+                # 连本段前面所有纯空白 run 一起撤：它们只是把**白色栏目名**
+                # 顶到位的填充，白字不显影，挪了不影响印出来的东西；留着却会
+                # 让笔位越过目标、制表位跳到下一站。撤掉后位置才真正说了算。
+                for _ws in seen_ws:
+                    acc -= _text_width_units(_ws.text)
+                    _ws.text = ''
+                seen_ws = []
+                rel = float(target) - left_cm
+                if rel > acc_ink * char_cm:
+                    # 制表位顶到绝对位置；顶不过去（目标在已排内容左边）
+                    # 就不硬塞，由调用方据 pos_map 告警
+                    tab_stops.append(rel)
+                    out.append('\t')
+                    acc = rel / char_cm
+                pos_map[key] = left_cm + acc * char_cm
+            else:
+                if key in _FIXED_WIDTH_FIELDS:
+                    val = _pad_to_width(val, _FIXED_WIDTH_FIELDS[key])
+                # 记的是"值本身"的起点，前导空格不算——用户量的是数字的左沿
+                lead_sp = len(val) - len(val.lstrip(' '))
+                pos_map[key] = left_cm + (acc + lead_sp * 0.5) * char_cm
             out.append(val)
             acc += _text_width_units(val)
+            acc_ink += _text_width_units(val.replace(' ', ''))
             cur = m.end()
         tail = run.text[cur:]
         out.append(tail)
         acc += _text_width_units(tail)
+        acc_ink += _text_width_units(tail.replace(' ', ''))
         new = ''.join(out)
         if new != run.text:
             run.text = new
             changed = True
+    if tab_stops:
+        _set_tab_stops(para, tab_stops)
     return changed, pos_map
+
+
+def _set_tab_stops(para, positions_cm):
+    """给段落设置左对齐制表位（cm，相对左边距），升序去重。"""
+    from docx.enum.text import WD_TAB_ALIGNMENT
+    from docx.shared import Cm
+    tabs = para.paragraph_format.tab_stops
+    have = set()
+    try:
+        for t in tabs:
+            have.add(round(t.position.cm, 2))
+    except Exception:
+        pass
+    for pos in sorted(set(round(p, 2) for p in positions_cm)):
+        if pos <= 0 or pos in have:
+            continue
+        try:
+            tabs.add_tab_stop(Cm(pos), WD_TAB_ALIGNMENT.LEFT)
+        except Exception:
+            logger.warning('制表位 %.2fcm 添加失败', pos)
 
 
 # ---------------- 打印位置微调（随模板存盘） ----------------
@@ -632,6 +692,57 @@ def trim_nonprinting_tail(doc, log=None):
     return n
 
 
+def _tab_stops_cm(para):
+    """段落的制表位（cm，相对左边距），升序"""
+    out = []
+    try:
+        for t in para.paragraph_format.tab_stops:
+            out.append(t.position.cm)
+    except Exception:
+        pass
+    return sorted(out)
+
+
+def _tab_target(stops, used, x):
+    """一个 \t 该跳到哪儿（cm，相对左边距）。
+
+    优先按**顺序**认领制表位：填充时每定位一个字段就添一个制表位，
+    两者按升序一一对应，照序取最可靠。不能只用"第一个大于当前位置的
+    制表位"——当前位置是按字符宽度估的，而空格的实际宽度随字体变
+    （实测 TNR 里只有数字的一半），估过头就会认领不到本该属于它的那个，
+    结果差出一大截（实测把 13.00cm 报成 16.67cm）。
+    """
+    if used < len(stops):
+        return stops[used], used + 1
+    nxt = next((s for s in stops if s > x + 0.01), None)
+    return (nxt if nxt is not None else x + 0.74), used   # Word 默认制表间隔
+
+
+def _run_positions(para):
+    """产出 (墨迹左沿cm, 墨迹右沿cm, run)，相对左边距，已考虑制表位。
+
+    量的是**墨迹**的左右沿，run 里的前后空格不算——用户拿尺子量的是
+    看得见的字。
+    """
+    stops = _tab_stops_cm(para)
+    cw = _para_font_pt(para) / PT_PER_CM
+    x = 0.0
+    used = 0
+    for r in para.runs:
+        txt = r.text or ''
+        pieces = txt.split('\t')
+        start = x
+        for j, piece in enumerate(pieces):
+            if j:
+                x, used = _tab_target(stops, used, x)
+                start = x        # 跳格后，墨迹从制表位处起算
+            x += _text_width_units(piece) * cw
+        last = pieces[-1]
+        lead = _text_width_units(last[:len(last) - len(last.lstrip())]) * cw
+        trail = _text_width_units(txt[len(txt.rstrip()):]) * cw
+        yield start + lead, x - trail, r
+
+
 def print_positions(doc):
     """列出表格外每段里**会真正打印**的文字及其距纸张左边的位置（cm）。
 
@@ -646,19 +757,9 @@ def print_positions(doc):
     for para in doc.paragraphs:
         if not para.text.strip():
             continue
-        cw = _para_font_pt(para) / PT_PER_CM
-        acc = 0.0
-        for r in para.runs:
-            w = _text_width_units(r.text)
+        for x0, x1, r in _run_positions(para):
             if r.text.strip() and _run_prints(r):
-                # 量的是**墨迹**的左右沿，run 里的前后空格不算——
-                # 用户拿尺子量的是看得见的字，不是看不见的空格
-                lead = _text_width_units(r.text[:len(r.text) - len(r.text.lstrip())])
-                trail = _text_width_units(r.text[len(r.text.rstrip()):])
-                out.append((left + (acc + lead) * cw,
-                            left + (acc + w - trail) * cw,
-                            r.text.strip()))
-            acc += w
+                out.append((left + x0, left + x1, r.text.strip()))
     return out
 
 
@@ -994,6 +1095,12 @@ def wrap_segs(segs, usable_cm):
             out.append(seg)
             used = 0.0
             continue
+        pad = seg.get('pad_cm')
+        if pad is not None:
+            # 制表位摊出来的空白：宽度是算好的，不参与逐字折行
+            out.append(seg)
+            used += pad
+            continue
         char_cm = (seg.get('pt') or 14) / PT_PER_CM
         buf = ''
         for ch in seg.get('text', ''):
@@ -1050,7 +1157,19 @@ def plan_fill(template_path, values, autofit=True,
         return str(c) == 'FFFFFF'
 
     def _segs_of(para):
+        # 制表位（cm，相对左边距）；定位到位的字段靠它顶过去，
+        # 预览要照着算，否则会把 \t 当成一个普通字符画出来
+        stops = []
+        try:
+            for t in para.paragraph_format.tab_stops:
+                stops.append(t.position.cm)
+        except Exception:
+            pass
+        stops.sort()
+        char_cm = _para_font_pt(para) / PT_PER_CM
         out = []
+        x = 0.0                      # 当前排到哪儿（cm，相对左边距）
+        used = 0                     # 已认领的制表位个数
         for r in para.runs:
             if not r.text:
                 continue
@@ -1062,8 +1181,20 @@ def plan_fill(template_path, values, autofit=True,
             for i, part in enumerate(parts):
                 if i:
                     out.append({'text': '\n', 'white': white, 'pt': pt})
-                if part:
-                    out.append({'text': part, 'white': white, 'pt': pt})
+                    x = 0.0
+                    used = 0
+                if not part:
+                    continue
+                # 把 \t 摊成"到下一个制表位"的空白，预览里位置才对得上
+                for j, piece in enumerate(part.split('\t')):
+                    if j:
+                        nxt, used = _tab_target(stops, used, x)
+                        out.append({'text': ' ', 'white': True, 'pt': pt,
+                                    'pad_cm': max(0.0, nxt - x)})
+                        x = nxt
+                    if piece:
+                        out.append({'text': piece, 'white': white, 'pt': pt})
+                        x += _text_width_units(piece) * char_cm
         return out
 
     blocks = []
