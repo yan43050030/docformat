@@ -1199,6 +1199,41 @@ def test_overprint():
     assert not os.path.exists(_p3), '恢复默认应删除位置表'
     assert op.load_offsets(_tpl2) == {}, '恢复默认后应读到空表'
 
+    # ---- 表格里的字段（标题/拟办意见）也要能微调 ----
+    # 它们的制表位以**单元格左沿**为原点，不是页边距；用错原点会偏出一大截
+    import shutil as _sh3
+    _tdir2 = os.path.join(OUT_DIR, 'offtpl2')
+    os.makedirs(_tdir2, exist_ok=True)
+    _tpl3 = os.path.join(_tdir2, '送审单.docx')
+    _sh3.copyfile(tpl, _tpl3)
+    _v3 = {'标题': '关于某事项的请示', '拟办意见': '请审批。'}
+    assert '标题' in op.plan_fill(_tpl3, _v3)['adjustable'], '标题应可微调'
+    assert '拟办意见' in op.plan_fill(_tpl3, _v3)['adjustable'], '拟办意见应可微调'
+    for _w3 in ({'标题': 5.0, '拟办意见': 4.5}, {'标题': 6.2, '拟办意见': 3.6}):
+        op.save_offsets(_tpl3, _w3)
+        _pl5 = op.plan_fill(_tpl3, _v3)
+        _o6 = os.path.join(OUT_DIR, 'overprint_cell_off.docx')
+        op.fill_form(_tpl3, _v3, _o6)
+        _bk = {t.strip(): a for a, _b, t in op.print_positions(Document(_o6))}
+        for _k3, _t3 in _w3.items():
+            assert abs(_pl5['field_pos'][_k3] - _t3) < 0.01, \
+                '{} 预览 {:.3f} ≠ 设定 {:.2f}'.format(
+                    _k3, _pl5['field_pos'][_k3], _t3)
+    op.save_offsets(_tpl3, {})
+
+    # ---- 拟办意见正文首行缩进两个字（公文行文惯例）----
+    _ind = None
+    for _c3 in op._iter_cells(Document(tpl).tables[0]):
+        if '拟办意见' in _c3.text:
+            for _p3 in _c3.paragraphs:
+                if '{{拟办意见}}' in _p3.text or not _p3.text.strip('\t'):
+                    _fi = _p3.paragraph_format.first_line_indent
+                    if _fi:
+                        _ind = _fi.cm
+            break
+    assert _ind is not None and abs(_ind - 2 * 14 / op.PT_PER_CM) < 0.05, \
+        '拟办意见正文应首行缩进两字（约 0.99cm），实得 {}'.format(_ind)
+
     # ---- 预览折行按真实几何：一行放不下就必须断开 ----
     # Qt 富文本无视表格像素宽度、会把表拉满可视区，靠它折行必然偏长，
     # 所以折行在 plan 阶段按 cm 算好

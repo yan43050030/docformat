@@ -381,6 +381,33 @@ def _cell_width_cm(table, cell):
     return 16.0
 
 
+def _cell_left_cm(table, cell, page_left_cm):
+    """单元格左沿距纸张左边多少 cm（含页边距）。
+
+    表格内字段做位置微调时，制表位是以**单元格左沿**为原点的，
+    必须把这段偏移算进去，否则整体偏出一大截。
+    """
+    widths = _grid_widths(table)
+    if not widths:
+        return page_left_cm
+    for row in table.rows:
+        col = 0
+        for c in row.cells:
+            if c._tc is cell._tc:
+                return page_left_cm + sum(widths[:col]) / TWIPS_PER_CM
+            sp = 1
+            p2 = c._tc.find(qn('w:tcPr'))
+            if p2 is not None:
+                g2 = p2.find(qn('w:gridSpan'))
+                if g2 is not None:
+                    try:
+                        sp = max(1, int(g2.get(qn('w:val'))))
+                    except (TypeError, ValueError):
+                        sp = 1
+            col += sp
+    return page_left_cm
+
+
 def _cell_margins_cm(cell):
     """单元格左右内边距之和（cm），取不到按 0.19cm×2 估。"""
     tcPr = cell._tc.find(qn('w:tcPr'))
@@ -900,6 +927,20 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
     field_pos = {}          # 字段 → 实际落在距纸左边多少 cm
     adjustable = []         # 可用"位置微调"调的字段（表格外的段落）
     _left = doc.sections[0].left_margin.cm
+    # 每个单元格的左沿：表格内字段的制表位以它为原点
+    cell_left = []
+    for _t0 in doc.tables:
+        for _c0 in _iter_cells(_t0):
+            cell_left.append((_c0._tc, _cell_left_cm(_t0, _c0, _left)))
+
+    def _origin_of(cell):
+        if cell is None:
+            return _left
+        for _tc0, _x0 in cell_left:
+            if _tc0 is cell._tc:
+                return _x0
+        return _left
+
     for p, _cell in _iter_paragraphs(doc):
         in_cell = _cell is not None
         for m in PLACEHOLDER_RE.finditer(p.text):
@@ -907,12 +948,11 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
             filled.add(key)
             if key in TITLE_FIELDS and in_cell:
                 title_tcs.append(_cell._tc)
-            # 表格内的字段横向位置由格子本身定死（紧跟预印栏目名），
-            # 没有可调的空间；只有表格外的段落靠空格定位，才需要微调
-            if not in_cell and key not in adjustable:
+            if key not in adjustable:
                 adjustable.append(key)
+        # 表格内的字段也能微调，只是原点是所在单元格的左沿而不是页边距
         _ch, _pos = _replace_in_paragraph(
-            p, values, None if in_cell else offsets, _left)
+            p, values, offsets, _origin_of(_cell))
         field_pos.update(_pos)
 
     def _is_title_cell(cell, _tcs=title_tcs):

@@ -61,6 +61,7 @@ SPEC = {
     'handler_to_phone': 3.1,          # 经办人：与电话：之间
     'phone_right': 5.5,               # 「电话：」右边线距纸右侧
     'label_pt': 12.0,                 # 各栏目名字号（实测 11.9pt）
+    'title_pt': 16.0,                 # 标题正文字号
 
     # ---- 成文日期 / 落款 ----
     'ymd_year_left': 4.4, 'ymd_month_left': 5.6, 'ymd_day_left': 7.0,
@@ -300,14 +301,23 @@ def build(path, top_margin_cm=None, calib=None):
     c = merge_row(0)
     _cell_borders(c, top=True, bottom=True)
     p = c.paragraphs[0]
-    _exact_line(p, lp * 1.0,
+    # 行距按**标题正文**字号设，不能按栏目名的 12pt：标题回成两行时
+    # 12pt 的行距装不下 16pt 的字，两行会叠在一起还压出栏外
+    _exact_line(p, S['title_pt'] * 1.0,
                 before_pt=(S['title_text_top'] - S['rule_after_urgent'])
                 * 28.3465 + cal('title') * 28.3465)
+    # 悬挂缩进：第一行让出"标  题"这个栏目名的位置，回行的第二行
+    # 缩进到标题正文的起点，不然会退回格子左沿、跑到栏目名底下
+    # 3.28 是「标  题  」在渲染里的实测宽度（全角单位）——里面的空格
+    # 比半个汉字窄，按字数算会多缩进 1cm 以上
+    _hang = (S['title_left'] - body_left) + 3.28 * lp / 28.3465
+    p.paragraph_format.left_indent = Cm(_hang)
+    p.paragraph_format.first_line_indent = Cm(-_hang)
     _tabs(p, [(rel(S['title_left']), 'left')])
     p.add_run('\t')
     r = p.add_run('标  题'); r.font.size = Pt(lp); _white(r)
     r = p.add_run('  '); r.font.size = Pt(lp); _white(r)
-    r = p.add_run('{{标题}}'); r.font.size = Pt(16)
+    r = p.add_run('{{标题}}'); r.font.size = Pt(S['title_pt'])
 
     # 领导批示行
     c = merge_row(1)
@@ -331,6 +341,8 @@ def build(path, top_margin_cm=None, calib=None):
     r = p.add_run('拟办意见：'); r.font.size = Pt(lp); _white(r)
     p2 = c.add_paragraph()
     _exact_line(p2, 14 * 1.4)
+    # 正文首行缩进两个字：公文行文惯例，拟办意见是成段的话
+    p2.paragraph_format.first_line_indent = Cm(2 * 14 / 28.3465)
     r = p2.add_run('{{拟办意见}}'); r.font.size = Pt(14)
 
     # 承办部门（纵向合并两行）/ 经办人 / 文字校核
