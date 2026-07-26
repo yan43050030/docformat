@@ -220,6 +220,12 @@ class OverprintDialog(QDialog):
             "试打几次调准后就固定下来（存在模板旁边，跟着模板走）")
         self.btn_offsets.clicked.connect(self._edit_offsets)
         shape_row.addWidget(self.btn_offsets)
+        self.btn_align = QPushButton("套头对位校验…")
+        self.btn_align.setToolTip(
+            "选一份套头纸（红头文件纸）的 PDF，把本次内容叠上去看：\n"
+            "红色是纸上已印好的，黑色是打印机要印的——不用试打就能看准不准")
+        self.btn_align.clicked.connect(self._check_align)
+        shape_row.addWidget(self.btn_align)
         pv_lay.addLayout(shape_row)
         self.shape_hint = QLabel("")
         self.shape_hint.setProperty("muted", "true")
@@ -410,6 +416,14 @@ class OverprintDialog(QDialog):
                 self, "已保存",
                 "位置已保存到：\n{}\n\n先生成一份试打，对不准再回来微调。"
                 .format(overprint.offsets_path(self._template_path)))
+
+    def _check_align(self):
+        if not self._template_path:
+            return
+        from app.align_dialog import AlignDialog
+        AlignDialog(self._template_path, self._values(),
+                    title_shape=self._title_shape(),
+                    title_lines=self._title_lines(), parent=self).exec_()
 
     def _title_max_lines(self, plan):
         """标题栏按预留高度最多能放几行"""

@@ -1190,6 +1190,63 @@ def test_overprint():
     assert any('超出版心' in _s for _s in _notes2), \
         '某行超出版心时应告警：{}'.format(_notes2)
 
+    # ---- 套头对位校验：内容叠到套头纸 PDF 上 ----
+    from scripts import overlay as _ovl
+    _can, _why = _ovl.can_merge()
+    if not _can:
+        print('    （跳过套头对位：{}）'.format(_why))
+    else:
+        import fitz as _fitz
+
+        def _mk_pdf(path, w_cm=21.0, h_cm=29.7, pages=1, text='LETTERHEAD'):
+            """直接用 PyMuPDF 造测试 PDF，不依赖本机 Word/LibreOffice，
+            冒烟测试才能在任何机器上跑起来"""
+            doc = _fitz.open()
+            for i in range(pages):
+                pg = doc.new_page(width=w_cm / 2.54 * 72, height=h_cm / 2.54 * 72)
+                pg.insert_text((60, 80 + i * 14), '{} {}'.format(text, i + 1),
+                               fontsize=12)
+            doc.save(path)
+            doc.close()
+            return path
+
+        _lh = _mk_pdf(os.path.join(OUT_DIR, 'letterhead.pdf'))
+        _sz = _ovl.page_size_cm(_lh)
+        assert _sz and abs(_sz[0] - 21.0) < 0.1, '套头纸应识别为 A4 宽：{}'.format(_sz)
+        assert _ovl.page_count(_lh) == 1
+
+        _content = _mk_pdf(os.path.join(OUT_DIR, 'content.pdf'), text='CONTENT')
+        _merged = os.path.join(OUT_DIR, 'merged.pdf')
+        _mn = _ovl.merge_overlay(_content, _lh, _merged)
+        assert _ovl.page_count(_merged) == 1, '合并后应为 1 页'
+        assert not _mn, '同尺寸同页数不该有提示：{}'.format(_mn)
+        # 叠加后两边的文字都得在，才说明真叠上了而不是覆盖掉
+        _txt = _fitz.open(_merged)[0].get_text()
+        assert 'LETTERHEAD' in _txt and 'CONTENT' in _txt, \
+            '合成页应同时含套头与内容：{!r}'.format(_txt)
+
+        # 尺寸不一致要如实提示，而不是悄悄错位
+        _a5 = _mk_pdf(os.path.join(OUT_DIR, 'content_a5.pdf'), 14.8, 21.0,
+                      text='CONTENT')
+        _m2 = os.path.join(OUT_DIR, 'merged2.pdf')
+        assert any('尺寸不一致' in _s for _s in
+                   _ovl.merge_overlay(_a5, _lh, _m2)), '尺寸不符应提示'
+
+        # 内容页数多于套头时要说明超出的页没有底图
+        _multi = _mk_pdf(os.path.join(OUT_DIR, 'content3.pdf'), pages=3,
+                         text='CONTENT')
+        _m3 = os.path.join(OUT_DIR, 'merged3.pdf')
+        _n3b = _ovl.merge_overlay(_multi, _lh, _m3)
+        assert _ovl.page_count(_m3) == 3, '3 页内容应产出 3 页'
+        assert any('没有套头底图' in _s for _s in _n3b), \
+            '超出页应说明：{}'.format(_n3b)
+
+        # 渲染出图（预览靠它）
+        _png = _ovl.render_page_png(_merged, 0)
+        assert os.path.exists(_png) and os.path.getsize(_png) > 1000, '渲染 PNG 异常'
+        os.remove(_png)
+        print('    套头对位：合成/两层文字俱在/尺寸告警/页数告警/渲染 通过')
+
     print('[7o] 套打：填充/几何锁定/自适应/空值留白/预览与输出一致 + docx 适配'
           ' + 纵向合并去重 + 日期识别 10 种写法 + 标题梯形回行 + 年月日定宽 通过')
 

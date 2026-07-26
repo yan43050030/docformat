@@ -391,6 +391,17 @@ def check_dependencies():
             results.append(("ok", mod, desc + " ✓"))
         except ImportError:
             results.append(("warn", mod, desc + " ✗ 未安装"))
+
+    # 套头叠加/对位校验：缺了只影响该功能，主流程照常
+    try:
+        from scripts import overlay
+        ok, why = overlay.can_merge()
+        results.append(("ok", "PyMuPDF", "套头叠加与对位校验 ✓") if ok
+                       else ("warn", "PyMuPDF",
+                             "套头叠加与对位校验不可用（{}）；"
+                             "其余功能不受影响".format(why)))
+    except Exception:
+        pass
     return results
 
 

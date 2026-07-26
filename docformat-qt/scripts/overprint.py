@@ -192,11 +192,27 @@ def load_offsets(template_path):
     return out
 
 
-def save_offsets(template_path, offsets):
-    """写回位置微调表；传空表则删除文件（恢复默认）"""
+def load_letterhead(template_path):
+    """读取该模板绑定的套头纸 PDF 路径（用于对位校验），没有返回 ''"""
+    import json
+    try:
+        with open(offsets_path(template_path), 'r', encoding='utf-8') as f:
+            return str(json.load(f).get('套头PDF') or '')
+    except (IOError, OSError, ValueError, AttributeError):
+        return ''
+
+
+def save_offsets(template_path, offsets, letterhead=None):
+    """写回位置微调表；offsets 与套头路径都空时删除文件（恢复默认）。
+
+    与模板同名的一个 json 里放齐"对位相关的一切"：各字段的目标位置、
+    绑定的套头纸 PDF。以后要做套头自动识别，读的也是这个文件。
+    """
     import json
     p = offsets_path(template_path)
-    if not offsets:
+    if letterhead is None:
+        letterhead = load_letterhead(template_path)
+    if not offsets and not letterhead:
         try:
             os.remove(p)
         except OSError:
@@ -206,11 +222,20 @@ def save_offsets(template_path, offsets):
         '说明': '套打打印位置微调。数值 = 该字段第一个字距纸张左边缘的厘米数。'
                 '用尺子量真实预印单上空格的左沿填进来即可；留空/删除本文件恢复默认。',
         '单位': 'cm（厘米，从纸张左边缘量起，含页边距）',
-        'fields': {k: round(float(v), 2) for k, v in offsets.items()},
+        'fields': {k: round(float(v), 2) for k, v in (offsets or {}).items()},
     }
+    if letterhead:
+        payload['套头PDF'] = letterhead
+        payload['套头PDF说明'] = '套头纸（红头文件纸）的 PDF，用于不打印就校验对位'
     with open(p, 'w', encoding='utf-8') as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     return p
+
+
+def save_letterhead(template_path, letterhead):
+    """只改套头 PDF 绑定，保留已有的位置微调"""
+    return save_offsets(template_path, load_offsets(template_path),
+                        letterhead=letterhead or '')
 
 
 def _row_of_cell(table, cell):
