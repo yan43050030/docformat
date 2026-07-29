@@ -140,8 +140,6 @@ jobs:
           cp docformat-qt/packaging/docformat.desktop pkg/DocFormatPro/ || true
           cp docformat-qt/assets/icon.png pkg/DocFormatPro/ || true
           chmod 755 pkg/DocFormatPro/DocFormatPro
-          # 去掉 root 属主，让普通用户解压后可直接运行
-          chown -R 1000:1000 pkg/DocFormatPro
           tar -czf "DocFormatPro-$ver-linux-${{ matrix.arch }}.tar.gz" -C pkg DocFormatPro
           echo "RELEASE_VERSION=$ver" >> "$GITHUB_ENV"
 
