@@ -213,6 +213,23 @@ def _actual_spacing(para):
     return (before, after)
 
 
+def _followed_by_blank_paragraph(para):
+    """下一段是不是一个"看得见的空行"。
+
+    排版会把无意义的空段压成 1 磅行高（等于删掉），那种不算空行，
+    只有真正占一行高度的空段才顶得上"空一行"。
+    """
+    nxt = para._p.getnext()
+    if nxt is None or nxt.tag != qn('w:p'):
+        return False
+    from docx.text.paragraph import Paragraph
+    nxt_para = Paragraph(nxt, para._parent)
+    if nxt_para.text.strip():
+        return False
+    ls = nxt_para.paragraph_format.line_spacing
+    return ls is None or not hasattr(ls, 'pt') or ls.pt >= 6.0
+
+
 def _expected_line_spacing(fmt):
     return fmt.get('line_spacing', DEFAULT_LINE_SPACING_PT)
 
@@ -277,6 +294,11 @@ def _compare_attr(attr, fmt, para, ptype):
     if attr == 'spacing':
         exp_b = fmt.get('space_before', 0) or 0
         exp_a = fmt.get('space_after', 0) or 0
+        # 后面已经真空了一行，就不该再要段后距——两者叠起来看着像空两行。
+        # 排版侧（engine._drop_space_before_blank_lines）会撤掉段后距，
+        # 检查侧口径得跟上，否则排完再查还报"不符"。
+        if exp_a and _followed_by_blank_paragraph(para):
+            exp_a = 0
         got_b, got_a = _actual_spacing(para)
         got_b = got_b or 0
         got_a = got_a or 0

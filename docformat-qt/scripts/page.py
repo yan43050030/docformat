@@ -79,6 +79,27 @@ def _strip_autospacing_from_styles(doc):
         pass
 
 
+def _normalize_page_number_format(section):
+    """把节的「页码编号格式」拉回纯数字。
+
+    Word 的「设置页码格式 → 编号格式」可以选成 - 1 -（w:pgNumType w:fmt=
+    "numberInDash"），这时 PAGE 域本身就渲染成「- 1 -」。我们再在两边加
+    一字线，用户看到的就是「— - 1 - —」——多出来的横杠出在这里，不在页脚
+    文字上。LibreOffice 不认这个属性、照旧只显示「1」，所以在 Linux 上怎么
+    试都复现不了，只有 Word/WPS 才看得见。
+
+    页码样式既然由我们排，编号格式就得一并接管，否则两套规则叠在一起。
+    """
+    sectPr = section._sectPr
+    pg = sectPr.find(qn('w:pgNumType'))
+    if pg is None:
+        return
+    fmt = pg.get(qn('w:fmt'))
+    if fmt and fmt != 'decimal':
+        pg.set(qn('w:fmt'), 'decimal')
+        logger.info('页码编号格式 %s → decimal（避免与一字线样式叠加成「— - 1 - —」）', fmt)
+
+
 def add_page_number(
     doc,
     font_name="宋体",
@@ -138,6 +159,7 @@ def add_page_number(
 
     for section in doc.sections:
         section.odd_and_even_pages_header_footer = use_even_footer
+        _normalize_page_number_format(section)
         bottom_margin_cm = section.bottom_margin.cm if section.bottom_margin else 3.5
         footer_distance_cm = max(0.3, bottom_margin_cm - float(offset_from_text_mm) / 10)
         section.footer_distance = Cm(footer_distance_cm)
@@ -152,6 +174,14 @@ def add_page_number(
         for f in (odd_footer, even_footer, first_footer):
             for para in f.paragraphs:
                 para.clear()
+            # 页脚里的表格、块级内容控件也可能藏着旧页码——它们不在
+            # footer.paragraphs 里，只清段落会留下「- 1 -」和新页码并存
+            body = f._element
+            for child in list(body):
+                if child.tag in (qn('w:tbl'), qn('w:sdt')):
+                    body.remove(child)
+            if not f.paragraphs:
+                f.add_paragraph()
 
         def _add_field(paragraph, instruction):
             begin_run = paragraph.add_run()

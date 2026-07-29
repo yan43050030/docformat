@@ -100,6 +100,10 @@ def _ensure_structural_blank_lines(doc, line_spacing_pt=28, rules=None, type_ove
         needs_blank = (
             (prev_para_type == 'title' and para_type not in ('title', 'docnum')) or
             (prev_para_type == 'docnum' and para_type != 'docnum') or
+            # 密级与标题之间要**真空一行**。原先只给密级段后加 28 磅：看着
+            # 是空了一行，但那是段距不是行，既不占文档网格的一行，
+            # 每页 22 行也就对不上——用户反馈"实际没空行"说的就是这个。
+            (prev_para_type == 'security' and para_type in ('title', 'subtitle')) or
             (para_type == 'signature' and prev_para_type not in (None, 'signature', 'date')) or
             (para_type == 'attachment' and prev_para_type not in (None, 'attachment'))
         )
@@ -116,6 +120,33 @@ def _ensure_structural_blank_lines(doc, line_spacing_pt=28, rules=None, type_ove
         structural_blank_ids.add(id(blank_para._p))
 
     return structural_blank_ids
+
+
+def _drop_space_before_blank_lines(doc):
+    """已经空了一行，就别再叠段后距。
+
+    结尾语（"特此通知。"）预设里带 28 磅段后距，附件说明前又插了一个真空
+    行，两者叠起来看着像空了两行——用户反馈的就是这个。空行是硬要求，段后
+    距只是"看起来像"，所以留空行、去段距。密级段后距同理。
+    """
+    p_tag = qn('w:p')
+    dropped = 0
+    for para in doc.paragraphs:
+        # 认标记不认 id：结构空行的 lxml 代理是临时对象，id() 会被回收复用
+        if not _is_structural_blank(para):
+            continue
+        prev_el = para._p.getprevious()
+        if prev_el is None or prev_el.tag != p_tag:
+            continue
+        prev = Paragraph(prev_el, para._parent)
+        if not prev.text.strip():
+            continue
+        after = prev.paragraph_format.space_after
+        if after is not None and after.pt > 0:
+            prev.paragraph_format.space_after = Pt(0)
+            dropped += 1
+    if dropped:
+        logger.info('取消 %d 处与空行重复的段后距（避免看起来空两行）', dropped)
 
 
 def format_document(input_path, output_path, preset_name='official', progress_callback=None,
@@ -432,6 +463,7 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
     structural_blank_ids.update(_ensure_structural_blank_lines(
         doc, body_line_spacing, rules=_active_rules, type_overrides=type_overrides, flags=_detect_flags))
     _format_empty_paragraphs(doc, structural_blank_ids, body_line_spacing)
+    _drop_space_before_blank_lines(doc)
 
     # 落款对位
     if preset.get('gb_signature_layout'):
@@ -710,6 +742,10 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
     try:
         from .east_asian_typography import apply_chinese_line_break_rules as _apply_cn_rules
         _apply_cn_rules(doc)
+        from .east_asian_typography import apply_cn_font_to_ascii_punctuation
+        _n = apply_cn_font_to_ascii_punctuation(doc)
+        if _n:
+            logger.info('   半角括号改用中文字体：%d 处', _n)
     except ImportError:
         pass
 

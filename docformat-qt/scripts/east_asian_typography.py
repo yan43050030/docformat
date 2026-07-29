@@ -111,3 +111,76 @@ def apply_chinese_line_break_rules(document):
                 for paragraph in _iter_container_paragraphs(story, seen)
             )
     return changed_count
+
+
+# 半角括号：正文里它落在 ASCII 区，Word 一律按"西文字体"取字形，于是
+# 一句中文里冒出两个 Times New Roman 的细括号，跟前后的仿宋对不上。
+# w:hint="eastAsia" 在这里帮不上忙——Word 对 U+0000–U+007F 只认 w:ascii。
+# 能真正改掉的办法只有一个：把这几个字符单拆成 run，把它的西文字体
+# 也写成中文字体。字符本身不动（不替换成全角），排版之外的内容零改动。
+_ASCII_PUNCT_AS_CN = '()'
+_CJK = tuple(zip((0x2E80, 0x3000, 0x4E00, 0xF900, 0xFF00),
+                 (0x2EFF, 0x303F, 0x9FFF, 0xFAFF, 0xFFEF)))
+
+
+def _has_cjk(text):
+    return any(any(lo <= ord(ch) <= hi for lo, hi in _CJK) for ch in text)
+
+
+def _split_run_at_punct(run):
+    """把 run 按「半角括号 / 其余」切开，返回是否改动过。"""
+    from copy import deepcopy
+
+    text = run.text
+    if not any(ch in text for ch in _ASCII_PUNCT_AS_CN):
+        return False
+    rPr = run._r.find(qn('w:rPr'))
+    fonts = rPr.find(qn('w:rFonts')) if rPr is not None else None
+    cn = fonts.get(qn('w:eastAsia')) if fonts is not None else None
+    if not cn:
+        return False
+
+    segs = []
+    for ch in text:
+        want_cn = ch in _ASCII_PUNCT_AS_CN
+        if segs and segs[-1][0] == want_cn:
+            segs[-1][1] += ch
+        else:
+            segs.append([want_cn, ch])
+    if len(segs) == 1 and not segs[0][0]:
+        return False
+
+    r = run._r
+    parent = r.getparent()
+    at = list(parent).index(r)
+    for offset, (want_cn, chunk) in enumerate(segs):
+        new_r = deepcopy(r)
+        for t in new_r.findall(qn('w:t')):
+            new_r.remove(t)
+        t = OxmlElement('w:t')
+        t.set(qn('xml:space'), 'preserve')
+        t.text = chunk
+        new_r.append(t)
+        if want_cn:
+            new_rPr = new_r.find(qn('w:rPr'))
+            new_fonts = new_rPr.find(qn('w:rFonts')) if new_rPr is not None else None
+            if new_fonts is not None:
+                new_fonts.set(qn('w:ascii'), cn)
+                new_fonts.set(qn('w:hAnsi'), cn)
+                new_fonts.set(qn('w:cs'), cn)
+        parent.insert(at + offset, new_r)
+    parent.remove(r)
+    return True
+
+
+def apply_cn_font_to_ascii_punctuation(document):
+    """让半角括号跟着中文字体走。只处理含中文的段落。"""
+    seen = set()
+    changed = 0
+    for paragraph in _iter_container_paragraphs(document, seen):
+        if not _has_cjk(paragraph.text):
+            continue
+        for run in list(paragraph.runs):
+            if _split_run_at_punct(run):
+                changed += 1
+    return changed

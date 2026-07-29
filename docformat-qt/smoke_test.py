@@ -58,9 +58,11 @@ def test_full():
     assert abs(top - 3.7) < 0.05 and abs(bottom - 3.5) < 0.05, '上下边距错误: {} {}'.format(top, bottom)
     assert abs(left - 2.8) < 0.05 and abs(right - 2.6) < 0.05, '左右边距错误: {} {}'.format(left, right)
 
-    title_run = doc.paragraphs[1].runs[0]
-    fonts = set()
     from docx.oxml.ns import qn
+    # 密级与标题之间现在是**真空一行**，标题不再固定在第 2 段，按文字找
+    title_para = [p for p in doc.paragraphs if p.text.strip().startswith('关于')][0]
+    title_run = title_para.runs[0]
+    fonts = set()
     rpr = title_run._element.rPr
     ea = rpr.rFonts.get(qn('w:eastAsia')) if rpr is not None and rpr.rFonts is not None else None
     assert ea == '方正小标宋简体', '标题字体错误: {}'.format(ea)
@@ -1550,6 +1552,79 @@ def test_signature_closing():
     print('[7b] 署名/结束语扩充: 室/部/妥否请审示 通过')
 
 
+def test_layout_fixes():
+    """用户实测反馈的五处版式问题：空行/页码/落款/括号"""
+    from scripts.formatter import format_document
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn as _qn
+    from docx.shared import Pt as _Pt
+
+    src = os.path.join(OUT_DIR, 'layoutfix_in.docx')
+    d = Document()
+    for t in ['秘密★1年', '关于开展某某工作的通知', '各有关单位：',
+              '经研究(半角括号)决定，现将有关事项通知如下。',
+              '特此通知。', '附件：1.某某统计表', '某某市某某局', '2026年7月29日']:
+        d.add_paragraph(t)
+    # 页码编号格式设成 - 1 -（Word 的「设置页码格式」可以选到），
+    # 页脚里再塞一张藏着旧页码的表格
+    pn = OxmlElement('w:pgNumType')
+    pn.set(_qn('w:fmt'), 'numberInDash')
+    d.sections[0]._sectPr.append(pn)
+    ft = d.sections[0].footer
+    tbl = ft.add_table(1, 1, d.sections[0].page_width)
+    tbl.rows[0].cells[0].paragraphs[0].add_run('- 1 -')
+    d.save(src)
+
+    out = os.path.join(OUT_DIR, 'layoutfix_out.docx')
+    format_document(src, out, preset_name='official_gbk')
+    r = Document(out)
+    texts = [p.text.strip() for p in r.paragraphs]
+
+    def _idx(s):
+        return [i for i, t in enumerate(texts) if t.startswith(s)][0]
+
+    # ① 密级与标题之间要有一个真空行（不是靠段后距装的）
+    i_sec, i_title = _idx('秘密'), _idx('关于')
+    assert i_title == i_sec + 2 and not texts[i_sec + 1], \
+        '密级与标题之间应有一个空行：{}'.format(texts[i_sec:i_title + 1])
+    # ② 空行 + 段后距不能叠加（否则看着像空两行）
+    assert (r.paragraphs[i_sec].paragraph_format.space_after or _Pt(0)).pt == 0, \
+        '密级已空一行，不应再留段后距'
+    i_close, i_att = _idx('特此通知'), _idx('附件')
+    assert i_att == i_close + 2 and not texts[i_close + 1], '结尾语与附件之间应恰好空一行'
+    assert (r.paragraphs[i_close].paragraph_format.space_after or _Pt(0)).pt == 0, \
+        '结尾语已空一行，不应再留 28 磅段后距'
+
+    # ③ 页码：编号格式拉回纯数字，页脚里的旧页码表格清干净
+    pg = r.sections[0]._sectPr.find(_qn('w:pgNumType'))
+    assert pg is not None and pg.get(_qn('w:fmt')) == 'decimal', \
+        '页码编号格式应改回 decimal，否则 Word 里会显示成「— - 1 - —」'
+    assert not r.sections[0].footer.tables, '页脚里的旧页码表格应被清掉'
+    foot = ''.join(p.text for p in r.sections[0].footer.paragraphs)
+    assert '-' not in foot and '—' in foot, '页脚只应留一字线页码：{!r}'.format(foot)
+
+    # ④ 落款：日期右空 2 字，且不吸附文档网格（否则实测会变成 2.9 字）
+    date_p = r.paragraphs[_idx('2026年')]
+    assert abs(date_p.paragraph_format.right_indent.pt - 32) < 0.5, \
+        '日期应右空 2 字（16pt × 2）'
+    for p in (date_p, r.paragraphs[_idx('某某市')]):
+        pPr = p._p.find(_qn('w:pPr'))
+        sg = pPr.find(_qn('w:snapToGrid'))
+        assert sg is not None and sg.get(_qn('w:val')) == '0', '落款两行应关掉网格吸附'
+        assert pPr.find(_qn('w:autoSpaceDE')).get(_qn('w:val')) == '0', \
+            '落款两行应关掉中西文自动间距，否则"错 2 字"会变成错 1 字'
+
+    # ⑤ 半角括号跟中文字体走
+    body = r.paragraphs[_idx('经研究')]
+    parens = [run for run in body.runs if run.text in '()']
+    assert len(parens) == 2, '半角括号应被单独拆成 run：{}'.format([x.text for x in body.runs])
+    for run in parens:
+        rf = run._r.find(_qn('w:rPr')).find(_qn('w:rFonts'))
+        assert rf.get(_qn('w:ascii')) == '方正仿宋_GBK', \
+            '括号的西文字体应改成中文字体，实际 {}'.format(rf.get(_qn('w:ascii')))
+    print('[13] 版式修正：密级/结尾空一行不叠段距 + 页码编号格式 + 落款脱网格 + 括号中文字体 通过')
+
+
 def test_type_overrides():
     from scripts.formatter import format_document
     from docx.oxml.ns import qn as _qn
@@ -1759,4 +1834,5 @@ if __name__ == '__main__':
     test_image_protection()
     test_redaction()
     test_signature_closing()
+    test_layout_fixes()
     print('\n全部冒烟测试通过 ✓')
