@@ -71,14 +71,34 @@ jobs:
           name: DocFormat Pro ${{ env.RELEASE_VERSION }}
           files: DocFormatPro-*-windows.exe
           body: |
-            | 平台 | 文件 |
-            |---|---|
-            | Windows | `DocFormatPro-*-windows.exe`（免 Python 环境，双击运行） |
-            | 麒麟/UOS x86_64 | `DocFormatPro-*-linux-x86_64.tar.gz` |
-            | 麒麟/UOS 飞腾/鲲鹏 ARM | `DocFormatPro-*-linux-arm64.tar.gz` |
+            ## 下载哪一个
 
-            Linux 包使用：`tar xzf 包名 && ./DocFormatPro`（在 Debian 10 / glibc 2.28
-            环境构建，兼容麒麟 V10、统信 UOS 20 及更新系统）。
+            | 平台 | 绿色版（免安装，不要管理员权限） | 安装版（装进系统，需要管理员权限） |
+            |---|---|---|
+            | Windows | `DocFormatPro-*-windows.exe`（本身就是绿色版，双击即用） | — |
+            | 麒麟/UOS x86_64 | `DocFormatPro-*-linux-x86_64.tar.gz` | `docformat-pro_*_amd64.deb` |
+            | 麒麟/UOS 飞腾/鲲鹏 ARM | `DocFormatPro-*-linux-arm64.tar.gz` | `docformat-pro_*_arm64.deb` |
+
+            **绿色版**（推荐给个人电脑、内网拷贝分发）：解开就能用，全程不需要
+            管理员密码，删掉文件夹就等于卸载干净。
+
+            ```
+            tar xzf DocFormatPro-*-linux-*.tar.gz -C ~/
+            ~/DocFormatPro/启动.sh          # 双击也行
+            ~/DocFormatPro/创建桌面图标.sh   # 想要桌面图标再跑这个
+            ```
+
+            包里带了「使用说明.txt」。「启动.sh」已经替你兜住两件常见的事：
+            解压后可执行位丢失（用图形归档工具解压容易这样）、以及 `/tmp` 挂了
+            `noexec`（不少信创机器的安全基线这么配，单文件程序会因此起不来，
+            脚本会改用 `~/.cache` 下的目录）。每次发版都会用一个**没有 sudo 的
+            普通用户**真跑一遍解压 → 建图标 → 启动，跑通了才发。
+
+            **安装版**（推荐给统一部署）：`sudo dpkg -i docformat-pro_*.deb`，
+            装完在开始菜单里，所有用户都能用。
+
+            两种包都在 Debian 10 / glibc 2.28 环境构建，兼容麒麟 V10、
+            统信 UOS 20 及更新系统。
 
             **离线系统补充依赖**：若目标机器完全离线且缺少 Qt5/xcb 等系统库，
             请下载 [离线依赖应急包](../../releases/tag/deps-v1.0)（独立发布，只需下载一次）。
@@ -132,16 +152,61 @@ jobs:
               main.py
           '
 
-      - name: Package tar.gz
+      - name: Package tar.gz (绿色版)
         run: |
           ver='${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}'
           mkdir -p pkg/DocFormatPro
+          # 容器里是 root 建的产物，先接管过来再打包
+          sudo chown -R "$(id -u):$(id -g)" docformat-qt/dist
           cp docformat-qt/dist/DocFormatPro pkg/DocFormatPro/
-          cp docformat-qt/packaging/docformat.desktop pkg/DocFormatPro/ || true
+          cp docformat-qt/packaging/portable/* pkg/DocFormatPro/
           cp docformat-qt/assets/icon.png pkg/DocFormatPro/ || true
-          chmod 755 pkg/DocFormatPro/DocFormatPro
-          tar -czf "DocFormatPro-$ver-linux-${{ matrix.arch }}.tar.gz" -C pkg DocFormatPro
+          # 绿色版的前提是"普通用户解开就能用"：目录 755、脚本和主程序 755、
+          # 其余 644，且**所有人都可读可执行**——不能只给属主，否则换个用户
+          # 拿到这个包就跑不起来了
+          chmod 755 pkg/DocFormatPro
+          chmod 755 pkg/DocFormatPro/DocFormatPro pkg/DocFormatPro/*.sh
+          chmod 644 pkg/DocFormatPro/使用说明.txt
+          [ -f pkg/DocFormatPro/icon.png ] && chmod 644 pkg/DocFormatPro/icon.png
+          # 归档里把属主写成 0:0：普通用户解压时 tar 本来就忽略属主，
+          # 写成 root 只会让 `tar tvf` 看着吓人，写 0 反而干净
+          tar --owner=0 --group=0 --numeric-owner \
+              -czf "DocFormatPro-$ver-linux-${{ matrix.arch }}.tar.gz" -C pkg DocFormatPro
           echo "RELEASE_VERSION=$ver" >> "$GITHUB_ENV"
+
+      - name: Verify 绿色版 runs as an unprivileged user
+        run: |
+          # 换一个没有 sudo 的普通用户，从零解压、创建图标、真正启动一次。
+          # 绿色版最容易在"权限"上翻车，这一步就是专门盯它的——
+          # 打包机上一切正常、用户机上双击没反应，就是这么来的。
+          sudo useradd -m -s /bin/bash tester
+          sudo install -o tester -g tester -m 644 \
+            DocFormatPro-${{ env.RELEASE_VERSION }}-linux-${{ matrix.arch }}.tar.gz \
+            /home/tester/green.tar.gz
+          sudo -u tester -H bash -euc '
+            cd ~ && tar xzf green.tar.gz
+            test -x DocFormatPro/DocFormatPro || { echo "主程序没有执行位"; exit 1; }
+            test -x DocFormatPro/启动.sh       || { echo "启动脚本没有执行位"; exit 1; }
+            test -r DocFormatPro/使用说明.txt   || { echo "说明文件读不了"; exit 1; }
+
+            # 桌面图标：无 root、无桌面环境下也要能装好
+            ./DocFormatPro/创建桌面图标.sh
+            entry=~/.local/share/applications/docformat-pro.desktop
+            test -f "$entry" || { echo "桌面入口没写成"; exit 1; }
+            grep -q "^Exec=.*启动.sh" "$entry" || { echo "Exec 指错了"; cat "$entry"; exit 1; }
+
+            # 真正跑一次。--version 不开界面，没有 X 也能验
+            out=$(./DocFormatPro/启动.sh --version 2>&1) || {
+              echo "普通用户启动失败："; echo "$out"; exit 1; }
+            echo "$out" | grep -q "DocFormat Pro" || {
+              echo "启动了但输出不对："; echo "$out"; exit 1; }
+            echo "普通用户启动 OK：$out"
+
+            # 启动脚本应该把解包目录挪到家目录下（/tmp 挂 noexec 时的兜底）
+            test -d ~/.cache/docformat-pro/run || {
+              echo "没有改用家目录缓存，/tmp noexec 的机器上会起不来"; exit 1; }
+          '
+          sudo userdel -r tester
 
       - name: Build .deb (麒麟/UOS 双击安装包)
         run: |
@@ -173,12 +238,31 @@ jobs:
           PST
           chmod 755 deb/DEBIAN/postinst
 
-          # 复制文件
+          # 桌面入口：装到系统里就是跑 /opt 下那个单文件，不是跑源码。
+          # packaging/docformat.desktop 是**源码部署**用的模板（Exec 里还留着
+          # @APP_DIR@ 占位符），直接拷进 deb 会得到一个点不开的图标。
+          cat > deb/usr/share/applications/docformat-pro.desktop << 'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=DocFormat Pro
+          Name[zh_CN]=DocFormat Pro 公文排版
+          Comment=公文格式自动排版工具 (GB/T 9704-2012)
+          Exec=/opt/docformat-pro/DocFormatPro
+          Icon=docformat-pro
+          Terminal=false
+          Categories=Office;WordProcessor;
+          StartupNotify=true
+          DESKTOP
+
           cp docformat-qt/dist/DocFormatPro deb/opt/docformat-pro/
-          cp docformat-qt/packaging/docformat.desktop deb/usr/share/applications/ || true
           cp docformat-qt/assets/icon.png deb/usr/share/icons/hicolor/256x256/apps/docformat-pro.png || true
+          chmod 755 deb/opt/docformat-pro/DocFormatPro
+          chmod 644 deb/usr/share/applications/docformat-pro.desktop
 
           dpkg-deb --build deb "$deb_name.deb"
+          # 装完点不开是最常见的翻车方式，这里当场验一遍入口和权限
+          dpkg-deb -c "$deb_name.deb" | grep -q '/opt/docformat-pro/DocFormatPro'
+          dpkg-deb -c "$deb_name.deb" | grep -E 'DocFormatPro$' | grep -q 'rwxr-xr-x'
           echo "DEB_NAME=$deb_name" >> "$GITHUB_ENV"
 
       - name: Upload build artifact

@@ -55,6 +55,14 @@ def resource_path(name):
 
 
 def main():
+    # --version / -v：不开界面就报个版本号。装机、远程支持、打包后的
+    # 冒烟验证都用得上——尤其是绿色版，"到底能不能在这台机器上跑起来"
+    # 用它一句话就能验，不必先有桌面环境。
+    if len(sys.argv) > 1 and sys.argv[1] in ('--version', '-v'):
+        from app.main_window import VERSION
+        print('DocFormat Pro {}'.format(VERSION))
+        return
+
     # HiDPI 支持（国产整机 4K 屏 / Windows 125%、150% 缩放）
     # PassThrough 让 1.25x/1.5x 等非整数缩放按真实比例渲染，避免模糊或过大
     if hasattr(Qt, 'HighDpiScaleFactorRoundingPolicy'):
