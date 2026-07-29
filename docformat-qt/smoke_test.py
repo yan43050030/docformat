@@ -779,9 +779,12 @@ def test_overprint():
     # 承办部门/经办人 那一行是左右两栏，竖线在距纸右侧 12cm 处（实测），
     # 即左栏 6.9cm、右栏 9.9cm——不能被读成"平均分"
     assert 6.5 < _w('承办部门') < 7.3, '左栏宽应约 6.9cm: {}'.format(widths)
-    assert 9.5 < _w('经 办 人') < 10.3, '右栏宽应约 9.9cm: {}'.format(widths)
-    assert abs(_w('承办部门') + _w('经 办 人') - _w('领导批示')) < 0.1, \
+    assert 9.5 < _w('经办人') < 10.3, '右栏宽应约 9.9cm: {}'.format(widths)
+    assert abs(_w('承办部门') + _w('经办人') - _w('领导批示')) < 0.1, \
         '两栏之和应等于表宽: {}'.format(widths)
+    # 标题栏被竖线分成两格：竖线与「紧急程度：」冒号后第一个字的左边线齐
+    assert 2.7 < _w('标  题') < 3.0, '标题栏目名格宽应约 2.87cm: {}'.format(widths)
+    assert 13.6 < _w('{{标题}}') < 14.2, '标题正文格宽应约 13.93cm: {}'.format(widths)
 
     base = {'紧急程度': '特急', '密级': '秘密★1年', '标题': '关于报送年度总结的请示',
             '承办部门': '办公室', '经办人': '张三', '电话': '12345678',
@@ -978,7 +981,7 @@ def test_overprint():
         balltext += '\n' + cell.text
     assert not _re.findall(r'\{\{[^}]*\}\}', balltext), \
         '留空字段残留占位符: {}'.format(_re.findall(r'\{\{[^}]*\}\}', balltext))
-    assert '经 办 人：' in balltext, '留空后标签仍应在（打印出来是空白供手写）'
+    assert '经办人：' in balltext, '留空后标签仍应在（打印出来是空白供手写）'
 
     # --- 预览：与实际输出同一条填充路径，字号必须一致 ---
     pv_vals = dict(base)
@@ -1311,8 +1314,9 @@ def test_overprint():
                     if _fi:
                         _ind = _fi.cm
             break
-    assert _ind is not None and abs(_ind - 2 * 14 / op.PT_PER_CM) < 0.05, \
-        '拟办意见正文应首行缩进两字（约 0.99cm），实得 {}'.format(_ind)
+    # 拟办意见填的是小三（15pt）方正仿宋，两个字就是 2×15/28.3465
+    assert _ind is not None and abs(_ind - 2 * 15 / op.PT_PER_CM) < 0.05, \
+        '拟办意见正文应首行缩进两字（约 1.06cm），实得 {}'.format(_ind)
 
     # ---- 预览折行按真实几何：一行放不下就必须断开 ----
     # Qt 富文本无视表格像素宽度、会把表拉满可视区，靠它折行必然偏长，
@@ -1550,6 +1554,86 @@ def test_signature_closing():
     # 结束语：妥否，请审示。
     assert detect_para_type('妥否，请审示。', 8, 12, None, ['a']*10, 8, rules=rules) == 'closing'
     print('[7b] 署名/结束语扩充: 室/部/妥否请审示 通过')
+
+
+def test_overprint_fonts():
+    """送审单模板的字体字号：预印栏目名 + 填写内容，按真实预印纸"""
+    from docx.oxml.ns import qn as _qn
+    from scripts import overprint as op
+    tpl = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       'templates', '套打', '文件送审单.docx')
+    doc = Document(tpl)
+
+    def _runs():
+        for p in doc.paragraphs:
+            for r in p.runs:
+                yield r
+        for t in doc.tables:
+            for c in op._iter_cells(t):
+                for p in c.paragraphs:
+                    for r in p.runs:
+                        yield r
+
+    got = {}
+    for r in _runs():
+        txt = r.text.strip()
+        if not txt:
+            continue
+        rPr = r._r.find(_qn('w:rPr'))
+        rf = rPr.find(_qn('w:rFonts')) if rPr is not None else None
+        if rf is None or r.font.size is None:
+            continue
+        got[txt] = (rf.get(_qn('w:eastAsia')), rf.get(_qn('w:ascii')),
+                    r.font.size.pt, bool(r.font.bold))
+
+    want = {
+        # 预印在纸上的（白字占位）
+        '中国某地市某单位': ('方正大标宋简体', 18.0),      # 小二
+        '文件送审单': ('方正大标宋简体', 22.0),            # 二号
+        '紧急程度：': ('方正楷体_GBK', 14.0),              # 四号
+        '密级：': ('方正楷体_GBK', 14.0),
+        '标  题': ('方正楷体_GBK', 14.0),
+        '领导批示：': ('方正楷体_GBK', 14.0),
+        '拟办意见：': ('方正楷体_GBK', 14.0),
+        '承办部门：': ('方正楷体_GBK', 14.0),
+        '经办人：': ('方正楷体_GBK', 14.0),
+        '电话：': ('方正楷体_GBK', 14.0),
+        '文字校核：': ('方正楷体_GBK', 14.0),
+        '年': ('方正楷体_GBK', 14.0),
+        '某地市某某单位的办公室制': ('方正楷体_GBK', 14.0),
+        # 要打印出来的
+        '{{标题}}': ('方正小标宋_GBK', 16.0),              # 三号
+        '{{紧急程度}}': ('方正楷体_GBK', 14.0),
+        '{{密级}}': ('方正楷体_GBK', 14.0),
+        '{{拟办意见}}': ('方正仿宋_GBK', 15.0),            # 小三
+        '{{承办部门}}': ('方正楷体_GBK', 14.0),
+    }
+    for txt, (font, size) in want.items():
+        assert txt in got, '模板里找不到 {!r}'.format(txt)
+        ea, _ascii, pt, bold = got[txt]
+        assert ea == font, '{!r} 中文字体应为 {}，实为 {}'.format(txt, font, ea)
+        assert abs(pt - size) < 0.01, '{!r} 字号应为 {}，实为 {}'.format(txt, size, pt)
+        assert bold, '{!r} 应加粗'.format(txt)
+    # 电话与年月日的数字走西文字体
+    for txt in ('{{电话}}', '{{年}}', '{{月}}', '{{日}}'):
+        ea, ascii_, pt, bold = got[txt]
+        assert ascii_ == 'Times New Roman' and ea == 'Times New Roman', \
+            '{!r} 数字应用 Times New Roman，实为 {}/{}'.format(txt, ea, ascii_)
+        assert abs(pt - 14.0) < 0.01 and bold, '{!r} 应四号加粗'.format(txt)
+
+    # 标题居中，且居中的是竖线右边那一格
+    tbl = doc.tables[0]
+    title_cell = [c for c in op._iter_cells(tbl) if '{{标题}}' in c.text][0]
+    from docx.enum.text import WD_ALIGN_PARAGRAPH as _WAP
+    assert title_cell.paragraphs[0].alignment == _WAP.CENTER, '标题应居中'
+    label_cell = [c for c in op._iter_cells(tbl) if c.text.strip() == '标  题'][0]
+    lw = op._cell_width_cm(tbl, label_cell)
+    # 竖线 = 版心左 2.1 + 栏目名格宽，应与「紧急程度：」冒号后第一个字对齐
+    vline = 2.1 + lw
+    assert abs(vline - (2.5 + 5 * 14 / op.PT_PER_CM)) < 0.02, \
+        '标题右侧竖线应与紧急程度冒号后第一个字左边线一致，实得 {:.2f}cm'.format(vline)
+    print('[14] 套打模板字体：预印小二/二号大标宋 + 四号楷体，'
+          '填写三号小标宋标题(居中)/小三仿宋意见/TNR 数字 通过')
 
 
 def test_layout_fixes():
@@ -1834,5 +1918,6 @@ if __name__ == '__main__':
     test_image_protection()
     test_redaction()
     test_signature_closing()
+    test_overprint_fonts()
     test_layout_fixes()
     print('\n全部冒烟测试通过 ✓')

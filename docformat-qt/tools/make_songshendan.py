@@ -17,11 +17,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.enum.text import WD_LINE_SPACING, WD_TAB_ALIGNMENT
+from docx.enum.text import (WD_ALIGN_PARAGRAPH, WD_LINE_SPACING,
+                            WD_TAB_ALIGNMENT)
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
+PT_PER_CM = 28.3465
 W = 21.0                     # 纸宽（实测=标称）
 # 纸高用标称 A4 的 29.7：用户尺子读数 29.6 是量纸误差，而"距纸下边多少"
 # 这个关系必须相对**真实纸边**成立，所以按 29.7 换算（照 29.6 算会整体高 1mm）
@@ -33,11 +35,10 @@ SPEC = {
     'head1_top': 2.8,        # 单位名称行 上边线距纸上边
     'head1_left': 5.3,       # 距纸左侧
     'head1_right': 5.0,      # 距纸右侧
-    'head1_pt': 15.0, 'head1_spacing_cm': 0.2, 'head1_gap_cm': 0.9,
+    'head1_gap_cm': 0.9,     # 两组单位名之间的空当
     'head2_top': 3.7,        # 「文件送审单」上边线
     'head2_bottom': 4.5,     # 下边线
     'head2_left': 7.7, 'head2_right': 7.5,
-    'head2_pt': 18.0, 'head2_spacing_cm': 0.656,   # 字高实测 0.80cm 反推
 
     # ---- 紧急程度 / 密级 ----
     'urgent_left': 2.5,      # 「紧急程度：」左边线
@@ -60,15 +61,13 @@ SPEC = {
     'handler_right': 9.8,             # 「经办人：」右边线距纸右侧
     'handler_to_phone': 3.1,          # 经办人：与电话：之间
     'phone_right': 5.5,               # 「电话：」右边线距纸右侧
-    'label_pt': 12.0,                 # 各栏目名字号（实测 11.9pt）
-    'title_pt': 16.0,                 # 标题正文字号
 
     # ---- 成文日期 / 落款 ----
     'ymd_year_left': 4.4, 'ymd_month_left': 5.6, 'ymd_day_left': 7.0,
     'sign_left_from_right': 8.1,      # 落款首字左边线距纸右侧
     'sign_right_from_right': 2.2,     # 落款尾字右边线距纸右侧
     'sign_bottom_from_bottom': 2.2,   # 该行下边线距纸下面
-    'sign_pt': 14.0, 'sign_text': '某地市某某单位的办公室制',
+    'sign_text': '某地市某某单位的办公室制',
 
     # ---- 长红线左右 ----
     'rule_side': 2.1,
@@ -77,6 +76,61 @@ SPEC = {
 HEAD1_LEFT_TEXT = '中国某地市某单位'      # 8 字
 HEAD1_RIGHT_TEXT = '某地市某单位'          # 6 字
 HEAD2_TEXT = '文件送审单'
+
+# ---------------------------------------------------------------- 字体
+# 预印纸上的字体与字号由用户照实说明，公文号数换算：
+#   小二 18pt   二号 22pt   三号 16pt   小三 15pt   四号 14pt
+# 元组是 (中文字体, 西文字体, 字号pt, 是否加粗)。
+#
+# 白字栏目名的字体也得给准：它不显影，但它有多宽决定了紧跟其后的
+# 黑字从哪儿开始印。字号猜小了，填的内容就整体左移。
+F_HEAD1 = ('方正大标宋简体', 'Times New Roman', 18.0, True)   # 顶端单位名称
+F_HEAD2 = ('方正大标宋简体', 'Times New Roman', 22.0, True)   # 文件送审单
+F_LABEL = ('方正楷体_GBK', 'Times New Roman', 14.0, True)     # 各栏目名
+F_SIGN = ('方正楷体_GBK', 'Times New Roman', 14.0, True)      # 落款
+# ---- 以下是"要打印出来"的内容 ----
+F_TITLE = ('方正小标宋_GBK', 'Times New Roman', 16.0, True)   # 标题
+F_TEXT = ('方正楷体_GBK', 'Times New Roman', 14.0, True)      # 紧急程度/密级/承办部门/经办人/文字校核
+F_OPINION = ('方正仿宋_GBK', 'Times New Roman', 15.0, True)   # 拟办意见
+F_NUM = ('Times New Roman', 'Times New Roman', 14.0, True)    # 电话、年月日的数字
+
+LABEL_PT = F_LABEL[2]
+TITLE_PT = F_TITLE[2]
+SIGN_PT = F_SIGN[2]
+
+
+def _font(run, spec):
+    """按 (中文, 西文, 磅, 粗) 设置字体。"""
+    cn, en, pt, bold = spec
+    run.font.size = Pt(pt)
+    run.font.bold = bold
+    rPr = run._r.get_or_add_rPr()
+    rFonts = rPr.find(qn('w:rFonts'))
+    if rFonts is None:
+        rFonts = OxmlElement('w:rFonts')
+        rPr.insert(0, rFonts)
+    rFonts.set(qn('w:eastAsia'), cn)
+    rFonts.set(qn('w:ascii'), en)
+    rFonts.set(qn('w:hAnsi'), en)
+    rFonts.set(qn('w:cs'), en)
+    return run
+
+
+def _track(total_cm, n_chars, pt):
+    """由实测的整段宽度反推字距。
+
+    文件头那两行在纸上是拉开排的，字距不是随便定的常数——量出来的左右
+    边线之间要正好放下 n 个字，字距只能由它解出来：
+        总宽 = n × 字宽 + (n-1) × 字距
+    """
+    if n_chars < 2:
+        return 0.0
+    return (total_cm - n_chars * pt / PT_PER_CM) / (n_chars - 1)
+
+
+def _lw(label, pt=None):
+    """栏目名的宽度（cm）。全是全角字，宽度就是字数 × 字号，与字体无关。"""
+    return len(label) * (pt or LABEL_PT) / PT_PER_CM
 
 
 def _white(run):
@@ -190,48 +244,59 @@ def build(path, top_margin_cm=None, calib=None):
         return x_cm - (body_left if origin is None else origin)
 
     # ---------- 文件头第一行：单位名称 ----------
+    head1_pt = F_HEAD1[2]
+    # 两组名称之间还夹着 0.9cm 空当，字距要从"净宽"里解
+    head1_span = (W - S['head1_right']) - S['head1_left'] - S['head1_gap_cm']
+    head1_track = _track(head1_span,
+                         len(HEAD1_LEFT_TEXT) + len(HEAD1_RIGHT_TEXT), head1_pt)
+    # 第二组的起点直接用制表位，不再拿"定宽空格"顶：空格有多宽随字体变，
+    # 顶出来的空当也就跟着变（实测差 0.26cm）。制表位是绝对位置，不受影响。
+    head1_g2 = (S['head1_left'] + len(HEAD1_LEFT_TEXT) * head1_pt / PT_PER_CM
+                + (len(HEAD1_LEFT_TEXT) - 1) * head1_track + S['head1_gap_cm'])
     p = doc.add_paragraph()
-    _exact_line(p, S['head1_pt'] * 1.0)
-    _tabs(p, [(rel(S['head1_left']), 'left')])
+    _exact_line(p, head1_pt * 1.0)
+    _tabs(p, [(rel(S['head1_left']), 'left'), (rel(head1_g2), 'left')])
     p.add_run('\t')
     r = p.add_run(HEAD1_LEFT_TEXT)
-    r.font.size = Pt(S['head1_pt'])
-    _white(r); _set_spacing(r, S['head1_spacing_cm'])
-    # 两组之间的间距：用一个定宽空 run 顶开（0.9cm 减掉末字多出的字距）
-    gap = p.add_run(' ')
-    gap.font.size = Pt(S['head1_pt'])
-    _white(gap); _set_spacing(gap, S['head1_gap_cm'] - 0.5 * S['head1_pt'] / 28.3465
-                            + cal('head1_gap'))
+    _font(r, F_HEAD1); _white(r); _set_spacing(r, head1_track)
+    p.add_run('\t')
     r = p.add_run(HEAD1_RIGHT_TEXT)
-    r.font.size = Pt(S['head1_pt'])
-    _white(r); _set_spacing(r, S['head1_spacing_cm'])
+    _font(r, F_HEAD1); _white(r); _set_spacing(r, head1_track)
 
     # ---------- 文件头第二行：文件送审单 ----------
+    head2_pt = F_HEAD2[2]
+    head2_track = _track((W - S['head2_right']) - S['head2_left'],
+                         len(HEAD2_TEXT), head2_pt)
     p = doc.add_paragraph()
-    _exact_line(p, S['head2_pt'] * 1.0,
+    _exact_line(p, head2_pt * 1.0,
                 before_pt=(S['head2_top'] - S['head1_top']
-                           - S['head1_pt'] / 28.3465) * 28.3465 + cal('head2') * 28.3465)
+                           - head1_pt / PT_PER_CM) * PT_PER_CM + cal('head2') * PT_PER_CM)
     _tabs(p, [(rel(S['head2_left']), 'left')])
     p.add_run('\t')
     r = p.add_run(HEAD2_TEXT)
-    r.font.size = Pt(S['head2_pt'])
-    _white(r); _set_spacing(r, S['head2_spacing_cm'])
+    _font(r, F_HEAD2); _white(r); _set_spacing(r, head2_track)
 
     # ---------- 紧急程度 / 密级 ----------
-    lp = S['label_pt']
+    lp = LABEL_PT
     p = doc.add_paragraph()
     _exact_line(p, lp * 1.4,
                 before_pt=(S['rule_after_urgent'] - 0.55 - S['head2_bottom'])
-                * 28.3465 + cal('urgent') * 28.3465)
-    sec_w = 3 * lp / 28.3465            # 「密级：」三个字
+                * PT_PER_CM + cal('urgent') * PT_PER_CM)
+    # 「密级：」用户量的是**右边线**（冒号的右沿），填的字紧接其后。
+    # 这里给栏目名和填写位各一个左制表位：填写位钉在实测的右边线上，
+    # 栏目名往左退它自己的宽度。栏目名全是全角字，宽度 = 字数 × 字号，
+    # 与具体字体无关，所以这样算是准的；右对齐制表位反而靠不住——
+    # 一旦栏目名退到容器左沿以外，渲染器会把它顶回来，后面的制表位
+    # 全跟着串位（实测「电话」错出 1.5cm）。
+    sec_x = W - S['sec_right']
     _tabs(p, [(rel(S['urgent_left']), 'left'),
-              (rel(W - S['sec_right'] - sec_w), 'left')])
+              (rel(sec_x - _lw('密级：')), 'left')])
     p.add_run('\t')
-    r = p.add_run('紧急程度：'); r.font.size = Pt(lp); _white(r)
-    r = p.add_run('{{紧急程度}}'); r.font.size = Pt(lp)
+    r = p.add_run('紧急程度：'); _font(r, F_LABEL); _white(r)
+    r = p.add_run('{{紧急程度}}'); _font(r, F_TEXT)
     p.add_run('\t')
-    r = p.add_run('密级：'); r.font.size = Pt(lp); _white(r)
-    r = p.add_run('{{密级}}'); r.font.size = Pt(lp)
+    r = p.add_run('密级：'); _font(r, F_LABEL); _white(r)
+    r = p.add_run('{{密级}}'); _font(r, F_TEXT)
 
     # ---------- 表格 ----------
     rows = [
@@ -241,14 +306,18 @@ def build(path, top_margin_cm=None, calib=None):
         ('dept1', S['rule_mid_right'] - S['rule_after_opinion']),
         ('dept2', S['rule_bottom'] - S['rule_mid_right']),
     ]
-    table = doc.add_table(rows=len(rows), cols=2)
+    # 三列网格：标题栏的竖线和承办部门栏的竖线不在同一处，两条竖线各占
+    # 一个网格线，用 gridSpan 合并出各行实际的分栏。
+    #   ├ 2.10 ── 标题竖线 ── 承办部门竖线 ── 18.90 ┤
+    title_vline = S['urgent_left'] + 5 * LABEL_PT / PT_PER_CM
+    dept_vline = W - S['vline_from_right']
+    edges = [body_left, title_vline, dept_vline, W - S['rule_side']]
+    widths = [edges[i + 1] - edges[i] for i in range(3)]
+    table = doc.add_table(rows=len(rows), cols=3)
     table.alignment = WD_TABLE_ALIGNMENT.LEFT
     table.autofit = False
-    col_l = S['vline_from_right']            # 左列宽 = 竖线位置 - 版心左
-    left_w = (W - S['vline_from_right']) - body_left
-    right_w = (W - S['rule_side']) - (W - S['vline_from_right'])
     grid = table._tbl.find(qn('w:tblGrid'))
-    for gc, wcm in zip(grid.findall(qn('w:gridCol')), (left_w, right_w)):
+    for gc, wcm in zip(grid.findall(qn('w:gridCol')), widths):
         gc.set(qn('w:w'), str(int(round(wcm * 566.93))))
     # 表格整体不缩进。关键是把**表级**单元格内边距归零：Word/LO 会把
     # 表格左沿放在"左边距 − 单元格左内边距"处，默认 0.19cm，
@@ -281,7 +350,7 @@ def build(path, top_margin_cm=None, calib=None):
         _row_height(table.rows[i], h)
         # 显式写 tcW：只改 tblGrid 的话，读宽度的代码（自适应、预览）
         # 会退回"平均分"，与真实版面不符
-        for c, wcm in zip(table.rows[i].cells, (left_w, right_w)):
+        for c, wcm in zip(table.rows[i].cells, widths):
             c.width = Cm(wcm)
         for c in table.rows[i].cells:
             c.vertical_alignment = None
@@ -293,41 +362,45 @@ def build(path, top_margin_cm=None, calib=None):
                 mar.append(e)
             tcPr.append(mar)
 
-    def merge_row(i):
-        c = table.rows[i].cells[0].merge(table.rows[i].cells[1])
+    def merge_row(i, a=0, b=2):
+        c = table.rows[i].cells[a]
+        for j in range(a + 1, b + 1):
+            c = c.merge(table.rows[i].cells[j])
         return c
 
-    # 标题行：整行合并
-    c = merge_row(0)
-    _cell_borders(c, top=True, bottom=True)
+    # 标题行：栏目名单占一格，标题正文在竖线右边的格子里**居中**。
+    # 竖线的位置来自实测——与「紧急程度：」冒号后第一个字的左边线对齐。
+    c = table.rows[0].cells[0]
+    _cell_borders(c, top=True, bottom=True, right=True)
     p = c.paragraphs[0]
-    # 行距按**标题正文**字号设，不能按栏目名的 12pt：标题回成两行时
-    # 12pt 的行距装不下 16pt 的字，两行会叠在一起还压出栏外
-    _exact_line(p, S['title_pt'] * 1.0,
+    _exact_line(p, lp * 1.0,
                 before_pt=(S['title_text_top'] - S['rule_after_urgent'])
-                * 28.3465 + cal('title') * 28.3465)
-    # 悬挂缩进：第一行让出"标  题"这个栏目名的位置，回行的第二行
-    # 缩进到标题正文的起点，不然会退回格子左沿、跑到栏目名底下
-    # 3.28 是「标  题  」在渲染里的实测宽度（全角单位）——里面的空格
-    # 比半个汉字窄，按字数算会多缩进 1cm 以上
-    _hang = (S['title_left'] - body_left) + 3.28 * lp / 28.3465
-    p.paragraph_format.left_indent = Cm(_hang)
-    p.paragraph_format.first_line_indent = Cm(-_hang)
+                * PT_PER_CM + cal('title') * PT_PER_CM)
     _tabs(p, [(rel(S['title_left']), 'left')])
     p.add_run('\t')
-    r = p.add_run('标  题'); r.font.size = Pt(lp); _white(r)
-    r = p.add_run('  '); r.font.size = Pt(lp); _white(r)
-    r = p.add_run('{{标题}}'); r.font.size = Pt(S['title_pt'])
+    r = p.add_run('标  题'); _font(r, F_LABEL); _white(r)
+
+    c = merge_row(0, 1, 2)
+    _cell_borders(c, top=True, bottom=True)
+    p = c.paragraphs[0]
+    # 行距按**标题正文**字号设，不能按栏目名的字号：标题回成两行时
+    # 小字号的行距装不下大字，两行会叠在一起还压出栏外
+    _exact_line(p, TITLE_PT * 1.0,
+                before_pt=(S['title_text_top'] - S['rule_after_urgent'])
+                * PT_PER_CM + cal('title') * PT_PER_CM)
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = p.add_run('{{标题}}'); _font(r, F_TITLE)
 
     # 领导批示行
     c = merge_row(1)
     _cell_borders(c, bottom=True)
     p = c.paragraphs[0]
     _exact_line(p, lp * 1.0,
-                before_pt=(S['lead_text_top'] - S['rule_after_title']) * 28.3465 + cal('lead') * 28.3465)
+                before_pt=(S['lead_text_top'] - S['rule_after_title']) * PT_PER_CM
+                + cal('lead') * PT_PER_CM)
     _tabs(p, [(rel(S['lead_left']), 'left')])
     p.add_run('\t')
-    r = p.add_run('领导批示：'); r.font.size = Pt(lp); _white(r)
+    r = p.add_run('领导批示：'); _font(r, F_LABEL); _white(r)
 
     # 拟办意见行
     c = merge_row(2)
@@ -335,60 +408,67 @@ def build(path, top_margin_cm=None, calib=None):
     p = c.paragraphs[0]
     _exact_line(p, lp * 1.0,
                 before_pt=(S['opinion_text_top'] - S['rule_before_opinion'])
-                * 28.3465 + cal('opinion') * 28.3465)
+                * PT_PER_CM + cal('opinion') * PT_PER_CM)
     _tabs(p, [(rel(S['lead_left']), 'left')])
     p.add_run('\t')
-    r = p.add_run('拟办意见：'); r.font.size = Pt(lp); _white(r)
+    r = p.add_run('拟办意见：'); _font(r, F_LABEL); _white(r)
     p2 = c.add_paragraph()
-    _exact_line(p2, 14 * 1.4)
-    # 正文首行缩进两个字：公文行文惯例，拟办意见是成段的话
-    p2.paragraph_format.first_line_indent = Cm(2 * 14 / 28.3465)
-    r = p2.add_run('{{拟办意见}}'); r.font.size = Pt(14)
+    _exact_line(p2, F_OPINION[2] * 1.4)
+    # 正文首行缩进两个字：公文行文惯例，拟办意见是成段的话。
+    # 起算点是栏目名的左边线（不是格子左沿），这样"空两格"是相对
+    # 「拟办意见：」那一列说的，看着才齐。
+    p2.paragraph_format.left_indent = Cm(S['lead_left'] - body_left)
+    p2.paragraph_format.first_line_indent = Cm(2 * F_OPINION[2] / PT_PER_CM)
+    r = p2.add_run('{{拟办意见}}'); _font(r, F_OPINION)
 
     # 承办部门（纵向合并两行）/ 经办人 / 文字校核
-    left_cell = table.rows[3].cells[0].merge(table.rows[4].cells[0])
+    left_cell = merge_row(3, 0, 1).merge(merge_row(4, 0, 1))
     _cell_borders(left_cell, bottom=True, right=True)
     p = left_cell.paragraphs[0]
     _exact_line(p, lp * 1.0,
                 before_pt=(S['dept_text_top'] - S['rule_after_opinion'])
-                * 28.3465 + cal('dept') * 28.3465)
+                * PT_PER_CM + cal('dept') * PT_PER_CM)
     _tabs(p, [(rel(S['lead_left']), 'left')])
     p.add_run('\t')
-    r = p.add_run('承办部门：'); r.font.size = Pt(lp); _white(r)
-    r = p.add_run('{{承办部门}}'); r.font.size = Pt(lp)
+    r = p.add_run('承办部门：'); _font(r, F_LABEL); _white(r)
+    r = p.add_run('{{承办部门}}'); _font(r, F_TEXT)
 
-    hl = W - S['handler_right'] - 4 * lp / 28.3465      # 「经 办 人：」左沿
-    ph = W - S['phone_right'] - 3 * lp / 28.3465        # 「电话：」左沿
-    for ri, (label, key, top_cm, prev_rule) in (
-            (3, ('经 办 人：', '经办人', S['handler_text_top'], S['rule_after_opinion'])),
-            (4, ('文字校核：', '文字校核', S['check_text_top'], S['rule_mid_right']))):
-        c = table.rows[ri].cells[1]
+    # 用户量的是「经办人：」「电话：」的**右沿**（含冒号），填的字紧接其后。
+    # 同上：填写位钉在实测右沿，栏目名往左退自己的宽度；退过了单元格
+    # 左沿就贴着左沿放（「文字校核：」比「经办人：」长一个字，真会顶出去）。
+    hr = W - S['handler_right']
+    pr = W - S['phone_right']
+    cell_left = dept_vline                     # 右列单元格左沿
+    for ri, (label, key, top_cm, prev_rule, fld_font) in (
+            (3, ('经办人：', '经办人', S['handler_text_top'],
+                 S['rule_after_opinion'], F_TEXT)),
+            (4, ('文字校核：', '文字校核', S['check_text_top'],
+                 S['rule_mid_right'], F_TEXT))):
+        c = table.rows[ri].cells[2]
         _cell_borders(c, bottom=True)
         p = c.paragraphs[0]
         _exact_line(p, lp * 1.0,
-                    before_pt=(top_cm - prev_rule + cal('handler')) * 28.3465)
-        cell_left = W - S['vline_from_right']      # 右列单元格左沿
-        # 用户量的是「经办人：」「电话：」的**右沿**（含冒号）。栏目名里
-        # 有没有空格、多宽，靠字数猜不准，改由实测偏差校准左制表位。
-        ckey = 'handler_x' if ri == 3 else 'check_x'   # 校准键，别和字段名 key 撞
-        stops = [(rel(hl + cal(ckey), cell_left), 'left')]
+                    before_pt=(top_cm - prev_rule + cal('handler')) * PT_PER_CM)
+        stops = [(max(0.02, rel(hr - _lw(label), cell_left)), 'left')]
         if ri == 3:
-            stops.append((rel(ph + cal('phone_x'), cell_left), 'left'))
+            stops.append((rel(pr - _lw('电话：'), cell_left), 'left'))
         _tabs(p, stops)
         p.add_run('\t')
-        r = p.add_run(label); r.font.size = Pt(lp); _white(r)
-        r = p.add_run('{{%s}}' % key); r.font.size = Pt(lp)
+        r = p.add_run(label); _font(r, F_LABEL); _white(r)
+        r = p.add_run('{{%s}}' % key); _font(r, fld_font)
         if ri == 3:
             p.add_run('\t')
-            r = p.add_run('电话：'); r.font.size = Pt(lp); _white(r)
-            r = p.add_run('{{电话}}'); r.font.size = Pt(lp)
+            r = p.add_run('电话：'); _font(r, F_LABEL); _white(r)
+            r = p.add_run('{{电话}}'); _font(r, F_NUM)
 
     # ---------- 成文日期 + 落款 ----------
     p = doc.add_paragraph()
-    _exact_line(p, S['sign_pt'] * 1.0,
-                before_pt=((H - S['sign_bottom_from_bottom'] - S['sign_pt'] / 28.3465)
-                           - S['rule_bottom'] + cal('sign')) * 28.3465)
+    _exact_line(p, SIGN_PT * 1.0,
+                before_pt=((H - S['sign_bottom_from_bottom'] - SIGN_PT / PT_PER_CM)
+                           - S['rule_bottom'] + cal('sign')) * PT_PER_CM)
     sign_left = W - S['sign_left_from_right']
+    sign_track = _track((W - S['sign_right_from_right']) - sign_left,
+                        len(S['sign_text']), SIGN_PT)
     # 数字用**右对齐**制表位顶到预印「年/月/日」的左沿，预印字紧随其后：
     # 这样一位数两位数都自动贴齐，不必按位数补空格
     ymd = [S['ymd_year_left'], S['ymd_month_left'], S['ymd_day_left']]
@@ -400,11 +480,12 @@ def build(path, top_margin_cm=None, calib=None):
     _tabs(p, stops)
     for key, ch in (('年', '年'), ('月', '月'), ('日', '日')):
         p.add_run('\t')
-        r = p.add_run('{{%s}}' % key); r.font.size = Pt(S['sign_pt'])
+        r = p.add_run('{{%s}}' % key); _font(r, F_NUM)
         p.add_run('\t')
-        r = p.add_run(ch); r.font.size = Pt(S['sign_pt']); _white(r)
+        r = p.add_run(ch); _font(r, F_LABEL); _white(r)
     p.add_run('\t')
-    r = p.add_run(S['sign_text']); r.font.size = Pt(S['sign_pt']); _white(r)
+    r = p.add_run(S['sign_text']); _font(r, F_SIGN); _white(r)
+    _set_spacing(r, sign_track)
 
     doc.save(path)
     return path

@@ -1,14 +1,10 @@
 {
-  "check_x": -0.428,
-  "dept": 0.05,
-  "handler": 0.051,
-  "handler_x": -0.272,
-  "head1": 0.086,
-  "head1_gap": -0.104,
-  "head2": 0.017,
-  "lead": 0.052,
-  "opinion": 0.051,
-  "phone_x": -0.005,
-  "sign": -0.065,
-  "title": -0.061
+  "dept": -0.199,
+  "handler": -0.2,
+  "head1": 0.103,
+  "head2": 0.025,
+  "lead": -0.199,
+  "opinion": -0.198,
+  "sign": -0.92,
+  "title": -0.198
 }
