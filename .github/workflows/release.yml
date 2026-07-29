@@ -143,14 +143,56 @@ jobs:
           tar -czf "DocFormatPro-$ver-linux-${{ matrix.arch }}.tar.gz" -C pkg DocFormatPro
           echo "RELEASE_VERSION=$ver" >> "$GITHUB_ENV"
 
+      - name: Build .deb (麒麟/UOS 双击安装包)
+        run: |
+          ver='${{ env.RELEASE_VERSION }}'
+          arch='${{ matrix.arch == 'arm64' && 'arm64' || 'amd64' }}'
+          deb_name="docformat-pro_${ver#v}_${arch}"
+          mkdir -p "deb/DEBIAN" "deb/opt/docformat-pro" "deb/usr/share/applications" "deb/usr/share/icons/hicolor/256x256/apps"
+
+          # control 文件
+          cat > deb/DEBIAN/control << DEBCTRL
+          Package: docformat-pro
+          Version: ${ver#v}
+          Section: utils
+          Priority: optional
+          Architecture: $arch
+          Depends: python3-pyqt5, python3-lxml, libqt5widgets5, libqt5gui5, libqt5core5a, libxcb-util1 | libxcb-util0
+          Recommends: libreoffice-writer, wps-office
+          Maintainer: DocFormat Pro Team
+          Description: 公文格式自动排版工具 (GB/T 9704-2012)
+           支持智能一键处理、格式诊断、标点修复、AI 粘贴生成。
+           兼容麒麟 V10、统信 UOS 20 等国产 Linux 系统。
+          DEBCTRL
+
+          # postinst 脚本：安装后设权限
+          cat > deb/DEBIAN/postinst << 'PST'
+          #!/bin/sh
+          chmod 755 /opt/docformat-pro/DocFormatPro
+          update-desktop-database /usr/share/applications || true
+          PST
+          chmod 755 deb/DEBIAN/postinst
+
+          # 复制文件
+          cp docformat-qt/dist/DocFormatPro deb/opt/docformat-pro/
+          cp docformat-qt/packaging/docformat.desktop deb/usr/share/applications/ || true
+          cp docformat-qt/assets/icon.png deb/usr/share/icons/hicolor/256x256/apps/docformat-pro.png || true
+
+          dpkg-deb --build deb "$deb_name.deb"
+          echo "DEB_NAME=$deb_name" >> "$GITHUB_ENV"
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: DocFormatPro-linux-${{ matrix.arch }}
-          path: DocFormatPro-*-linux-*.tar.gz
+          path: |
+            DocFormatPro-*-linux-*.tar.gz
+            docformat-pro_*.deb
 
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_VERSION }}
-          files: DocFormatPro-*-linux-*.tar.gz
+          files: |
+            DocFormatPro-*-linux-*.tar.gz
+            docformat-pro_*.deb
