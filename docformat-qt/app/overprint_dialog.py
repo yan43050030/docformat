@@ -157,6 +157,11 @@ class OverprintDialog(QDialog):
             self.tpl_combo.addItem('{}{}'.format(name, '（自带）' if builtin else ''), path)
         self.tpl_combo.currentIndexChanged.connect(self._load_fields)
         row.addWidget(self.tpl_combo, 1)
+        new_btn = QPushButton("新建模板…")
+        new_btn.setCursor(Qt.PointingHandCursor)
+        new_btn.setToolTip("拿一份套头纸的 PDF，在图上点出各处位置，直接做出新模板")
+        new_btn.clicked.connect(self._new_template)
+        row.addWidget(new_btn)
         add_btn = QPushButton("添加模板…")
         add_btn.setCursor(Qt.PointingHandCursor)
         add_btn.setToolTip("导入自己的套打模板 docx（含 {{字段名}} 占位符）")
@@ -461,6 +466,14 @@ class OverprintDialog(QDialog):
         except Exception as e:
             self.status.setText('未生成对位件：{}'.format(str(e)[:120]))
             return None
+
+    def _new_template(self):
+        from app.template_wizard import TemplateWizard
+        dlg = TemplateWizard(self)
+        if dlg.exec_() == QDialog.Accepted:
+            path = getattr(dlg, 'result_path', None)
+            if path:
+                self._reload_templates(select=path)
 
     def _check_align(self):
         if not self._template_path:

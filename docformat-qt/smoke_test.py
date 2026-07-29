@@ -658,6 +658,84 @@ def _title_cell(plan):
     raise AssertionError('plan 里找不到标题格')
 
 
+
+def test_template_builder():
+    """新建套打模板：点在哪儿，字就印在哪儿"""
+    from scripts.template_builder import build_template, group_rows
+    from scripts import overprint as op
+    from scripts.exporter import export_pdf
+    from scripts import overlay as _ov
+
+    items = [
+        {'x': 5.3, 'y': 2.8, 'kind': 'label', 'text': '某某局办公室', 'pt': 15},
+        {'x': 7.7, 'y': 3.7, 'kind': 'label', 'text': '文件处理单', 'pt': 18},
+        {'x': 2.5, 'y': 5.2, 'kind': 'label', 'text': '紧急程度：', 'pt': 12},
+        {'x': 4.7, 'y': 5.2, 'kind': 'field', 'name': '紧急程度', 'pt': 12},
+        {'x': 13.0, 'y': 5.2, 'kind': 'label', 'text': '密级：', 'pt': 12},
+        {'x': 14.6, 'y': 5.2, 'kind': 'field', 'name': '密级', 'pt': 12},
+        {'x': 2.4, 'y': 6.6, 'kind': 'label', 'text': '标  题', 'pt': 12},
+        {'x': 4.0, 'y': 6.6, 'kind': 'field', 'name': '标题', 'pt': 16},
+        {'x': 2.4, 'y': 9.0, 'kind': 'label', 'text': '承办人：', 'pt': 12},
+        {'x': 4.5, 'y': 9.0, 'kind': 'field', 'name': '承办人', 'pt': 12},
+    ]
+    # 同一行的元素要归到一行；y 差几毫米也算同一行（拖框手会抖）
+    rows = group_rows(items + [{'x': 18.0, 'y': 5.35, 'kind': 'label',
+                                'text': 'X', 'pt': 12}])
+    assert len(rows) == 5, '应分成 5 行，实得 {}'.format(len(rows))
+    assert len(rows[2]['items']) == 5, '5.2/5.35 应并入同一行'
+    assert [i['x'] for i in rows[2]['items']] == sorted(
+        i['x'] for i in rows[2]['items']), '行内应按 x 从左到右'
+
+    out = os.path.join(OUT_DIR, 'wizard_tpl.docx')
+    _p, fields = build_template(items, out)
+    assert fields == ['紧急程度', '密级', '标题', '承办人'], \
+        '字段顺序应按位置：{}'.format(fields)
+    assert op.scan_fields(out) == fields, '扫出来的字段应与生成时一致'
+
+    # 预印栏目名必须是白字（占位不显影），填写位必须不是
+    import docx as _dx
+    whites, blacks = [], []
+    for _p2, _c2 in op._iter_paragraphs(_dx.Document(out)):
+        for _r2 in _p2.runs:
+            if not _r2.text.strip():
+                continue
+            (whites if not op._run_prints(_r2) else blacks).append(_r2.text)
+    assert '紧急程度：' in whites and '某某局办公室' in whites, \
+        '预印栏目名应为白字：{}'.format(whites)
+    assert any('{{' in t for t in blacks), '占位符应是会打印的黑字'
+
+    # 落点复核：填入可辨认的值，转 PDF 量坐标
+    ok_r, _why = _ov.can_merge()
+    tmp = os.path.join(OUT_DIR, 'wizard_filled.docx')
+    vals = {'紧急程度': 'AAA', '密级': 'BBB', '标题': 'CCCC', '承办人': 'DDD'}
+    op.fill_form(out, vals, tmp)
+    pdf = os.path.join(OUT_DIR, 'wizard_filled.pdf')
+    ok, info = export_pdf(tmp, pdf)
+    if not (ok and ok_r):
+        print('    （跳过落点实测：{}）'.format(info if not ok else _why))
+        print('[7p] 新建套打模板：分行/字段/白字占位 通过')
+        return
+    import fitz
+    K = 2.54 / 72.0
+    got = {}
+    for b in fitz.open(pdf)[0].get_text('dict')['blocks']:
+        for l in b.get('lines', []):
+            for sp in l['spans']:
+                t = sp['text'].strip()
+                if t:
+                    got.setdefault(t, (sp['bbox'][0] * K, sp['bbox'][1] * K))
+    worst = 0.0
+    for it in items:
+        key = it['text'] if it['kind'] == 'label' else vals[it['name']]
+        hit = next((v for k, v in got.items() if key[:3] in k), None)
+        if hit is None:
+            continue
+        worst = max(worst, abs(hit[0] - it['x']), abs(hit[1] - it['y']))
+    assert worst < 0.1, '点选位置与实际落点偏差 {:.3f}cm，超过 1mm'.format(worst)
+    print('[7p] 新建套打模板：分行/字段/白字占位 + 落点偏差 {:.3f}cm 通过'
+          .format(worst))
+
+
 def test_overprint():
     """套打：字段扫描/填充保留几何/合并宽度/长文自适应/固定行不误缩"""
     from docx.oxml.ns import qn
@@ -1676,6 +1754,7 @@ if __name__ == '__main__':
     test_compare()
     test_exporter()
     test_overprint()
+    test_template_builder()
     test_gb_header_record()
     test_image_protection()
     test_redaction()
