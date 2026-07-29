@@ -270,9 +270,17 @@ jobs:
           chmod 644 deb/usr/share/applications/docformat-pro.desktop
 
           dpkg-deb --build deb "$deb_name.deb"
-          # 装完点不开是最常见的翻车方式，这里当场验一遍入口和权限
-          dpkg-deb -c "$deb_name.deb" | grep -q '/opt/docformat-pro/DocFormatPro'
-          dpkg-deb -c "$deb_name.deb" | grep -E 'DocFormatPro$' | grep -q 'rwxr-xr-x'
+          # 装完点不开是最常见的翻车方式，这里当场验一遍入口和权限。
+          # 先把清单取到变量里再查：直接 `dpkg-deb -c | grep -q` 的话，
+          # grep 一匹配上就退出、管道随之关闭，dpkg-deb 那头会报
+          # "tar: stdout: write error"——包其实是好的，日志却像出了事。
+          listing=$(dpkg-deb -c "$deb_name.deb")
+          case "$listing" in
+            *"/opt/docformat-pro/DocFormatPro"*) ;;
+            *) echo "deb 里没有主程序"; echo "$listing"; exit 1 ;;
+          esac
+          echo "$listing" | grep -E 'DocFormatPro$' | grep -q 'rwxr-xr-x' || {
+            echo "deb 里的主程序没有可执行位"; echo "$listing"; exit 1; }
           echo "DEB_NAME=$deb_name" >> "$GITHUB_ENV"
 
       - name: Upload build artifact
