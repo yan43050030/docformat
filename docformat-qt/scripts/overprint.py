@@ -262,7 +262,7 @@ def load_letterhead(template_path):
         return ''
 
 
-def save_offsets(template_path, offsets, letterhead=None):
+def save_offsets(template_path, offsets, letterhead=None, shift=None):
     """写回位置微调表；offsets 与套头路径都空时删除文件（恢复默认）。
 
     与模板同名的一个 json 里放齐"对位相关的一切"：各字段的目标位置、
@@ -272,7 +272,10 @@ def save_offsets(template_path, offsets, letterhead=None):
     p = offsets_path(template_path)
     if letterhead is None:
         letterhead = load_letterhead(template_path)
-    if not offsets and not letterhead:
+    if shift is None:
+        shift = load_shift(template_path)
+    dx, dy = float(shift[0] or 0.0), float(shift[1] or 0.0)
+    if not offsets and not letterhead and not dx and not dy:
         try:
             os.remove(p)
         except OSError:
@@ -287,6 +290,12 @@ def save_offsets(template_path, offsets, letterhead=None):
     if letterhead:
         payload['套头PDF'] = letterhead
         payload['套头PDF说明'] = '套头纸（红头文件纸）的 PDF，用于不打印就校验对位'
+    if dx or dy:
+        payload['整体平移'] = {
+            'dx': round(dx, 3), 'dy': round(dy, 3),
+            '说明': '整张纸一起挪的厘米数，正数=往右/往下。'
+                    '可由「按扫描件自动对位」量出来，也可自己填。',
+        }
     with open(p, 'w', encoding='utf-8') as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     return p
@@ -295,7 +304,49 @@ def save_offsets(template_path, offsets, letterhead=None):
 def save_letterhead(template_path, letterhead):
     """只改套头 PDF 绑定，保留已有的位置微调"""
     return save_offsets(template_path, load_offsets(template_path),
-                        letterhead=letterhead or '')
+                        letterhead=letterhead or '',
+                        shift=load_shift(template_path))
+
+
+def load_shift(template_path):
+    """整体平移量 (dx, dy)，单位 cm；没设过就是 (0, 0)。
+
+    与逐字段的位置微调分开存：那个管"某个字要印在哪儿"，这个管
+    "整张纸印偏了"——打印机走纸误差、套头纸裁切误差都是整体性的，
+    一个数就能补，不必逐字段去挪。
+    """
+    import json
+    try:
+        with open(offsets_path(template_path), 'r', encoding='utf-8') as f:
+            v = json.load(f).get('整体平移') or {}
+        return float(v.get('dx') or 0.0), float(v.get('dy') or 0.0)
+    except (IOError, OSError, ValueError, AttributeError, TypeError):
+        return 0.0, 0.0
+
+
+def save_shift(template_path, dx, dy):
+    """只改整体平移，保留已有的位置微调与套头绑定"""
+    return save_offsets(template_path, load_offsets(template_path),
+                        letterhead=None, shift=(dx, dy))
+
+
+def apply_shift(doc, dx_cm, dy_cm):
+    """整张纸的内容一起挪：加到页边距上，版心大小不变。
+
+    左边距一动，所有制表位（相对左边距）跟着动；上边距一动，整列内容
+    跟着下移。比逐个字段改位置省事，也不会把已经对好的相对关系弄乱。
+    """
+    from docx.shared import Cm
+    if not dx_cm and not dy_cm:
+        return False
+    for sec in doc.sections:
+        if dx_cm:
+            sec.left_margin = Cm(max(0.0, sec.left_margin.cm + dx_cm))
+            sec.right_margin = Cm(max(0.0, sec.right_margin.cm - dx_cm))
+        if dy_cm:
+            sec.top_margin = Cm(max(0.0, sec.top_margin.cm + dy_cm))
+            sec.bottom_margin = Cm(max(0.0, sec.bottom_margin.cm - dy_cm))
+    return True
 
 
 def _row_of_cell(table, cell):
@@ -1079,7 +1130,7 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
 
 def fill_form(template_path, values, output_path, autofit=True, log=None,
               lock_heights=False, one_page=True, title_shape='trapezoid_down',
-              title_lines=None, offsets=None):
+              title_lines=None, offsets=None, shift=None):
     """按 values 填充套打模板并另存，返回 (已填字段数, 提示列表)。"""
     from docx import Document
     doc = Document(template_path)
@@ -1089,6 +1140,10 @@ def fill_form(template_path, values, output_path, autofit=True, log=None,
         doc, values, autofit=autofit, log=log,
         lock_heights=lock_heights, one_page=one_page,
         title_shape=title_shape, title_lines=title_lines, offsets=offsets)
+    if shift is None:
+        shift = load_shift(template_path)
+    if apply_shift(doc, shift[0], shift[1]):
+        notes.append('整张按 ({:+.2f}, {:+.2f})cm 平移'.format(shift[0], shift[1]))
     doc.save(output_path)
     return used, notes
 

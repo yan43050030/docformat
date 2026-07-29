@@ -3,7 +3,7 @@
 import os
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import (QComboBox, QDialog, QDialogButtonBox,
+from PyQt5.QtWidgets import (QApplication, QComboBox, QDialog, QDialogButtonBox,
                              QDoubleSpinBox, QFileDialog, QFormLayout,
                              QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                              QPlainTextEdit, QPushButton, QScrollArea,
@@ -97,6 +97,31 @@ class OffsetDialog(QDialog):
         scroll.setWidget(host)
         root.addWidget(scroll, 1)
 
+        # ---- 整体平移：整张纸一起挪 ----
+        shift_row = QHBoxLayout()
+        shift_row.addWidget(QLabel("整体平移："))
+        self._shift = {}
+        dx0, dy0 = overprint.load_shift(template_path)
+        for key, text, init in (('dx', '向右', dx0), ('dy', '向下', dy0)):
+            shift_row.addWidget(QLabel(text))
+            sp = QDoubleSpinBox()
+            sp.setRange(-5.0, 5.0)
+            sp.setDecimals(2)
+            sp.setSingleStep(self.STEP_CM)
+            sp.setSuffix(" cm")
+            sp.setValue(float(init))
+            sp.setToolTip("整张纸的内容一起挪，用来补打印机走纸、纸张裁切的整体误差。\n"
+                          "负数就是往反方向挪。")
+            self._shift[key] = sp
+            shift_row.addWidget(sp)
+        self._auto_btn = QPushButton("按扫描件自动对位…")
+        self._auto_btn.setToolTip("拿一张**空白套头纸**的扫描件（原尺寸 100%，别裁边），\n"
+                                  "程序会找出纸上的红线，和模板的框线一比，算出该挪多少。")
+        self._auto_btn.clicked.connect(self._auto_align)
+        shift_row.addWidget(self._auto_btn)
+        shift_row.addStretch(1)
+        root.addLayout(shift_row)
+
         path_lab = QLabel("保存到：{}".format(overprint.offsets_path(template_path)))
         path_lab.setWordWrap(True)
         path_lab.setProperty("muted", "true")
@@ -114,12 +139,53 @@ class OffsetDialog(QDialog):
     def _reset(self):
         for sp in self._spins.values():
             sp.setValue(0.0)
+        for sp in self._shift.values():
+            sp.setValue(0.0)
 
     def values(self):
         return {k: sp.value() for k, sp in self._spins.items() if sp.value() > 0}
 
+    def shift(self):
+        return (self._shift['dx'].value(), self._shift['dy'].value())
+
+    def _auto_align(self):
+        from scripts import scan_align
+        ok, why = scan_align.available()
+        if not ok:
+            QMessageBox.information(self, "用不了自动对位", why)
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择空白套头纸的扫描件（PDF）", "", "PDF 文件 (*.pdf)")
+        if not path:
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            res = scan_align.align(path, self._template_path)
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "量不出来", str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        text = scan_align.describe(res)
+        if res.get('dx') is None and res.get('dy') is None:
+            QMessageBox.information(self, "没找到基准线", text)
+            return
+        ret = QMessageBox.question(
+            self, "自动对位结果",
+            text + "\n\n把这个平移量填进去吗？（填完还要点“保存”才生效）",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if ret != QMessageBox.Yes:
+            return
+        # 量出来的是"模板要往哪儿挪"，正是平移量本身
+        if res.get('dx') is not None:
+            self._shift['dx'].setValue(round(res['dx'], 2))
+        if res.get('dy') is not None:
+            self._shift['dy'].setValue(round(res['dy'], 2))
+
     def _save(self):
-        overprint.save_offsets(self._template_path, self.values())
+        overprint.save_offsets(self._template_path, self.values(),
+                               shift=self.shift())
         self.accept()
 
 

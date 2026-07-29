@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """端到端冒烟测试：生成样例公文 → 三种模式处理 → 断言结果"""
 import io
+import shutil
 import os
 import sys
 
@@ -1556,6 +1557,66 @@ def test_signature_closing():
     print('[7b] 署名/结束语扩充: 室/部/妥否请审示 通过')
 
 
+def test_scan_align():
+    """扫描件自动对位：造一份"印偏了"的套头，看能不能把偏移量原样量回来"""
+    from docx import Document
+    from scripts import overprint as op, scan_align
+    from scripts.exporter import export_pdf
+    ok, why = scan_align.available()
+    if not ok:
+        print('[15] 扫描件自动对位：本机缺 {} — 跳过'.format(why))
+        return
+    tpl = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       'templates', '套打', '文件送审单.docx')
+
+    # ---- 整体平移：存得住、读得回、真能挪动版面 ----
+    work = os.path.join(OUT_DIR, 'shift_tpl.docx')
+    shutil.copy(tpl, work)
+    try:
+        op.save_shift(work, 0.30, -0.20)
+        assert op.load_shift(work) == (0.3, -0.2), op.load_shift(work)
+        out = os.path.join(OUT_DIR, 'shift_out.docx')
+        op.fill_form(work, {'标题': '测试'}, out, one_page=False)
+        m0 = Document(work).sections[0]
+        m1 = Document(out).sections[0]
+        assert abs(m1.left_margin.cm - m0.left_margin.cm - 0.30) < 0.01, '左边距应右移 0.30'
+        assert abs(m1.top_margin.cm - m0.top_margin.cm + 0.20) < 0.01, '上边距应上移 0.20'
+        assert abs((m1.left_margin.cm + m1.right_margin.cm)
+                   - (m0.left_margin.cm + m0.right_margin.cm)) < 0.01, '版心宽度不该变'
+        # 平移量单独存，逐字段微调与套头绑定都不受影响
+        op.save_offsets(work, {'标题': 3.5})
+        assert op.load_shift(work) == (0.3, -0.2), '存字段位置时不该丢掉平移量'
+        op.save_shift(work, 0, 0)
+        assert op.load_offsets(work) == {'标题': 3.5}, '存平移量时不该丢掉字段位置'
+    finally:
+        for p in (work, op.offsets_path(work)):
+            if os.path.exists(p):
+                os.remove(p)
+
+    # ---- 自动对位：把模板白线刷黑、整体挪一下，当作"扫描件" ----
+    doc = Document(tpl)
+    assert scan_align._blacken_borders(doc) > 0, '模板里应有白色框线'
+    DX, DY = 0.30, -0.20
+    op.apply_shift(doc, DX, DY)
+    fake = os.path.join(OUT_DIR, 'scan_fake.docx')
+    fake_pdf = os.path.join(OUT_DIR, 'scan_fake.pdf')
+    doc.save(fake)
+    good, info = export_pdf(fake, fake_pdf)
+    if not good:
+        print('[15] 扫描件自动对位：本机转不了 PDF（{}）— 跳过'.format(info))
+        return
+    res = scan_align.align(fake_pdf, tpl)
+    assert len(res['h_pairs']) >= 4, '横线应认出 4 条以上：{}'.format(res['h_pairs'])
+    assert len(res['v_pairs']) >= 2, '竖线应认出 2 条以上：{}'.format(res['v_pairs'])
+    assert abs(res['dx'] - DX) < 0.05, 'dx 应量回 {}，实得 {}'.format(DX, res['dx'])
+    assert abs(res['dy'] - DY) < 0.05, 'dy 应量回 {}，实得 {}'.format(DY, res['dy'])
+    assert not res['warnings'], '没缩放不该告警：{}'.format(res['warnings'])
+    assert '往右挪' in scan_align.describe(res)
+    print('[15] 扫描件自动对位：认出 {} 条横线/{} 条竖线，'
+          '量回偏移 ({:+.2f}, {:+.2f})cm，误差 <0.01cm 通过'
+          .format(len(res['h_pairs']), len(res['v_pairs']), res['dx'], res['dy']))
+
+
 def test_overprint_fonts():
     """送审单模板的字体字号：预印栏目名 + 填写内容，按真实预印纸"""
     from docx.oxml.ns import qn as _qn
@@ -1919,5 +1980,6 @@ if __name__ == '__main__':
     test_redaction()
     test_signature_closing()
     test_overprint_fonts()
+    test_scan_align()
     test_layout_fixes()
     print('\n全部冒烟测试通过 ✓')
