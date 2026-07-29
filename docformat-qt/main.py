@@ -42,6 +42,25 @@ def _setup_crash_handler():
 
 _setup_crash_handler()
 
+
+def _print_version_and_exit():
+    """--version / -v：不开界面就报个版本号。
+
+    必须放在 **import PyQt5 之前**。装机、远程支持、打包后的冒烟验证都靠
+    它——尤其是绿色版，"到底能不能在这台机器上跑起来"用它一句话就能验，
+    前提是这条路径压根不碰 Qt：一旦碰了，没有 X 的环境（服务器、SSH、
+    CI）就会先撞上 "Could not connect to any X display" 而不是打出版本号。
+    版本号来自 app.version —— 那个模块只有一行常量、不 import 任何东西，
+    正是为这条路径准备的（app.main_window 会顺带拉起整个界面模块）。
+    """
+    if len(sys.argv) > 1 and sys.argv[1] in ('--version', '-v'):
+        from app.version import VERSION
+        print('DocFormat Pro {}'.format(VERSION))
+        raise SystemExit(0)
+
+
+_print_version_and_exit()
+
 from PyQt5.QtCore import Qt, QCoreApplication
 from PyQt5.QtGui import QFont, QGuiApplication, QIcon
 from PyQt5.QtWidgets import QApplication
@@ -55,14 +74,6 @@ def resource_path(name):
 
 
 def main():
-    # --version / -v：不开界面就报个版本号。装机、远程支持、打包后的
-    # 冒烟验证都用得上——尤其是绿色版，"到底能不能在这台机器上跑起来"
-    # 用它一句话就能验，不必先有桌面环境。
-    if len(sys.argv) > 1 and sys.argv[1] in ('--version', '-v'):
-        from app.main_window import VERSION
-        print('DocFormat Pro {}'.format(VERSION))
-        return
-
     # HiDPI 支持（国产整机 4K 屏 / Windows 125%、150% 缩放）
     # PassThrough 让 1.25x/1.5x 等非整数缩放按真实比例渲染，避免模糊或过大
     if hasattr(Qt, 'HighDpiScaleFactorRoundingPolicy'):
