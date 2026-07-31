@@ -128,9 +128,47 @@ def _track(total_cm, n_chars, pt):
     return (total_cm - n_chars * pt / PT_PER_CM) / (n_chars - 1)
 
 
-def _lw(label, pt=None):
-    """栏目名的宽度（cm）。全是全角字，宽度就是字数 × 字号，与字体无关。"""
-    return len(label) * (pt or LABEL_PT) / PT_PER_CM
+# 栏目名一个字占多宽，由实测反推：「领导批示：」左边线 2.4、冒号右边线 4.5，
+# 五个字（含冒号）跨 2.10cm，一个字 0.42cm。四号足宽是 0.4939cm——纸上的
+# 栏目名是**收着排**的，不是足宽。这个差别不能忽略：栏目名有多宽，决定了
+# 紧跟其后的黑字从哪儿起印，按足宽算每栏都会右移两三毫米。
+LABEL_UNIT_CM = (4.5 - 2.4) / 5
+# 个别栏目另有实测，直接用实测值（键是栏目名）
+LABEL_WIDTH_CM = {
+    '领导批示：': 4.5 - 2.4,          # 实测
+    # 「经办人：」和「文字校核：」在纸上宽度一致——「经办人」三个字之间
+    # 排得更开，正是为了凑齐这个宽度。取五个字的宽。
+    '经办人：': 5 * LABEL_UNIT_CM,
+    '文字校核：': 5 * LABEL_UNIT_CM,
+    # 「电话：」左边线 = 经办人冒号右边线 + 3.1，右边线距纸右 5.5 → 宽 1.2
+    '电话：': (21.0 - 5.5) - ((21.0 - 9.8) + 3.1),
+}
+
+
+def _lw(label):
+    """栏目名的宽度（cm）"""
+    w = LABEL_WIDTH_CM.get(label)
+    return w if w is not None else len(label) * LABEL_UNIT_CM
+
+
+def _label(para, text, spec=None):
+    """排一个预印栏目名：白字，且**宽度正好等于实测宽度**。
+
+    字距由目标宽度反解——w:spacing 是每个字后面都加，所以
+        总宽 = 字数 × (字宽 + 字距)
+    解出字距即可。收着排是负值、撑开排是正值：「经办人：」四个字要凑成
+    五个字的宽，解出来就是正的，正对应用户说的"经办人三个字中间更宽"。
+    这样栏目名后面紧跟的填写位，自然就落在实测的冒号右边线上，不必再为
+    它单设制表位（设了反而会因为笔位正好压在制表位上而被跳过）。
+    """
+    spec = spec or F_LABEL
+    r = para.add_run(text)
+    _font(r, spec)
+    _white(r)
+    n = len(text)
+    if n:
+        _set_spacing(r, _lw(text) / n - spec[2] / PT_PER_CM)
+    return r
 
 
 def _white(run):
@@ -292,10 +330,10 @@ def build(path, top_margin_cm=None, calib=None):
     _tabs(p, [(rel(S['urgent_left']), 'left'),
               (rel(sec_x - _lw('密级：')), 'left')])
     p.add_run('\t')
-    r = p.add_run('紧急程度：'); _font(r, F_LABEL); _white(r)
+    _label(p, '紧急程度：')
     r = p.add_run('{{紧急程度}}'); _font(r, F_TEXT)
     p.add_run('\t')
-    r = p.add_run('密级：'); _font(r, F_LABEL); _white(r)
+    _label(p, '密级：')
     r = p.add_run('{{密级}}'); _font(r, F_TEXT)
 
     # ---------- 表格 ----------
@@ -309,7 +347,7 @@ def build(path, top_margin_cm=None, calib=None):
     # 三列网格：标题栏的竖线和承办部门栏的竖线不在同一处，两条竖线各占
     # 一个网格线，用 gridSpan 合并出各行实际的分栏。
     #   ├ 2.10 ── 标题竖线 ── 承办部门竖线 ── 18.90 ┤
-    title_vline = S['urgent_left'] + 5 * LABEL_PT / PT_PER_CM
+    title_vline = S['urgent_left'] + _lw('紧急程度：')
     dept_vline = W - S['vline_from_right']
     edges = [body_left, title_vline, dept_vline, W - S['rule_side']]
     widths = [edges[i + 1] - edges[i] for i in range(3)]
@@ -378,7 +416,7 @@ def build(path, top_margin_cm=None, calib=None):
                 * PT_PER_CM + cal('title') * PT_PER_CM)
     _tabs(p, [(rel(S['title_left']), 'left')])
     p.add_run('\t')
-    r = p.add_run('标  题'); _font(r, F_LABEL); _white(r)
+    _label(p, '标  题')
 
     c = merge_row(0, 1, 2)
     _cell_borders(c, top=True, bottom=True)
@@ -400,7 +438,7 @@ def build(path, top_margin_cm=None, calib=None):
                 + cal('lead') * PT_PER_CM)
     _tabs(p, [(rel(S['lead_left']), 'left')])
     p.add_run('\t')
-    r = p.add_run('领导批示：'); _font(r, F_LABEL); _white(r)
+    _label(p, '领导批示：')
 
     # 拟办意见行
     c = merge_row(2)
@@ -411,7 +449,7 @@ def build(path, top_margin_cm=None, calib=None):
                 * PT_PER_CM + cal('opinion') * PT_PER_CM)
     _tabs(p, [(rel(S['lead_left']), 'left')])
     p.add_run('\t')
-    r = p.add_run('拟办意见：'); _font(r, F_LABEL); _white(r)
+    _label(p, '拟办意见：')
     p2 = c.add_paragraph()
     _exact_line(p2, F_OPINION[2] * 1.4)
     # 正文首行缩进两个字：公文行文惯例，拟办意见是成段的话。
@@ -430,7 +468,7 @@ def build(path, top_margin_cm=None, calib=None):
                 * PT_PER_CM + cal('dept') * PT_PER_CM)
     _tabs(p, [(rel(S['lead_left']), 'left')])
     p.add_run('\t')
-    r = p.add_run('承办部门：'); _font(r, F_LABEL); _white(r)
+    _label(p, '承办部门：')
     r = p.add_run('{{承办部门}}'); _font(r, F_TEXT)
 
     # 用户量的是「经办人：」「电话：」的**右沿**（含冒号），填的字紧接其后。
@@ -454,11 +492,11 @@ def build(path, top_margin_cm=None, calib=None):
             stops.append((rel(pr - _lw('电话：'), cell_left), 'left'))
         _tabs(p, stops)
         p.add_run('\t')
-        r = p.add_run(label); _font(r, F_LABEL); _white(r)
+        _label(p, label)
         r = p.add_run('{{%s}}' % key); _font(r, fld_font)
         if ri == 3:
             p.add_run('\t')
-            r = p.add_run('电话：'); _font(r, F_LABEL); _white(r)
+            _label(p, '电话：')
             r = p.add_run('{{电话}}'); _font(r, F_NUM)
 
     # ---------- 成文日期 + 落款 ----------

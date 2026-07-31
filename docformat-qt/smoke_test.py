@@ -784,8 +784,8 @@ def test_overprint():
     assert abs(_w('承办部门') + _w('经办人') - _w('领导批示')) < 0.1, \
         '两栏之和应等于表宽: {}'.format(widths)
     # 标题栏被竖线分成两格：竖线与「紧急程度：」冒号后第一个字的左边线齐
-    assert 2.7 < _w('标  题') < 3.0, '标题栏目名格宽应约 2.87cm: {}'.format(widths)
-    assert 13.6 < _w('{{标题}}') < 14.2, '标题正文格宽应约 13.93cm: {}'.format(widths)
+    assert 2.4 < _w('标  题') < 2.6, '标题栏目名格宽应约 2.50cm: {}'.format(widths)
+    assert 14.1 < _w('{{标题}}') < 14.5, '标题正文格宽应约 14.30cm: {}'.format(widths)
 
     base = {'紧急程度': '特急', '密级': '秘密★1年', '标题': '关于报送年度总结的请示',
             '承办部门': '办公室', '经办人': '张三', '电话': '12345678',
@@ -1689,9 +1689,11 @@ def test_overprint_fonts():
     assert title_cell.paragraphs[0].alignment == _WAP.CENTER, '标题应居中'
     label_cell = [c for c in op._iter_cells(tbl) if c.text.strip() == '标  题'][0]
     lw = op._cell_width_cm(tbl, label_cell)
-    # 竖线 = 版心左 2.1 + 栏目名格宽，应与「紧急程度：」冒号后第一个字对齐
+    # 竖线 = 版心左 2.1 + 栏目名格宽，应与「紧急程度：」冒号后第一个字对齐。
+    # 栏目名一个字在纸上占 0.42cm（由「领导批示：」2.40→4.50 实测反推），
+    # 不是四号的足宽 0.4939——纸上的栏目名是收着排的
     vline = 2.1 + lw
-    assert abs(vline - (2.5 + 5 * 14 / op.PT_PER_CM)) < 0.02, \
+    assert abs(vline - (2.5 + 5 * 0.42)) < 0.02, \
         '标题右侧竖线应与紧急程度冒号后第一个字左边线一致，实得 {:.2f}cm'.format(vline)
     print('[14] 套打模板字体：预印小二/二号大标宋 + 四号楷体，'
           '填写三号小标宋标题(居中)/小三仿宋意见/TNR 数字 通过')
