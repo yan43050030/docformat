@@ -1772,6 +1772,43 @@ def test_wording():
     W.apply_wording_fixes(d2, ['wording:qi_ta'])
     assert '其它' in d2.paragraphs[0].text, '引号内的引文不该被改'
 
+
+    # ---- 内置错词本 ----
+    from scripts.typos import TYPOS, DROPPED
+    assert not DROPPED, '错词本有条目自相矛盾（错形是某个正形的子串）：{}'.format(DROPPED)
+    assert len(TYPOS) >= 200, '错词本条数太少：{}'.format(len(TYPOS))
+    for w, r in TYPOS.items():
+        assert w != r, '{} 的错形与正形相同'.format(w)
+        assert w not in r, '{} 是正形 {} 的子串，改完再查还会报'.format(w, r)
+    # 每条都能被查出来、也能被改对
+    d4 = Document()
+    d4.add_paragraph('，'.join(list(TYPOS)[:40]))
+    got4 = W.check_wording(d4)
+    assert any('错别字' in f['item'] for f in got4), '错词本没生效'
+    W.apply_wording_fixes(d4, ['wording:typo'])
+    for w in list(TYPOS)[:40]:
+        assert w not in d4.paragraphs[0].text, '{} 没被改掉'.format(w)
+
+    # 反例语料：整段全是**正确**写法，一条都不许命中。
+    # 这里专挑容易跨词边界误伤的：雕刻服务(刻服)、预防犯罪(防犯)、
+    # 表决对方(决对)、加倍受益(倍受)、选拔款项(拔款)
+    CLEAN = [
+        '我们迫不及待地按部就班开展工作，气概不凡，一如既往、再接再厉。',
+        '提供雕刻服务，预防犯罪，表决对方案，加倍受益，选拔款项。',
+        '各地部署到位，召开会议，恳请审批，竣工验收，磋商事宜。',
+        '这项工作既然已经完成，作为下一步的基础，订购设备、账目清晰。',
+        '要度过难关、防患未然、实事求是、因地制宜、齐心协力。',
+        '会议纪要已印发，请予贯彻落实，反馈意见，妨碍因素已排除。',
+        '过度包装与过渡时期不同，制定与制订均可，考察与考查有别。',
+        '反映情况、反应迅速，交代任务、交待清楚，唯一的选择。',
+    ]
+    for line in CLEAN:
+        d5 = Document()
+        d5.add_paragraph(line)
+        got5 = [f for f in W.check_wording(d5) if '错别字' in f['item']]
+        assert not got5, '正确写法被误报：{} → {}'.format(
+            line, [f['detail'] for f in got5])
+
     # ---- 文种骨架（与检查共用同一张文种表）----
     sk = W.build_skeleton('请示', issuer='某某局', recipient='某某厅', subject='开展某某试点')
     kinds = [k for k, _t in sk]
@@ -1790,8 +1827,10 @@ def test_wording():
         raise AssertionError('未知文种应报错')
     except ValueError:
         pass
-    print('[16] 公文用语检查：{} 条规则，正例全中、{} 条反例零误报 + '
-          '文种搭配 + 自动修正 + 文种骨架 通过'.format(len(W.RULES), len(NEG)))
+    print('[16] 公文用语检查：{} 条规则 + 内置错词本 {} 条，'
+          '正例全中、{} 条反例 + {} 段正确语料零误报 + '
+          '文种搭配 + 自动修正 + 文种骨架 通过'
+          .format(len(W.RULES), len(TYPOS), len(NEG), len(CLEAN)))
 
 
 def test_layout_fixes():

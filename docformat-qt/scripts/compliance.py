@@ -22,6 +22,16 @@ from docx.oxml.ns import qn
 
 logger = logging.getLogger('docformat.compliance')
 
+def _typo_label():
+    """错词本条数写死会跟表脱节，直接读表"""
+    try:
+        from .typos import stats
+        return '错别字（迫不急待、气溉、按步就班……内置 {} 条）'.format(
+            stats()['count'])
+    except Exception:
+        return '错别字'
+
+
 # ---------------- 检查项定义 ----------------
 # 供 UI 生成勾选面板；分组便于展示
 CHECK_GROUPS = [
@@ -47,6 +57,7 @@ CHECK_GROUPS = [
     ]),
     ('用语（只查有明文规定的，文风不管）', [
         ('w_数字用法', '数字用法（GB/T 15835）'),
+        ('w_错别字', _typo_label()),
         ('w_格式用语', '标题标点 / 主送机关冒号 / 附件说明格式'),
         ('w_文种搭配', '文种与结语搭配（请示不能"特此报告"等）'),
         ('w_易混词', '易混词（其它/其他、截止/截至……，默认关）'),

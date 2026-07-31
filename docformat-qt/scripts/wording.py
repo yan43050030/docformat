@@ -187,6 +187,26 @@ RULES = [
     },
 ]
 
+# ---- 错别字：一张大表，合成一条正则 ----
+# 单独成组、默认**开**、可自动改——错的那一形不成词，出现即错，
+# 和"要看上下文"的易混词是两回事，不能混在一组里。
+# 234 条合成一个正则一次扫完，比 234 条规则各扫一遍快得多；
+# 长的排前面，「迫不急待」不会被更短的条目截胡。
+from .typos import TYPOS as _TYPOS      # noqa: E402
+
+_TYPO_RE = '|'.join(re.escape(w) for w in
+                    sorted(_TYPOS, key=len, reverse=True))
+
+RULES.append({
+    'id': 'typo', 'group': '错别字', 'level': 'warn', 'confidence': 'high',
+    'scope': (), 'pattern': _TYPO_RE,
+    'fix': lambda m: _TYPOS.get(m.group(0), m.group(0)),
+    'message': '错别字',
+    'describe': lambda words: '错别字（{} 处）：{}'.format(
+        len(words), '、'.join('{}→{}'.format(w, _TYPOS.get(w, ''))
+                              for w in sorted(words)[:6])),
+})
+
 RULE_BY_ID = {r['id']: r for r in RULES}
 GROUPS = []
 for _r in RULES:
@@ -291,10 +311,15 @@ def check_wording(doc, groups=None, detect_types=None, extra_rules=None):
         if not got:
             continue
         where = sorted({ai for ai, _t in got})
-        sample = '、'.join(sorted({t for _a, t in got})[:3])
+        words = {t for _a, t in got}
+        if r.get('describe'):
+            detail = r['describe'](words)
+        else:
+            detail = '{}（{} 处，如「{}」）'.format(
+                r['message'], len(got), '、'.join(sorted(words)[:3]))
         findings.append({
             'level': r['level'], 'item': '用语·{}'.format(r['group']),
-            'detail': '{}（{} 处，如「{}」）'.format(r['message'], len(got), sample),
+            'detail': detail,
             'locations': where,
             **({'fix_key': 'wording:' + r['id']} if r.get('fix') else {}),
         })
