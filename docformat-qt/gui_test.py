@@ -555,7 +555,7 @@ try:
         _od2._refresh_preview()
 
     _setv(标题='关于某事项的请示', 拟办意见='因工作需要，拟报请审批。', 承办部门='办公室')
-    assert '关于某事项的请示' in _od2.preview.toPlainText(), '预览未反映输入内容'
+    assert '关于某事项的请示' in _od2.canvas.text_dump(), '预览未反映输入内容'
     assert '正常放下' in _od2.pv_note.text(), '短内容不应提示缩放: {}'.format(_od2.pv_note.text())
     # 长内容 → 提示已缩小
     _setv(拟办意见='因某某事项需要进一步开展调查核实工作。' * 16)
@@ -563,11 +563,12 @@ try:
     # 极长 → 红底警示 + 明确提示放不下
     _setv(拟办意见='因某某事项需要进一步开展调查核实工作。' * 40)
     assert '放不下' in _od2.pv_note.text(), '极长内容应提示放不下'
-    assert 'fdecea' in _od2.preview.toHtml().lower(), '放不下的格子应有红底警示'
+    _warn = [_d for _d in _od2.canvas._layout()[0] if _d.get('warn')]
+    assert _warn, '放不下的格子应铺淡红警示'
     # 留空（手写签字）不应报错，预览照常
     _setv(经办人='', 文字校核='', 拟办意见='因工作需要，拟报请审批。')
     assert _od2._values()['经办人'] == '', '留空字段应为空值'
-    assert len(_od2.preview.toPlainText()) > 30, '留空后预览应照常渲染'
+    assert len(_od2.canvas.text_dump()) > 30, '留空后预览应照常渲染'
 finally:
     _od2.reject()
 print('[22] 套打版面预览：实时刷新 + 缩字号可见 + 放不下警示 + 留空可用 ✓')
@@ -608,61 +609,55 @@ try:
         _e = _od4._editors[_k]
         (_e.setPlainText if hasattr(_e, 'setPlainText') else _e.setText)(_v)
     _od4._refresh_preview()
-    _txt = _od4.preview.toPlainText()
+    _txt = _od4.canvas.text_dump()
     _i_tbl = _txt.find('领导批示')
     _i_date = _txt.find('2026')
     assert _i_tbl > 0 and _i_date > 0, '预览缺少表格或日期'
     assert _i_date > _i_tbl, '成文日期应排在表格之后，与实际版面一致'
 
-    # 各栏宽度比例必须与模板一致。曾经把整张表画成一个 <table>：各行分栏
-    # 并不相同（标题行 2.67+13.83、承办行 6.77+9.73、批示行整行合并），
-    # Qt 把它们合成同一套列约束，标题栏被撑到 53%，与真实版面完全对不上。
-    from PyQt5.QtGui import QTextTable as _QTT
-    _doc = _od4.preview.document()
-    _doc.setTextWidth(880)
-    _lay = _doc.documentLayout()
-    _tables = []
-
-    def _walk(_f):
-        for _ch in _f.childFrames():
-            if isinstance(_ch, _QTT):
-                _tables.append(_ch)
-            _walk(_ch)
-    _walk(_doc.rootFrame())
-    # 预览画的是整张 A4：首尾各一条页边距空白带，中间每一行（以及每个
-    # 独立段落）各画一张定宽表，且左右都带页边距栏
+    # 画布是按厘米画的，直接核几何：整页比例、块的纵向顺序、各栏宽度。
+    # 从前拿富文本拼表格，Qt 按自己的规矩排版，横竖比例都不是 A4，
+    # 各行分栏还被合成同一套列约束（标题栏被撑到 53%）。现在自己画就没这问题。
     _plan4 = _od4._last_plan
     _pg4 = _plan4['page']
-    _exp = []
+    assert abs(_pg4['width_cm'] - 21.0) < 0.1 and abs(_pg4['height_cm'] - 29.7) < 0.1, \
+        '画布应按 A4 实际尺寸：{}'.format(_pg4)
+    _cw, _ch = _od4.canvas.page_cm()
+    _od4.canvas.resize(600, 800)
+    _r4 = _od4.canvas._page_rect()
+    assert abs(_r4.width() / _r4.height() - _cw / _ch) < 0.01, \
+        '纸的长宽比应等于 A4，实得 {:.3f}'.format(_r4.width() / _r4.height())
+    assert _r4.height() <= 800, '自适应模式下整张纸应完整放进窗口'
+
+    # 纵向顺序：每个块的 top 必须递增，且都落在纸面内
+    _tops = [_b['top_cm'] for _b in _plan4['blocks']]
+    assert _tops == sorted(_tops), '块的纵向顺序不对：{}'.format(_tops)
+    assert _tops[0] >= _pg4['top_cm'] - 0.01, '首块不应越过上边距'
+    _last = _plan4['blocks'][-1]
+    assert _last['top_cm'] + _last['height_cm'] <= _pg4['height_cm'] + 0.1, \
+        '内容超出纸面'
+
+    # 各栏宽度：合起来应等于版心宽，标题栏与承办部门栏的分栏各不相同
     for _b in _plan4['blocks']:
-        if _b['kind'] == 'para':
-            _exp.append([_plan4['content_w_cm']])
-        else:
-            _exp.extend([_c['width_cm'] for _c in _r['cells']] for _r in _b['rows'])
-    assert len(_tables) == len(_exp) + 2, \
-        '预览表格数 {} ≠ 预期 {}（内容 {} + 上下页边距 2）'.format(
-            len(_tables), len(_exp) + 2, len(_exp))
-    # 首尾两张是页边距带，比例校验只看中间的内容行
-    for _t, _e in zip(_tables[1:-1], _exp):
-        _ws = [_lay.blockBoundingRect(
-            _t.cellAt(0, _c).firstCursorPosition().block()).width()
-            for _c in range(_t.columns())]
-        _tot = sum(_ws) or 1.0
-        # 首尾两栏是左右页边距，应占整页宽的真实比例
-        _want_l = _pg4['left_cm'] / _pg4['width_cm'] * 100.0
-        _want_r = _pg4['right_cm'] / _pg4['width_cm'] * 100.0
-        assert abs(_ws[0] / _tot * 100.0 - _want_l) <= 3.0, \
-            '左页边距占比 {:.1f}% 应为 {:.1f}%'.format(_ws[0] / _tot * 100.0, _want_l)
-        assert abs(_ws[-1] / _tot * 100.0 - _want_r) <= 3.0, \
-            '右页边距占比 {:.1f}% 应为 {:.1f}%'.format(_ws[-1] / _tot * 100.0, _want_r)
-        # 中间是版心内的各栏，按版心宽折算比例
-        _body = _ws[1:-1]
-        _btot = sum(_body) or 1.0
-        for _got, _want in zip(_body, _e):
-            _got_pct = _got / _btot * 100.0
-            _want_pct = _want / sum(_e) * 100.0
-            assert abs(_got_pct - _want_pct) <= 3.0, \
-                '栏宽比例 {:.1f}% 应为 {:.1f}%'.format(_got_pct, _want_pct)
+        if _b['kind'] != 'table':
+            continue
+        for _r in _b['rows']:
+            _tot = sum(_c['width_cm'] for _c in _r['cells'])
+            assert abs(_tot - _plan4['content_w_cm']) < 0.05, \
+                '一行各栏之和 {:.2f} 应等于版心宽 {:.2f}'.format(
+                    _tot, _plan4['content_w_cm'])
+
+    # 可拖：黑字都认得出自己是哪个字段，且落点与 plan 报的位置一致
+    _fld = _od4.canvas.fields()
+    assert '年' in _fld and '承办部门' in _fld, '黑字应可拖：{}'.format(_fld)
+    # 标题是在格子里居中的，位置由格子定，拖了也不生效 —— 索性不给拖
+    assert '标题' not in _fld, '居中排的标题不应可拖：{}'.format(_fld)
+    _od4._on_field_moved('承办部门', 5.5)
+    assert _od4._offsets.get('承办部门') == 5.5 and _od4._pos_dirty, '拖动应记进待保存的位置'
+    assert abs(_od4.canvas.fields()['承办部门'] - 5.5) < 0.05, '拖完预览应按新位置重排'
+    _od4._reset_positions()
+    assert not _od4._offsets, '还原后不应留下微调'
+
     # 长标题梯形回行：下拉切换后预览随之重排，且行宽方向相反
     _e = _od4._editors['标题']
     (_e.setPlainText if hasattr(_e, 'setPlainText') else _e.setText)(

@@ -21,6 +21,7 @@ import logging
 import os
 import re
 
+from docx.enum.text import WD_LINE_SPACING
 from docx.oxml.ns import qn
 from docx.shared import Pt
 
@@ -145,11 +146,16 @@ def _replace_in_paragraph(para, values, offsets=None, left_cm=0.0):
         if '{{' not in run.text:
             acc += _text_width_units(run.text)
             acc_ink += _text_width_units(run.text.replace(' ', ''))
-            if run.text and not run.text.strip():
+            # 制表符不是"填充空格"，别跟着一起撤：它是定位用的，撤了
+            # 白色栏目名会整体左移（实测承办部门从 2.40 掉到 2.10），
+            # 而且文中的 \t 与段落上的制表位就对不上号了——后面的字段
+            # 认领制表位是按顺序来的，少一个就全串位
+            if run.text and not run.text.strip() and '\t' not in run.text:
                 seen_ws.append(run)
             continue
         out = []
         cur = 0
+        raw_text = run.text
         for m in PLACEHOLDER_RE.finditer(run.text):
             lead = run.text[cur:m.start()]
             out.append(lead)
@@ -166,7 +172,8 @@ def _replace_in_paragraph(para, values, offsets=None, left_cm=0.0):
                 # 就可能把笔位顶过目标、制表位反而跳到下一站，结果差出一截
                 # （实测目标 11.50cm 落到了 12.72cm）。
                 # 这些空格和它们顶开的白字都不打印，撤掉不影响印出来的东西。
-                while out and out[-1] and not out[-1].strip():
+                while out and out[-1] and not out[-1].strip() \
+                        and '\t' not in out[-1]:
                     acc -= _text_width_units(out.pop())
                 # 连本段前面所有纯空白 run 一起撤：它们只是把**白色栏目名**
                 # 顶到位的填充，白字不显影，挪了不影响印出来的东西；留着却会
@@ -201,6 +208,12 @@ def _replace_in_paragraph(para, values, offsets=None, left_cm=0.0):
         if new != run.text:
             run.text = new
             changed = True
+        # 给这个 run 打上字段名，预览画布靠它认出"这段黑字是哪个字段"，
+        # 才能让人直接拖着它挪位置。一个 run 里塞了多个字段就不打——
+        # 拖的时候分不清在拖谁，不如不给拖。
+        keys = [m.group(1).strip() for m in PLACEHOLDER_RE.finditer(raw_text)]
+        if len(keys) == 1:
+            run._r.set('docfmt-field', keys[0])
     if tab_stops:
         _set_tab_stops(para, tab_stops)
     return changed, pos_map
@@ -441,13 +454,16 @@ def _cell_left_cm(table, cell, page_left_cm):
     widths = _grid_widths(table)
     if not widths:
         return page_left_cm
+    # 按行里真实的 w:tc 走，不能用 row.cells：合并过的格子在 row.cells 里
+    # 会按它跨的列数重复出现，再逐个加 gridSpan 就把列号加了两遍
+    # （三列网格 + gridSpan=2 时实测把 9.0cm 的格子报到 21.1cm，越出纸外）
     for row in table.rows:
         col = 0
-        for c in row.cells:
-            if c._tc is cell._tc:
+        for tc in row._tr.findall(qn('w:tc')):
+            if tc is cell._tc:
                 return page_left_cm + sum(widths[:col]) / TWIPS_PER_CM
             sp = 1
-            p2 = c._tc.find(qn('w:tcPr'))
+            p2 = tc.find(qn('w:tcPr'))
             if p2 is not None:
                 g2 = p2.find(qn('w:gridSpan'))
                 if g2 is not None:
@@ -824,6 +840,35 @@ def _tab_stops_cm(para):
     except Exception:
         pass
     return sorted(out)
+
+
+def _run_track_cm(run):
+    """run 上的字距（w:spacing，二十分之一磅 → cm）。
+
+    模板把栏目名收着/撑开排都靠它，预览不读这个值就会把栏目名画宽
+    （实测「承办部门：」画成 2.47cm，纸上其实是 2.10cm），
+    后面的字跟着挤出去。
+    """
+    rPr = run._r.find(qn('w:rPr'))
+    if rPr is None:
+        return 0.0
+    el = rPr.find(qn('w:spacing'))
+    if el is None:
+        return 0.0
+    try:
+        return int(el.get(qn('w:val'))) / 20.0 / PT_PER_CM
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _seg_width_cm(seg, char_cm):
+    """一个文字片段有多宽（cm），含字距"""
+    if seg.get('pad_cm') is not None:
+        return seg['pad_cm']
+    text = seg.get('text', '')
+    pt = seg.get('pt')
+    cw = (pt / PT_PER_CM) if pt else char_cm
+    return _text_width_units(text) * cw + len(text) * (seg.get('track') or 0.0)
 
 
 def _tab_target(stops, used, x):
@@ -1242,11 +1287,14 @@ def wrap_segs(segs, usable_cm):
             used += pad
             continue
         char_cm = (seg.get('pt') or 14) / PT_PER_CM
+        trk = seg.get('track') or 0.0
         buf = ''
         for ch in seg.get('text', ''):
-            w = char_cm * (1.0 if ord(ch) > 0x2E80 else 0.5)
+            w = char_cm * (1.0 if ord(ch) > 0x2E80 else 0.5) + trk
             # 行尾空格不触发换行，与 estimate_lines 的 rstrip 一致
-            if used + w > usable_cm and ch != ' ':
+            # 留 0.5mm 余量：宽度是按"字号 × 字数"估的，与渲染器的实际
+            # 排字总有零点几毫米出入，卡得太死会把正好放得下的一行折断
+            if used + w > usable_cm + 0.05 and ch != ' ':
                 if buf:
                     out.append(dict(seg, text=buf))
                     buf = ''
@@ -1298,46 +1346,107 @@ def plan_fill(template_path, values, autofit=True,
 
     def _segs_of(para):
         # 制表位（cm，相对左边距）；定位到位的字段靠它顶过去，
-        # 预览要照着算，否则会把 \t 当成一个普通字符画出来
+        # 预览要照着算，否则会把 \t 当成一个普通字符画出来。
+        # 对齐方式一并读出来：成文日期的数字是**右对齐**顶到预印「年/月/日」
+        # 的左沿的，当成左对齐画会把数字整体右移一个数字宽，后面的落款
+        # 跟着被顶出版心、平白折成两行。
         stops = []
         try:
             for t in para.paragraph_format.tab_stops:
-                stops.append(t.position.cm)
+                al = t.alignment
+                stops.append((t.position.cm,
+                              'right' if (al is not None and int(al) == 2) else 'left'))
         except Exception:
             pass
-        stops.sort()
+        stops.sort(key=lambda z: z[0])
+        pos_only = [z[0] for z in stops]
+        align_of = dict(stops)
         char_cm = _para_font_pt(para) / PT_PER_CM
-        out = []
-        x = 0.0                      # 当前排到哪儿（cm，相对左边距）
-        used = 0                     # 已认领的制表位个数
+
+        # 先摊成记号序列，再统一定位：右对齐制表位要先知道它后面跟了多宽的
+        # 内容，才能算出该从哪儿起排——边走边算是算不出来的
+        toks = []
+        pf = para.paragraph_format
+        ind = (pf.left_indent.cm if pf.left_indent is not None else 0.0)
+        first = (pf.first_line_indent.cm if pf.first_line_indent is not None else 0.0)
+        indent = max(0.0, ind + first)
         for r in para.runs:
             if not r.text:
                 continue
             white = _is_white(r)
             pt = r.font.size.pt if r.font.size else 14
+            fld = r._r.get('docfmt-field')
+            trk = _run_track_cm(r)
             # run 里的 w:br 在 python-docx 里就是 '\n'，必须拆成换行片段，
             # 否则梯形回行的标题在预览里仍会挤成一行
-            parts = r.text.split('\n')
-            for i, part in enumerate(parts):
+            for i, part in enumerate(r.text.split('\n')):
                 if i:
-                    out.append({'text': '\n', 'white': white, 'pt': pt})
-                    x = 0.0
-                    used = 0
+                    toks.append({'br': True, 'white': white, 'pt': pt})
                 if not part:
                     continue
-                # 把 \t 摊成"到下一个制表位"的空白，预览里位置才对得上
                 for j, piece in enumerate(part.split('\t')):
                     if j:
-                        nxt, used = _tab_target(stops, used, x)
-                        out.append({'text': ' ', 'white': True, 'pt': pt,
-                                    'pad_cm': max(0.0, nxt - x)})
-                        x = nxt
+                        toks.append({'tab': True, 'pt': pt})
                     if piece:
-                        out.append({'text': piece, 'white': white, 'pt': pt})
-                        x += _text_width_units(piece) * char_cm
+                        t = {'text': piece, 'white': white, 'pt': pt}
+                        if trk:
+                            t['track'] = trk
+                        if fld:
+                            t['field'] = fld
+                        toks.append(t)
+
+        out = []
+        x = indent
+        used = 0
+        if indent > 0:
+            out.append({'text': ' ', 'white': True, 'pt': 1, 'pad_cm': indent})
+        for k, tk in enumerate(toks):
+            if tk.get('br'):
+                out.append({'text': '\n', 'white': tk['white'], 'pt': tk['pt']})
+                x = 0.0
+                used = 0
+                continue
+            if tk.get('tab'):
+                nxt, used = _tab_target(pos_only, used, x)
+                if align_of.get(nxt) == 'right':
+                    # 右对齐：这一段（到下一个制表符为止）的右沿顶到制表位
+                    seg_w = 0.0
+                    for nx in toks[k + 1:]:
+                        if nx.get('tab') or nx.get('br'):
+                            break
+                        seg_w += _seg_width_cm(nx, char_cm)
+                    nxt = max(x, nxt - seg_w)
+                out.append({'text': ' ', 'white': True, 'pt': tk['pt'],
+                            'pad_cm': max(0.0, nxt - x)})
+                x = max(x, nxt)
+                continue
+            out.append(tk)
+            x += _seg_width_cm(tk, char_cm)
         return out
 
+    def _vmetrics(para):
+        """段落的纵向几何：(段前距cm, 行高cm)。
+
+        套打模板一律用"精确行距 + 段前距"定位，这两个数就是版面的真相；
+        画布照它排，纸上什么样预览就什么样。没设精确行距的（用户自建的
+        模板）退回按字号 × 1.2 估。
+        """
+        pf = para.paragraph_format
+        sb = pf.space_before.cm if pf.space_before is not None else 0.0
+        ls = pf.line_spacing
+        if ls is not None and hasattr(ls, 'cm') and \
+                pf.line_spacing_rule in (WD_LINE_SPACING.EXACTLY,
+                                         WD_LINE_SPACING.AT_LEAST):
+            line = ls.cm
+        else:
+            line = _para_font_pt(para) / PT_PER_CM * 1.2
+        return sb, max(0.05, line)
+
+    def _nlines(segs):
+        return 1 + sum(1 for s in segs if s.get('text') == '\n')
+
     blocks = []
+    y = page['top_cm']            # 排到纸面的哪个高度了（cm，距纸上边）
     for child in doc.element.body.iterchildren():
         tag = child.tag.split('}')[-1]
         if tag == 'p':
@@ -1345,8 +1454,14 @@ def plan_fill(template_path, values, autofit=True,
             if not para.text.strip():
                 continue
             al = para.paragraph_format.alignment
+            sb, line_cm = _vmetrics(para)
+            segs = wrap_segs(_segs_of(para), content_w)
+            top = y + sb
+            h = _nlines(segs) * line_cm
+            y = top + h
             blocks.append({'kind': 'para',
-                           'segs': wrap_segs(_segs_of(para), content_w),
+                           'segs': segs,
+                           'top_cm': top, 'height_cm': h, 'line_cm': line_cm,
                            'align': {1: 'center', 2: 'right'}.get(
                                int(al) if al is not None else 0, 'left')})
         elif tag == 'tbl':
@@ -1403,7 +1518,12 @@ def plan_fill(template_path, values, autofit=True,
                 height = (h or 0) if exact else max(h or 0, natural)
                 rows.append({'height_cm': height, 'declared_cm': h or 0,
                              'exact': exact, 'cells': cells})
-            blocks.append({'kind': 'table', 'rows': rows, 'borders': borders})
+            tbl_top = y
+            for rr in rows:
+                rr['top_cm'] = y
+                y += rr['height_cm']
+            blocks.append({'kind': 'table', 'rows': rows, 'borders': borders,
+                           'top_cm': tbl_top, 'height_cm': y - tbl_top})
 
     # 兼容旧字段
     paras = [b for b in blocks if b['kind'] == 'para']

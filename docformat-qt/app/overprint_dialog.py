@@ -3,13 +3,15 @@
 import os
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import (QApplication, QComboBox, QDialog, QDialogButtonBox,
+from PyQt5.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
+                             QDialogButtonBox,
                              QDoubleSpinBox, QFileDialog, QFormLayout,
                              QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                              QPlainTextEdit, QPushButton, QScrollArea,
                              QSplitter, QTextBrowser, QVBoxLayout, QWidget)
 
 from app.theme import settings
+from app.overprint_canvas import OverprintCanvas
 from scripts import overprint
 
 # 这些字段内容通常较长，用多行输入框
@@ -196,6 +198,12 @@ class OverprintDialog(QDialog):
         self.resize(1120, 720)
         self._editors = {}
         self._template_path = None
+        # 拖动改出来的位置先放内存里，随预览即时生效；点「保存位置」才落盘。
+        # 拖的时候不停写文件既慢又难反悔
+        self._offsets = {}
+        self._shift = (0.0, 0.0)
+        self._pos_dirty = False
+        self._bg_cache = {}
         # 导入内容的源文件目录——生成时默认存到那里，省得每次翻文件夹
         self._source_dir = None
         # 输入后延迟重算预览，避免每敲一个字就跑一遍填充
@@ -304,6 +312,15 @@ class OverprintDialog(QDialog):
         self.lines_combo.currentIndexChanged.connect(self._schedule_preview)
         shape_row.addWidget(self.lines_combo)
         shape_row.addStretch(1)
+        self.btn_save_pos = QPushButton("保存位置")
+        self.btn_save_pos.setEnabled(False)
+        self.btn_save_pos.setToolTip("把拖出来的位置记到模板旁边，下次打开还是这样")
+        self.btn_save_pos.clicked.connect(self._save_positions)
+        shape_row.addWidget(self.btn_save_pos)
+        self.btn_reset_pos = QPushButton("还原位置")
+        self.btn_reset_pos.setToolTip("撤掉所有微调，回到模板原样（还要点「保存位置」才落盘）")
+        self.btn_reset_pos.clicked.connect(self._reset_positions)
+        shape_row.addWidget(self.btn_reset_pos)
         self.btn_offsets = QPushButton("打印位置微调…")
         self.btn_offsets.setToolTip(
             "拿尺子量真实预印单，指定每个字段距纸张左边缘多少厘米，\n"
@@ -321,8 +338,33 @@ class OverprintDialog(QDialog):
         self.shape_hint.setProperty("muted", "true")
         self.shape_hint.setWordWrap(True)
         pv_lay.addWidget(self.shape_hint)
-        self.preview = QTextBrowser()
-        pv_lay.addWidget(self.preview, 1)
+        # 预览画布：按真实 A4 比例画整张纸，黑字可直接拖着挪位置
+        zoom_row = QHBoxLayout()
+        zoom_row.addWidget(QLabel("显示："))
+        self.zoom_combo = QComboBox()
+        for _t, _z in (('适应窗口', 0), ('50%', 18.9), ('75%', 28.3),
+                       ('100%（等大）', 37.8), ('150%', 56.7), ('200%', 75.6)):
+            self.zoom_combo.addItem(_t, _z)
+        self.zoom_combo.setToolTip("100% 就是纸上的实际大小（按 96dpi 折算）")
+        self.zoom_combo.currentIndexChanged.connect(self._apply_zoom)
+        zoom_row.addWidget(self.zoom_combo)
+        self.bg_check = QCheckBox("垫上套头纸")
+        self.bg_check.setToolTip("把绑定的套头 PDF 垫在底下，直接看黑字有没有落进预印栏位")
+        self.bg_check.stateChanged.connect(self._toggle_bg)
+        zoom_row.addWidget(self.bg_check)
+        zoom_row.addStretch(1)
+        self.drag_hint = QLabel("拖黑字改它的横向位置，拖空白处整张纸一起挪")
+        self.drag_hint.setProperty("muted", "true")
+        zoom_row.addWidget(self.drag_hint)
+        pv_lay.addLayout(zoom_row)
+
+        self.canvas = OverprintCanvas()
+        self.canvas.fieldMoved.connect(self._on_field_moved)
+        self.canvas.sheetMoved.connect(self._on_sheet_moved)
+        self.pv_area = QScrollArea()
+        self.pv_area.setWidgetResizable(True)
+        self.pv_area.setWidget(self.canvas)
+        pv_lay.addWidget(self.pv_area, 1)
         self.pv_note = QLabel("")
         self.pv_note.setProperty("muted", "true")
         self.pv_note.setWordWrap(True)
@@ -400,6 +442,13 @@ class OverprintDialog(QDialog):
     def _load_fields(self, *_a):
         path = self.tpl_combo.currentData()
         self._template_path = path
+        # 换模板就换一套位置：位置是随模板存的
+        self._offsets = overprint.load_offsets(path) if path else {}
+        self._shift = overprint.load_shift(path) if path else (0.0, 0.0)
+        self._pos_dirty = False
+        self._update_pos_hint()
+        if getattr(self, 'bg_check', None) is not None:
+            self.bg_check.setChecked(False)
         host = QWidget()
         form = QFormLayout(host)
         form.setContentsMargins(4, 6, 4, 6)
@@ -442,25 +491,115 @@ class OverprintDialog(QDialog):
         self._refresh_preview()
         self.status.setText("共 {} 个可填字段；留空的字段打印出来就是空白。".format(len(fields)))
 
+    # ---------- 画布交互 ----------
+    def _apply_zoom(self, *_a):
+        z = self.zoom_combo.currentData() or 0
+        self.pv_area.setWidgetResizable(not z)
+        self.canvas.set_zoom(z)
+
+    def _toggle_bg(self, *_a):
+        if not self.bg_check.isChecked():
+            self.canvas.set_background(None)
+            return
+        path = overprint.load_letterhead(self._template_path or '')
+        if not path or not os.path.exists(path):
+            self.bg_check.setChecked(False)
+            QMessageBox.information(
+                self, "还没绑定套头纸",
+                "这个模板还没记住套头纸的 PDF。\n"
+                "用「套头对位校验…」选一次，之后就会记住。")
+            return
+        pm = self._bg_cache.get(path)
+        if pm is None:
+            from scripts import overlay
+            ok, why = overlay.can_render()
+            if not ok:
+                self.bg_check.setChecked(False)
+                QMessageBox.information(self, "无法渲染套头", why)
+                return
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                from PyQt5.QtGui import QPixmap
+                png = overlay.render_page_png(path, 0)
+                pm = QPixmap(png)
+                try:
+                    os.remove(png)
+                except OSError:
+                    pass
+            except Exception as exc:
+                self.bg_check.setChecked(False)
+                QMessageBox.warning(self, "读取套头失败", str(exc))
+                return
+            finally:
+                QApplication.restoreOverrideCursor()
+            self._bg_cache[path] = pm
+        self.canvas.set_background(pm)
+
+    def _on_field_moved(self, name, x_cm):
+        """拖完一个字段：位置进内存、立刻重排一次，好看到真实结果"""
+        if x_cm <= 0.02:
+            self._offsets.pop(name, None)
+        else:
+            self._offsets[name] = round(float(x_cm), 2)
+        self._pos_dirty = True
+        self._update_pos_hint()
+        self._refresh_preview()
+
+    def _on_sheet_moved(self, dx, dy):
+        self._shift = (round(float(dx), 2), round(float(dy), 2))
+        self._pos_dirty = True
+        self._update_pos_hint()
+
+    def _update_pos_hint(self):
+        btn = getattr(self, 'btn_save_pos', None)
+        if btn is None:
+            return
+        btn.setEnabled(self._pos_dirty)
+        if not self._pos_dirty:
+            self.drag_hint.setText("拖黑字改它的横向位置，拖空白处整张纸一起挪")
+            return
+        bits = []
+        if self._offsets:
+            bits.append("{} 个字段".format(len(self._offsets)))
+        if any(self._shift):
+            bits.append("整体 ({:+.2f}, {:+.2f})cm".format(*self._shift))
+        self.drag_hint.setText(
+            "位置已改（{}）——点「保存位置」才会记住".format("、".join(bits) or "已还原"))
+
+    def _save_positions(self):
+        if not self._template_path:
+            return
+        overprint.save_offsets(self._template_path, self._offsets,
+                               shift=self._shift)
+        self._pos_dirty = False
+        self._update_pos_hint()
+        self.status.setText("位置已保存到 {}".format(
+            overprint.offsets_path(self._template_path)))
+
+    def _reset_positions(self):
+        self._offsets = {}
+        self._shift = (0.0, 0.0)
+        self._pos_dirty = True
+        self._update_pos_hint()
+        self._refresh_preview()
+
     # ---------- 预览 ----------
     def _schedule_preview(self, *_a):
         self._pv_timer.start()
 
     def _refresh_preview(self):
-        if not self._template_path or not hasattr(self, 'preview'):
+        if not self._template_path or not hasattr(self, 'canvas'):
             return
         try:
             plan = overprint.plan_fill(self._template_path, self._values(),
                                        title_shape=self._title_shape(),
-                                       title_lines=self._title_lines())
+                                       title_lines=self._title_lines(),
+                                       offsets=self._offsets)
         except Exception as e:
-            self.preview.setHtml('<body style="color:#888;font-family:SimSun">'
-                                 '预览失败：{}</body>'.format(e))
+            self.status.setText('预览失败：{}'.format(e))
             return
         self._last_plan = plan
-        pos = self.preview.verticalScrollBar().value()
-        self.preview.setHtml(render_overprint_html(plan, self._pv_scale(plan)))
-        self.preview.verticalScrollBar().setValue(pos)
+        self.canvas.set_plan(plan, self._shift)
         msgs = []
         for row in plan['rows']:
             for c in row['cells']:
@@ -504,6 +643,12 @@ class OverprintDialog(QDialog):
         dlg = OffsetDialog(self._template_path, fields,
                            plan.get('field_pos') or {}, self)
         if dlg.exec_() == QDialog.Accepted:
+            # 对话框里改的已经落盘了，内存里这一份要跟上，
+            # 否则下一次预览还按拖动前的老位置排
+            self._offsets = overprint.load_offsets(self._template_path)
+            self._shift = overprint.load_shift(self._template_path)
+            self._pos_dirty = False
+            self._update_pos_hint()
             self._refresh_preview()
             QMessageBox.information(
                 self, "已保存",
@@ -805,9 +950,12 @@ class OverprintDialog(QDialog):
         from PyQt5.QtWidgets import QApplication
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
+            # 用内存里的位置（可能是刚拖出来还没保存的），生成的就是预览的样子
             n, notes = overprint.fill_form(self._template_path, values, out,
                                            title_shape=self._title_shape(),
-                                           title_lines=self._title_lines())
+                                           title_lines=self._title_lines(),
+                                           offsets=self._offsets,
+                                           shift=self._shift)
         except Exception as e:
             QApplication.restoreOverrideCursor()
             QMessageBox.warning(self, "生成失败", str(e))
