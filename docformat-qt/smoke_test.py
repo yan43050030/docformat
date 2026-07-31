@@ -1763,13 +1763,14 @@ def test_wording():
     d = Document()
     d.add_paragraph('二○二六年，其它情况见附件，共有３人。')
     n = W.apply_wording_fixes(
-        d, ['wording:ling_char', 'wording:qi_ta', 'wording:fullwidth_digit'])
+        d, ['wording:ling_char', 'wording:qi_ta', 'wording:fullwidth_digit'],
+        revision=False)
     assert n == 3 and d.paragraphs[0].text == '二〇二六年，其他情况见附件，共有3人。', \
         '修正结果不对：{} / {}'.format(n, d.paragraphs[0].text)
     # 引文里的不能动
     d2 = Document()
     d2.add_paragraph('原文是“其它情况”，照录。')
-    W.apply_wording_fixes(d2, ['wording:qi_ta'])
+    W.apply_wording_fixes(d2, ['wording:qi_ta'], revision=False)
     assert '其它' in d2.paragraphs[0].text, '引号内的引文不该被改'
 
 
@@ -1785,9 +1786,42 @@ def test_wording():
     d4.add_paragraph('，'.join(list(TYPOS)[:40]))
     got4 = W.check_wording(d4)
     assert any('错别字' in f['item'] for f in got4), '错词本没生效'
-    W.apply_wording_fixes(d4, ['wording:typo'])
+    W.apply_wording_fixes(d4, ['wording:typo'], revision=False)
     for w in list(TYPOS)[:40]:
         assert w not in d4.paragraphs[0].text, '{} 没被改掉'.format(w)
+
+    # 护栏：这些"撞词"的正确写法一条都不许命中
+    from scripts.typos import GUARDS
+    assert len(GUARDS) >= 20, '带护栏的条目太少：{}'.format(len(GUARDS))
+    GUARDED_OK = [
+        '提供雕刻服务，预防犯罪，表决对方案，加倍受益，选拔款项。',
+        '重复盖章，取消售后，公园满是游客，安装钉子，登记律师资格。',
+        '协商确定方案，各位临时代表，决定购买设备，干部份额，险峻工程。',
+        '真相象征意义，既使用了新办法，拼凑和谐画面，诸侯选择，广招开发者。',
+        '所作所为，出错施工已纠正，西风彩霞满天。',
+    ]
+    for line in GUARDED_OK:
+        dg = Document()
+        dg.add_paragraph(line)
+        hit = [f for f in W.check_wording(dg) if '错别字' in f['item']]
+        assert not hit, '护栏没挡住：{} → {}'.format(line, [f['detail'] for f in hit])
+    # 护栏不能把真错的也挡掉
+    dg2 = Document()
+    dg2.add_paragraph('防犯意识要强，刻服困难，决对不行，倍受表扬，'
+                      '复盖面广，园满结束，记律严明，商确一下，位临指导。')
+    hit2 = [f for f in W.check_wording(dg2) if '错别字' in f['item']]
+    assert hit2 and '9 处' in hit2[0]['detail'], \
+        '带护栏的词真错时也要报：{}'.format([f['detail'] for f in hit2])
+
+    # 改动走 Word 修订：不是悄悄替换，而是留痕给人定夺
+    dr = Document()
+    dr.add_paragraph('我们迫不急待地按步就班。')
+    W.apply_wording_fixes(dr, ['wording:typo'])
+    xml = dr.paragraphs[0]._p.xml
+    assert xml.count('<w:del ') == 2 and xml.count('<w:ins ') == 2, '应生成 2 处修订'
+    assert '迫不急待' in xml and '迫不及待' in xml, '修订里要同时留下原文和改文'
+    import re as _re
+    assert _re.search(r'<w:delText[^>]*>迫不急待<', xml), '原文应放进 w:delText'
 
     # 反例语料：整段全是**正确**写法，一条都不许命中。
     # 这里专挑容易跨词边界误伤的：雕刻服务(刻服)、预防犯罪(防犯)、
@@ -1827,10 +1861,11 @@ def test_wording():
         raise AssertionError('未知文种应报错')
     except ValueError:
         pass
-    print('[16] 公文用语检查：{} 条规则 + 内置错词本 {} 条，'
-          '正例全中、{} 条反例 + {} 段正确语料零误报 + '
-          '文种搭配 + 自动修正 + 文种骨架 通过'
-          .format(len(W.RULES), len(TYPOS), len(NEG), len(CLEAN)))
+    print('[16] 公文用语检查：{} 条规则 + 内置错词本 {} 条（{} 条带防撞护栏），'
+          '正例全中、{} 条反例 + {} 段正确语料 + {} 段撞词语料零误报 + '
+          '文种搭配 + 修订方式留痕 + 文种骨架 通过'
+          .format(len(W.RULES), len(TYPOS), len(GUARDS),
+                  len(NEG), len(CLEAN), len(GUARDED_OK)))
 
 
 def test_layout_fixes():

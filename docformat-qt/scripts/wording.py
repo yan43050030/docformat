@@ -192,9 +192,10 @@ RULES = [
 # 和"要看上下文"的易混词是两回事，不能混在一组里。
 # 234 条合成一个正则一次扫完，比 234 条规则各扫一遍快得多；
 # 长的排前面，「迫不急待」不会被更短的条目截胡。
-from .typos import TYPOS as _TYPOS      # noqa: E402
+from .typos import TYPOS as _TYPOS, pattern_of as _typo_pat   # noqa: E402
 
-_TYPO_RE = '|'.join(re.escape(w) for w in
+# 每条各自带护栏（否定环视），长的排前面免得被短条目截胡
+_TYPO_RE = '|'.join(_typo_pat(w) for w in
                     sorted(_TYPOS, key=len, reverse=True))
 
 RULES.append({
@@ -360,11 +361,66 @@ def _check_kind(texts, detect_types):
     return out
 
 
-def apply_wording_fixes(doc, fix_keys, detect_types=None):
+_REV_ID = [1000]
+
+
+def _tracked_replace(para, run, pieces):
+    """把 run 拆开，改动处以 **Word 修订** 的形式落进去。
+
+    pieces 是 [(原文, 新文或 None)]，None 表示这段不动。改动写成
+        <w:del><w:r><w:delText>错的</w:delText></w:r></w:del>
+        <w:ins><w:r><w:t>对的</w:t></w:r></w:ins>
+    在 Word/WPS 里就是一处修订：谁改的、改成什么，一目了然，
+    点"接受/拒绝"就能定夺。这比默默替换要紧——用语这种事，最终得由人拍板。
+    """
+    from copy import deepcopy
+    from datetime import datetime, timezone
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn as _qn
+
+    r = run._r
+    parent = r.getparent()
+    at = list(parent).index(r)
+    now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    def _mk_run(text, tag='w:t'):
+        nr = deepcopy(r)
+        for t in nr.findall(_qn('w:t')) + nr.findall(_qn('w:delText')):
+            nr.remove(t)
+        el = OxmlElement(tag)
+        el.set(_qn('xml:space'), 'preserve')
+        el.text = text
+        nr.append(el)
+        return nr
+
+    def _wrap(tag, child):
+        w = OxmlElement(tag)
+        _REV_ID[0] += 1
+        w.set(_qn('w:id'), str(_REV_ID[0]))
+        w.set(_qn('w:author'), '公文格式工具')
+        w.set(_qn('w:date'), now)
+        w.append(child)
+        return w
+
+    offset = 0
+    for old_text, new_text in pieces:
+        if new_text is None:
+            parent.insert(at + offset, _mk_run(old_text))
+            offset += 1
+            continue
+        parent.insert(at + offset, _wrap('w:del', _mk_run(old_text, 'w:delText')))
+        parent.insert(at + offset + 1, _wrap('w:ins', _mk_run(new_text)))
+        offset += 2
+    parent.remove(r)
+
+
+def apply_wording_fixes(doc, fix_keys, detect_types=None, revision=True):
     """按 fix_key（wording:规则id）替换文字，返回改动处数。
 
-    只改给了 fix 的规则——那些是"改了一定对"的。逐 run 替换以保留格式；
-    命中横跨两个 run 的极少数情况会漏改，宁可漏也不打乱格式。
+    revision=True（默认）走 Word 修订：改动不是悄悄替换掉，而是留成一处
+    修订痕迹，在 Word/WPS 里能看到"把甲改成了乙"，点接受或拒绝由人定。
+    用语对错终究要人拍板，默默改掉是不负责任的。
+    只有给了 fix 的规则才动手——那些是"改了一定对"的。
     """
     ids = {k.split(':', 1)[1] for k in (fix_keys or []) if k.startswith('wording:')}
     rules = [r for r in list(RULES) + list(load_user_rules())
@@ -379,25 +435,45 @@ def apply_wording_fixes(doc, fix_keys, detect_types=None):
             continue
         ai += 1
         ptype = (detect_types or {}).get(ai)
-        for run in para.runs:
-            if not run.text:
+        for run in list(para.runs):
+            text = run.text
+            if not text:
                 continue
-            new = run.text
+            # 遮蔽是按整段算的，run 里再算一次代价太高；这里只保护
+            # run 内可见的引号/书名号，够用
+            if re.search(r'[“”《》]', text):
+                continue
+            spans = []          # [(起, 止, 新文)]
             for r in rules:
                 if r['scope'] and ptype not in r['scope']:
                     continue
-                # 遮蔽是按整段算的，run 里再算一次代价太高；这里只保护
-                # run 内可见的引号/书名号，够用
-                if re.search(r'[“”《》]', new):
-                    continue
-                new2 = re.sub(r['pattern'], r['fix'], new)
-                if new2 != new:
-                    n += len(re.findall(r['pattern'], new))
-                    new = new2
-            if new != run.text:
-                run.text = new
+                for m in re.finditer(r['pattern'], text):
+                    if any(not (m.end() <= a or m.start() >= b)
+                           for a, b, _t in spans):
+                        continue        # 与已认领的区间重叠，跳过
+                    spans.append((m.start(), m.end(), r['fix'](m)))
+            if not spans:
+                continue
+            spans.sort()
+            n += len(spans)
+            if not revision:
+                out, cur = [], 0
+                for a, b, t in spans:
+                    out.append(text[cur:a]); out.append(t); cur = b
+                out.append(text[cur:])
+                run.text = ''.join(out)
+                continue
+            pieces, cur = [], 0
+            for a, b, t in spans:
+                if a > cur:
+                    pieces.append((text[cur:a], None))
+                pieces.append((text[a:b], t))
+                cur = b
+            if cur < len(text):
+                pieces.append((text[cur:], None))
+            _tracked_replace(para, run, pieces)
     if n:
-        logger.info('用语修正 %d 处', n)
+        logger.info('用语修正 %d 处（%s）', n, '修订方式' if revision else '直接替换')
     return n
 
 
