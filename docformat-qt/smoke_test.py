@@ -1699,6 +1699,71 @@ def test_overprint_fonts():
           '填写三号小标宋标题(居中)/小三仿宋意见/TNR 数字 通过')
 
 
+def test_y_offsets():
+    """纵向微调：能挪、挪不动时说清楚，且不动横向"""
+    from scripts import overprint as op
+    tpl = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       'templates', '套打', '文件送审单.docx')
+    vals = {'年': '2026', '月': '7', '日': '29'}
+
+    def _last_top(plan):
+        return [b for b in plan['blocks'] if b['kind'] == 'para'][-1]['top_cm']
+
+    base = op.plan_fill(tpl, vals)
+    top0 = _last_top(base)
+
+    # 往下挪：说多少就是多少
+    moved = op.plan_fill(tpl, vals, offsets_y={'年': top0 + 0.8})
+    assert abs(_last_top(moved) - (top0 + 0.8)) < 0.02, \
+        '纵向没挪到位：{:.2f} → {:.2f}'.format(top0, _last_top(moved))
+    assert not moved['notes'], '正常下挪不该有提示：{}'.format(moved['notes'])
+    # 横向不受影响
+    assert abs(moved['field_pos']['年'] - base['field_pos']['年']) < 0.01, \
+        '纵向微调不该动横向位置'
+
+    # 往上挪过头：不闷头改，如实说最多能到哪儿
+    up = op.plan_fill(tpl, vals, offsets_y={'年': 2.0})
+    assert abs(_last_top(up) - top0) < 0.02, '挪不动时应保持原位'
+    assert any('已经被上一行占了' in n for n in up['notes']), \
+        '挪不动要说清楚：{}'.format(up['notes'])
+
+    # 表格里的字段挪不了，也要说
+    intbl = op.plan_fill(tpl, {'承办部门': '办公室'}, offsets_y={'承办部门': 20.0})
+    assert any('行高定死' in n for n in intbl['notes']), \
+        '表格里的字段应提示挪不了：{}'.format(intbl['notes'])
+
+    # 同一行的几个字段只能一起动
+    same = op.plan_fill(tpl, vals, offsets_y={'年': top0 + 0.5, '月': top0 + 0.5})
+    assert any('同一行' in n for n in same['notes']), \
+        '同行字段应提示一起动：{}'.format(same['notes'])
+
+    # 存盘往返：纵向与横向、整体平移互不干扰
+    work = os.path.join(OUT_DIR, 'yoff.docx')
+    shutil.copy(tpl, work)
+    try:
+        op.save_offsets(work, {'标题': 5.0}, shift=(0.1, 0.2),
+                        offsets_y={'年': 27.5})
+        assert op.load_offsets(work) == {'标题': 5.0}
+        assert op.load_offsets_y(work) == {'年': 27.5}
+        assert op.load_shift(work) == (0.1, 0.2)
+        op.save_offsets(work, {'标题': 5.0})        # 不传纵向时不该丢
+        assert op.load_offsets_y(work) == {'年': 27.5}, '存横向时把纵向弄丢了'
+    finally:
+        for f in (work, op.offsets_path(work)):
+            if os.path.exists(f):
+                os.remove(f)
+
+    # 打印预检
+    long_plan = op.plan_fill(tpl, {'拟办意见': '因某某事项需要开展调查。' * 40})
+    kinds = [lv for lv, _m in op.preflight(long_plan, {}, {})]
+    assert 'block' in kinds, '放不下时预检应给 block：{}'.format(kinds)
+    ok_plan = op.plan_fill(tpl, {'标题': '关于某事的请示'})
+    assert not [lv for lv, _m in op.preflight(ok_plan, {'标题': '关于某事的请示'}, {})
+                if lv in ('block', 'warn')], '正常内容不该报预检问题'
+    print('[17] 纵向微调：下挪到位/上挪受阻如实告知/表格内不可挪/同行联动 + '
+          '存盘互不干扰 + 打印预检 通过')
+
+
 def test_wording():
     """公类用语检查：正例要报、**反例一条都不许报**"""
     from scripts import wording as W
@@ -2154,4 +2219,5 @@ if __name__ == '__main__':
     test_scan_align()
     test_layout_fixes()
     test_wording()
+    test_y_offsets()
     print('\n全部冒烟测试通过 ✓')

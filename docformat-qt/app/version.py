@@ -6,4 +6,4 @@
 打包机的 CI）一旦碰上 Qt，就会先撞 "Could not connect to any X display"，
 根本轮不到把版本号打出来。
 """
-VERSION = '5.0.1'
+VERSION = '5.1.0'

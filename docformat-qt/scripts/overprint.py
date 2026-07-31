@@ -275,7 +275,8 @@ def load_letterhead(template_path):
         return ''
 
 
-def save_offsets(template_path, offsets, letterhead=None, shift=None):
+def save_offsets(template_path, offsets, letterhead=None, shift=None,
+                 offsets_y=None):
     """写回位置微调表；offsets 与套头路径都空时删除文件（恢复默认）。
 
     与模板同名的一个 json 里放齐"对位相关的一切"：各字段的目标位置、
@@ -287,8 +288,10 @@ def save_offsets(template_path, offsets, letterhead=None, shift=None):
         letterhead = load_letterhead(template_path)
     if shift is None:
         shift = load_shift(template_path)
+    if offsets_y is None:
+        offsets_y = load_offsets_y(template_path)
     dx, dy = float(shift[0] or 0.0), float(shift[1] or 0.0)
-    if not offsets and not letterhead and not dx and not dy:
+    if not offsets and not letterhead and not dx and not dy and not offsets_y:
         try:
             os.remove(p)
         except OSError:
@@ -300,6 +303,10 @@ def save_offsets(template_path, offsets, letterhead=None, shift=None):
         '单位': 'cm（厘米，从纸张左边缘量起，含页边距）',
         'fields': {k: round(float(v), 2) for k, v in (offsets or {}).items()},
     }
+    if offsets_y:
+        payload['fields_y'] = {k: round(float(v), 2) for k, v in offsets_y.items()}
+        payload['fields_y说明'] = ('纵向目标位置，距纸张**上边**的厘米数。'
+                                   '纵向只能整行挪，同一行上的几个字段会一起动。')
     if letterhead:
         payload['套头PDF'] = letterhead
         payload['套头PDF说明'] = '套头纸（红头文件纸）的 PDF，用于不打印就校验对位'
@@ -318,7 +325,24 @@ def save_letterhead(template_path, letterhead):
     """只改套头 PDF 绑定，保留已有的位置微调"""
     return save_offsets(template_path, load_offsets(template_path),
                         letterhead=letterhead or '',
-                        shift=load_shift(template_path))
+                        shift=load_shift(template_path),
+                        offsets_y=load_offsets_y(template_path))
+
+
+def load_offsets_y(template_path):
+    """逐字段的**纵向**目标位置 {字段: 距纸上边cm}。
+
+    横向靠制表位，纵向没有对应的东西——只能挪整个段落的段前距。
+    所以纵向微调的粒度是"该字段所在的那一行"，同一行上的几个字段
+    只能一起动，这一点在界面上要说清楚。
+    """
+    import json
+    try:
+        with open(offsets_path(template_path), 'r', encoding='utf-8') as f:
+            data = (json.load(f).get('fields_y') or {})
+        return {k: float(v) for k, v in data.items()}
+    except (IOError, OSError, ValueError, AttributeError, TypeError):
+        return {}
 
 
 def load_shift(template_path):
@@ -1009,7 +1033,7 @@ def strip_empty_runs(doc):
 
 def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
               one_page=True, title_shape='trapezoid_down',
-              title_lines=None, offsets=None):
+              title_lines=None, offsets=None, offsets_y=None):
     """在内存 Document 上完成填充→自适应→锁高，返回 (已填数, 提示, 单元格报告)。
 
     预览与实际输出共用这一条路径，保证"预览看到的字号"就是"打印出来的字号"，
@@ -1170,21 +1194,26 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
                          .format(_k, float(_want), _got))
 
     used = [k for k in values if k in filled and str(values.get(k, '')).strip()]
+    if offsets_y:
+        notes.extend(_apply_y_offsets(doc, offsets_y))
     return len(used), notes, reports, field_pos, adjustable
 
 
 def fill_form(template_path, values, output_path, autofit=True, log=None,
               lock_heights=False, one_page=True, title_shape='trapezoid_down',
-              title_lines=None, offsets=None, shift=None):
+              title_lines=None, offsets=None, shift=None, offsets_y=None):
     """按 values 填充套打模板并另存，返回 (已填字段数, 提示列表)。"""
     from docx import Document
     doc = Document(template_path)
     if offsets is None:
         offsets = load_offsets(template_path)
+    if offsets_y is None:
+        offsets_y = load_offsets_y(template_path)
     used, notes, _r, _fp, _adj = _fill_doc(
         doc, values, autofit=autofit, log=log,
         lock_heights=lock_heights, one_page=one_page,
-        title_shape=title_shape, title_lines=title_lines, offsets=offsets)
+        title_shape=title_shape, title_lines=title_lines, offsets=offsets,
+        offsets_y=offsets_y)
     if shift is None:
         shift = load_shift(template_path)
     if apply_shift(doc, shift[0], shift[1]):
@@ -1314,7 +1343,8 @@ def _cell_content_cm(cell, grid_cm):
 
 
 def plan_fill(template_path, values, autofit=True,
-              title_shape='trapezoid_down', title_lines=None, offsets=None):
+              title_shape='trapezoid_down', title_lines=None, offsets=None,
+              offsets_y=None):
     """只算不存：返回预览所需的版面数据，与 fill_form 走同一条填充路径。
 
     blocks 按文档真实顺序给出（段落与表格交替）——套打单里成文日期在
@@ -1327,9 +1357,11 @@ def plan_fill(template_path, values, autofit=True,
     doc = Document(template_path)
     if offsets is None:
         offsets = load_offsets(template_path)
+    if offsets_y is None:
+        offsets_y = load_offsets_y(template_path)
     _used, notes, reports, field_pos, adjustable = _fill_doc(
         doc, values, autofit=autofit, log=None, title_shape=title_shape,
-        title_lines=title_lines, offsets=offsets)
+        title_lines=title_lines, offsets=offsets, offsets_y=offsets_y)
 
     sec = doc.sections[0]
     page = {
@@ -1913,3 +1945,137 @@ def fit_document(source_path, template_path, output_path,
     if missing:
         notes = list(notes) + ['未能自动识别：{}（可在对话框里手工补填）'.format('、'.join(missing))]
     return values, notes
+
+
+# ---------------- 打印预检 ----------------
+
+def preflight(plan, values=None, offsets=None):
+    """打印前把"会印坏"的地方一次说清楚，返回 [(级别, 说明)]。
+
+    级别 'block' = 印出来一定不对，'warn' = 有风险，'info' = 提一句。
+    宁可一次讲完，也别等打完一张纸才发现——套打纸是预印的，废一张少一张。
+    """
+    out = []
+    pg = plan.get('page') or {}
+    ph = pg.get('height_cm') or 29.7
+
+    over = []
+    for b in plan.get('blocks') or []:
+        if b.get('kind') != 'table':
+            continue
+        for r in b['rows']:
+            for c in r['cells']:
+                if c.get('overflow'):
+                    txt = ''.join(s.get('text', '') for s in (c.get('segs') or []))
+                    over.append(txt.strip()[:12] or '（空）')
+    if over:
+        out.append(('block', '有 {} 处内容缩到最小仍放不下，印出来会压到栏外或被截断：{}'
+                    .format(len(over), '、'.join(over[:3]))))
+
+    shrunk = [c for b in plan.get('blocks') or [] if b.get('kind') == 'table'
+              for r in b['rows'] for c in r['cells'] if c.get('shrunk')]
+    if shrunk:
+        out.append(('warn', '有 {} 处自动缩小了字号才放下——预印栏位的字会比别处小，'
+                            '介意的话精简一下文字'.format(len(shrunk))))
+
+    last = (plan.get('blocks') or [{}])[-1]
+    bottom = (last.get('top_cm') or 0) + (last.get('height_cm') or 0)
+    if bottom > ph + 0.05:
+        out.append(('block', '内容排到了纸面以外（{:.1f}cm，纸高 {:.1f}cm），'
+                             '会溢到第二页'.format(bottom, ph)))
+
+    field_pos = plan.get('field_pos') or {}
+    for name, want in (offsets or {}).items():
+        got = field_pos.get(name)
+        if got is None:
+            continue
+        if abs(got - want) > 0.05:
+            out.append(('warn', '「{}」想印在 {:.2f}cm，实际落在 {:.2f}cm——'
+                                '多半是前面的预印栏目名已经占过了这个位置'
+                        .format(name, want, got)))
+
+    empty = [k for k, v in (values or {}).items() if not str(v).strip()]
+    if empty:
+        out.append(('info', '这 {} 个字段是空的，打出来就是空白（留着手写就不用管）：{}'
+                    .format(len(empty), '、'.join(empty[:6]))))
+
+    for note in plan.get('notes') or []:
+        out.append(('info', note))
+    return out
+
+
+def _para_top_cm(doc, para):
+    """段落顶端距纸上边多少 cm，以及它当前的段前距。
+
+    必须**连表格一起走**：送审单里成文日期在表格之后，只数段落会把它算到
+    5.95cm（实际 27.05），据此改段前距会把整行推出纸外。
+    """
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+    top = doc.sections[0].top_margin.cm
+    for child in doc.element.body.iterchildren():
+        tag = child.tag.split('}')[-1]
+        if tag == 'tbl':
+            for row in Table(child, doc).rows:
+                h, _exact = _row_height_cm(row)
+                top += h or 0.0
+            continue
+        if tag != 'p':
+            continue
+        p = Paragraph(child, doc)
+        pf = p.paragraph_format
+        sb = pf.space_before.cm if pf.space_before is not None else 0.0
+        if child is para._p:
+            return top + sb, sb
+        if not p.text.strip():
+            continue
+        ls = pf.line_spacing
+        line = ls.cm if (ls is not None and hasattr(ls, 'cm')) else \
+            _para_font_pt(p) / PT_PER_CM * 1.2
+        top += sb + (1 + p.text.count('\n')) * line
+    return None, None
+
+
+def _apply_y_offsets(doc, offsets_y):
+    """把字段所在的那一行挪到指定的纵向位置（改段前距）。
+
+    横向能用制表位说一不二，纵向没有对等的东西——Word 里唯一能把一行
+    往下推的只有段前距。所以纵向微调的粒度是**整行**：同一行上的几个
+    字段只能一起动，做不到各挪各的。挪不动的（在表格里、或要往上挪却
+    已经贴着上一行）如实说清楚，不闷头改。
+    """
+    from docx.shared import Cm
+    notes = []
+    done = set()
+    # 表格里的字段挪不了：行高是定死的，改段前距只会把内容往下推、
+    # 撞到下一条框线。先如实说清楚，别让人以为设了就生效了
+    for tbl in doc.tables:
+        for cell in _iter_cells(tbl):
+            for p in cell.paragraphs:
+                for r in p.runs:
+                    n = r._r.get('docfmt-field')
+                    if n and n in offsets_y and n not in done:
+                        notes.append('「{}」在表格格子里，纵向位置由行高定死，'
+                                     '挪不了——要改得改模板的行高'.format(n))
+                        done.add(n)
+    for para in doc.paragraphs:
+        names = [r._r.get('docfmt-field') for r in para.runs]
+        names = [n for n in names if n and n in offsets_y and n not in done]
+        if not names:
+            continue
+        want = float(offsets_y[names[0]])
+        cur, sb = _para_top_cm(doc, para)
+        if cur is None:
+            notes.append('「{}」在表格里，纵向位置由行高定死，挪不了'.format(names[0]))
+            done.update(names)
+            continue
+        new_sb = sb + (want - cur)
+        if new_sb < 0:
+            notes.append('「{}」想印在距纸上边 {:.2f}cm，但那里已经被上一行占了，'
+                         '最多只能到 {:.2f}cm'.format(names[0], want, cur - sb))
+            new_sb = 0.0
+        para.paragraph_format.space_before = Cm(new_sb)
+        if len(names) > 1:
+            notes.append('「{}」和它同一行，纵向只能一起挪'.format('、'.join(names[1:])))
+        done.update(names)
+    return notes

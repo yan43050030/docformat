@@ -313,6 +313,7 @@ assert lbl.property('statusLevel') == 'ok', '状态样式属性未设置'
 print('[12] 逐文件状态标记 + 主题着色属性 ✓')
 
 # ---------- 11. 版本号显示 ----------
+
 from app.main_window import VERSION
 assert 'v' + VERSION in win.windowTitle(), '窗口标题未含版本号: {}'.format(win.windowTitle())
 print('[13] 窗口标题显示版本号 v{} ✓'.format(VERSION))
@@ -510,6 +511,17 @@ print('[20] 转换与工具：4 个按钮独立于模式网格，转 docx/导出
 # ---------- 18. 套打填写对话框 ----------
 from app.overprint_dialog import OverprintDialog as _OD
 assert 'overprint' in home._tool_buttons, '缺少套打填写入口'
+
+def _set_editor(ed, value):
+    """套打字段现在有三种控件（多行框/可编辑下拉/单行框），统一这样写值"""
+    if hasattr(ed, 'setPlainText'):
+        ed.setPlainText(value)
+    elif hasattr(ed, 'setCurrentText'):
+        ed.setCurrentText(value)
+    else:
+        ed.setText(value)
+
+
 _od = _OD()
 try:
     assert _od.tpl_combo.count() >= 1, '未发现自带套打模板'
@@ -520,7 +532,10 @@ try:
     assert isinstance(_od._editors['拟办意见'], _QPTE), '长文本字段应为多行输入'
     # 标题也是多行框：按回车即在该处手动分行
     assert isinstance(_od._editors['标题'], _QPTE), '标题应为多行输入以便手动分行'
-    assert isinstance(_od._editors['承办部门'], _QLE), '短字段应为单行输入'
+    # 短字段现在是可编辑下拉：能直接敲，也能翻出以前填过的值
+    from PyQt5.QtWidgets import QComboBox as _QCB
+    _ed_dept = _od._editors['承办部门']
+    assert isinstance(_ed_dept, _QCB) and _ed_dept.isEditable(), '短字段应为可编辑下拉'
     # 从已有 docx 导入内容：字段自动填好，日期拆成年/月/日
     from docx import Document as _D2
     from scripts import overprint as _op
@@ -535,7 +550,7 @@ try:
     _vals = _op.extract_values(_dsrc, list(_od._editors.keys()))
     for _k, _v in _vals.items():
         _ed = _od._editors[_k]
-        (_ed.setPlainText if hasattr(_ed, 'setPlainText') else _ed.setText)(_v)
+        _set_editor(_ed, _v)
     _got = _od._values()
     assert _got['标题'] == '关于开展某某专项检查的请示', '导入标题错: {}'.format(_got)
     assert '全面检查' in _got['拟办意见'], '导入正文错: {}'.format(_got['拟办意见'])
@@ -551,7 +566,7 @@ try:
     def _setv(**kw):
         for _k, _v in kw.items():
             _e = _od2._editors[_k]
-            (_e.setPlainText if hasattr(_e, 'setPlainText') else _e.setText)(_v)
+            _set_editor(_e, _v)
         _od2._refresh_preview()
 
     _setv(标题='关于某事项的请示', 拟办意见='因工作需要，拟报请审批。', 承办部门='办公室')
@@ -607,7 +622,7 @@ try:
     for _k, _v in {'标题': '关于某事项的请示', '拟办意见': '因工作需要，拟报请审批。',
                    '承办部门': '办公室', '年': '2026', '月': '7', '日': '25'}.items():
         _e = _od4._editors[_k]
-        (_e.setPlainText if hasattr(_e, 'setPlainText') else _e.setText)(_v)
+        _set_editor(_e, _v)
     _od4._refresh_preview()
     _txt = _od4.canvas.text_dump()
     _i_tbl = _txt.find('领导批示')
@@ -660,8 +675,7 @@ try:
 
     # 长标题梯形回行：下拉切换后预览随之重排，且行宽方向相反
     _e = _od4._editors['标题']
-    (_e.setPlainText if hasattr(_e, 'setPlainText') else _e.setText)(
-        '关于对某单位某单位某单位某部门某部门张三李四王五赵六的请示')
+    _set_editor(_e, '关于对某单位某单位某单位某部门某部门张三李四王五赵六的请示')
     from scripts.overprint import _text_width_units as _twu
     _shape_w = {}
     for _si in range(_od4.shape_combo.count()):
@@ -717,8 +731,7 @@ try:
 
     # 手动回车分行优先于自动回行，且两个下拉置灰以示已让位
     _od4.lines_combo.setCurrentIndex(0)
-    (_e.setPlainText if hasattr(_e, 'setPlainText') else _e.setText)(
-        '关于对某单位某部门\n张三李四王五赵六的请示')
+    _set_editor(_e, '关于对某单位某部门\n张三李四王五赵六的请示')
     _od4._refresh_preview()
     _pv_m = [l.strip() for l in _od4._title_line_texts(_od4._last_plan)]
     assert _pv_m == ['关于对某单位某部门', '张三李四王五赵六的请示'], \
@@ -759,6 +772,43 @@ try:
 finally:
     _od5.reject()
 print('[25] 套打模板：目录入口 + 自带模板可复制为可改副本 ✓')
+
+# ---------- 26. 打印预检 + 历史值下拉 ----------
+_od6 = _OD()
+try:
+    from scripts import overprint as _ovp
+    _set_editor(_od6._editors['拟办意见'], '因某某事项需要进一步开展调查核实。' * 40)
+    _set_editor(_od6._editors['标题'], '关于某事项的请示')
+    _od6._refresh_preview()
+    _pf = _ovp.preflight(_od6._last_plan, _od6._values(), {'标题': 3.0})
+    _lv = [l for l, _m in _pf]
+    assert 'block' in _lv, '内容放不下时预检应给出 block 级警告：{}'.format(_pf)
+    assert any('标题' in m and '3.00' in m for l, m in _pf if l == 'warn'), \
+        '指定位置顶不过去时应提示：{}'.format(_pf)
+    # 内容正常时不该拦人
+    _set_editor(_od6._editors['拟办意见'], '拟同意办理。')
+    _od6._refresh_preview()
+    assert not [l for l, _m in _ovp.preflight(_od6._last_plan, _od6._values(), {})
+                if l in ('block', 'warn')], '正常内容不该报预检问题'
+
+    # 历史值：记一次，下次打开就能翻到
+    _od6._remember('承办部门', '综合调查室')
+    _od6._remember('承办部门', '办公室')
+    assert _od6._history('承办部门')[:2] == ['办公室', '综合调查室'], \
+        '历史值应最近用的排最前：{}'.format(_od6._history('承办部门'))
+    _od7 = _OD()
+    try:
+        _cb = _od7._editors['承办部门']
+        assert '办公室' in [_cb.itemText(_i) for _i in range(_cb.count())], \
+            '重开对话框后下拉里应有历史值'
+    finally:
+        _od7.reject()
+    # 每次都变的字段不记历史
+    _od6._remember('标题', '关于某事项的请示')
+    assert not _od6._history('标题'), '标题这类每次都变的字段不该记历史'
+finally:
+    _od6.reject()
+print('[26] 打印预检：放不下/顶不过去/空字段一次说清 + 常用值下拉记忆 ✓')
 
 
 

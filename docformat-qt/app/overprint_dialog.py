@@ -35,7 +35,9 @@ class OffsetDialog(QDialog):
         self.resize(520, 520)
         self._template_path = template_path
         self._spins = {}
+        self._spins_y = {}
         saved = overprint.load_offsets(template_path)
+        saved_y = overprint.load_offsets_y(template_path)
 
         root = QVBoxLayout(self)
         tip = QLabel(
@@ -87,6 +89,20 @@ class OffsetDialog(QDialog):
                 b2.clicked.connect(
                     lambda _c=False, _s=sp, _v=float(cur): _s.setValue(_v))
                 row.addWidget(b2)
+            row.addWidget(QLabel("　距上边"))
+            spy = QDoubleSpinBox()
+            spy.setRange(0.0, 29.7)
+            spy.setDecimals(2)
+            spy.setSingleStep(self.STEP_CM)
+            spy.setSuffix(" cm")
+            spy.setSpecialValueText("不指定")
+            spy.setValue(float(saved_y.get(name, 0.0)))
+            spy.setToolTip("距纸张上边缘的厘米数；0 = 不指定。\n"
+                           "纵向只能**整行**挪（Word 里只有段前距能推一行），\n"
+                           "同一行上的几个字段会一起动；表格格子里的字段挪不了，\n"
+                           "行高是模板定死的。保存后若挪不动会明确告诉你。")
+            self._spins_y[name] = spy
+            row.addWidget(spy)
             lab = QLabel("")
             lab.setProperty("muted", "true")
             row.addWidget(lab)
@@ -139,13 +155,16 @@ class OffsetDialog(QDialog):
         root.addWidget(bb)
 
     def _reset(self):
-        for sp in self._spins.values():
+        for sp in list(self._spins.values()) + list(self._spins_y.values()):
             sp.setValue(0.0)
         for sp in self._shift.values():
             sp.setValue(0.0)
 
     def values(self):
         return {k: sp.value() for k, sp in self._spins.items() if sp.value() > 0}
+
+    def values_y(self):
+        return {k: sp.value() for k, sp in self._spins_y.items() if sp.value() > 0}
 
     def shift(self):
         return (self._shift['dx'].value(), self._shift['dy'].value())
@@ -187,7 +206,7 @@ class OffsetDialog(QDialog):
 
     def _save(self):
         overprint.save_offsets(self._template_path, self.values(),
-                               shift=self.shift())
+                               shift=self.shift(), offsets_y=self.values_y())
         self.accept()
 
 
@@ -201,6 +220,7 @@ class OverprintDialog(QDialog):
         # 拖动改出来的位置先放内存里，随预览即时生效；点「保存位置」才落盘。
         # 拖的时候不停写文件既慢又难反悔
         self._offsets = {}
+        self._offsets_y = {}
         self._shift = (0.0, 0.0)
         self._pos_dirty = False
         self._bg_cache = {}
@@ -439,11 +459,52 @@ class OverprintDialog(QDialog):
         self._load_content_from(path)
 
     # ---------- 字段 ----------
+    HISTORY_MAX = 8
+
+    def _history(self, name):
+        raw = settings().value('overprint_hist/{}'.format(name), '') or ''
+        return [x for x in str(raw).split('\x1f') if x.strip()]
+
+    def _remember(self, name, value):
+        """把这次填的值记进历史，最近用的排最前"""
+        value = (value or '').strip()
+        if not value or name in _NO_MEMORY:
+            return
+        hist = [value] + [h for h in self._history(name) if h != value]
+        settings().setValue('overprint_hist/{}'.format(name),
+                            '\x1f'.join(hist[:self.HISTORY_MAX]))
+
+    def _preflight_ok(self, values):
+        """生成前先预检。套打纸是预印的，废一张少一张，
+        别等打出来才发现内容压到栏外。"""
+        plan = getattr(self, '_last_plan', None)
+        if plan is None:
+            return True
+        try:
+            items = overprint.preflight(plan, values, self._offsets)
+        except Exception:
+            return True
+        bad = [m for lv, m in items if lv == 'block']
+        warn = [m for lv, m in items if lv == 'warn']
+        if not bad and not warn:
+            return True
+        text = ''
+        if bad:
+            text += '这几处印出来一定不对：\n  · ' + '\n  · '.join(bad) + '\n\n'
+        if warn:
+            text += '这几处有风险：\n  · ' + '\n  · '.join(warn) + '\n\n'
+        text += '仍然生成吗？'
+        ret = QMessageBox.question(
+            self, '打印预检', text, QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No if bad else QMessageBox.Yes)
+        return ret == QMessageBox.Yes
+
     def _load_fields(self, *_a):
         path = self.tpl_combo.currentData()
         self._template_path = path
         # 换模板就换一套位置：位置是随模板存的
         self._offsets = overprint.load_offsets(path) if path else {}
+        self._offsets_y = overprint.load_offsets_y(path) if path else {}
         self._shift = overprint.load_shift(path) if path else (0.0, 0.0)
         self._pos_dirty = False
         self._update_pos_hint()
@@ -478,11 +539,21 @@ class OverprintDialog(QDialog):
                 ed.setMinimumHeight(110)
                 ed.setPlaceholderText("内容过长会自动缩小字号，仍放不下会提示")
             else:
-                ed = QLineEdit()
+                # 单行字段做成可编辑下拉：承办部门、经办人这些每次都填同样
+                # 几个值，翻一下比重敲一遍快
+                ed = QComboBox()
+                ed.setEditable(True)
+                ed.setInsertPolicy(QComboBox.NoInsert)
+                hist = self._history(name)
+                ed.addItems(hist)
+                ed.setCurrentText('')
                 if name not in _NO_MEMORY:
-                    ed.setText(s.value('overprint/{}'.format(name), '') or '')
+                    ed.setCurrentText(s.value('overprint/{}'.format(name), '') or '')
+                ed.setToolTip('可直接输入；点右边箭头能选之前填过的值')
             if isinstance(ed, QPlainTextEdit):
                 ed.textChanged.connect(self._schedule_preview)
+            elif isinstance(ed, QComboBox):
+                ed.currentTextChanged.connect(self._schedule_preview)
             else:
                 ed.textChanged.connect(self._schedule_preview)
             self._editors[name] = ed
@@ -570,7 +641,7 @@ class OverprintDialog(QDialog):
         if not self._template_path:
             return
         overprint.save_offsets(self._template_path, self._offsets,
-                               shift=self._shift)
+                               shift=self._shift, offsets_y=self._offsets_y)
         self._pos_dirty = False
         self._update_pos_hint()
         self.status.setText("位置已保存到 {}".format(
@@ -578,6 +649,7 @@ class OverprintDialog(QDialog):
 
     def _reset_positions(self):
         self._offsets = {}
+        self._offsets_y = {}
         self._shift = (0.0, 0.0)
         self._pos_dirty = True
         self._update_pos_hint()
@@ -594,7 +666,8 @@ class OverprintDialog(QDialog):
             plan = overprint.plan_fill(self._template_path, self._values(),
                                        title_shape=self._title_shape(),
                                        title_lines=self._title_lines(),
-                                       offsets=self._offsets)
+                                       offsets=self._offsets,
+                                       offsets_y=self._offsets_y)
         except Exception as e:
             self.status.setText('预览失败：{}'.format(e))
             return
@@ -646,6 +719,7 @@ class OverprintDialog(QDialog):
             # 对话框里改的已经落盘了，内存里这一份要跟上，
             # 否则下一次预览还按拖动前的老位置排
             self._offsets = overprint.load_offsets(self._template_path)
+            self._offsets_y = overprint.load_offsets_y(self._template_path)
             self._shift = overprint.load_shift(self._template_path)
             self._pos_dirty = False
             self._update_pos_hint()
@@ -768,14 +842,21 @@ class OverprintDialog(QDialog):
     def _values(self):
         out = {}
         for name, ed in self._editors.items():
-            out[name] = (ed.toPlainText() if isinstance(ed, QPlainTextEdit)
-                         else ed.text()).strip()
+            if isinstance(ed, QPlainTextEdit):
+                v = ed.toPlainText()
+            elif isinstance(ed, QComboBox):
+                v = ed.currentText()
+            else:
+                v = ed.text()
+            out[name] = v.strip()
         return out
 
     def _clear_fields(self):
         for ed in self._editors.values():
             if isinstance(ed, QPlainTextEdit):
                 ed.setPlainText('')
+            elif isinstance(ed, QComboBox):
+                ed.setCurrentText('')
             else:
                 ed.setText('')
         self._refresh_preview()
@@ -812,6 +893,8 @@ class OverprintDialog(QDialog):
                 continue
             if isinstance(ed, QPlainTextEdit):
                 ed.setPlainText(val)
+            elif isinstance(ed, QComboBox):
+                ed.setCurrentText(val)
             else:
                 ed.setText(val)
         self._refresh_preview()
@@ -943,6 +1026,8 @@ class OverprintDialog(QDialog):
         base_dir = self._source_dir or settings().value('overprint/last_dir', '') or ''
         if base_dir:
             default = os.path.join(base_dir, default)
+        if not self._preflight_ok(values):
+            return
         out, _ = QFileDialog.getSaveFileName(self, "保存套打文件", default,
                                              "Word 文档 (*.docx)")
         if not out:
@@ -955,6 +1040,7 @@ class OverprintDialog(QDialog):
                                            title_shape=self._title_shape(),
                                            title_lines=self._title_lines(),
                                            offsets=self._offsets,
+                                           offsets_y=self._offsets_y,
                                            shift=self._shift)
         except Exception as e:
             QApplication.restoreOverrideCursor()
@@ -968,6 +1054,7 @@ class OverprintDialog(QDialog):
         for name, val in values.items():
             if name not in _NO_MEMORY and val:
                 s.setValue('overprint/{}'.format(name), val)
+            self._remember(name, val)
 
         # 绑定过套头纸就顺手多出一份对位件，省得再开一次窗口去点
         align_out = None
