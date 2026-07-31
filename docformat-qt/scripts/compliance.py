@@ -14,9 +14,13 @@
 天生"只能做、无法核对"的排版动作（样式清洗、结构性空行、盖章落款布局）
 不纳入检查，避免装样子；这些只在"智能一键处理"里执行。
 """
+import logging
+
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.shared import Pt, Cm
 from docx.oxml.ns import qn
+
+logger = logging.getLogger('docformat.compliance')
 
 # ---------------- 检查项定义 ----------------
 # 供 UI 生成勾选面板；分组便于展示
@@ -41,11 +45,19 @@ CHECK_GROUPS = [
         ('numbering', '序号层次是否统一'),
         ('punctuation', '英文 / 不规范标点'),
     ]),
+    ('用语（只查有明文规定的，文风不管）', [
+        ('w_数字用法', '数字用法（GB/T 15835）'),
+        ('w_格式用语', '标题标点 / 主送机关冒号 / 附件说明格式'),
+        ('w_文种搭配', '文种与结语搭配（请示不能"特此报告"等）'),
+        ('w_易混词', '易混词（其它/其他、截止/截至……，默认关）'),
+    ]),
 ]
 
 CHECK_ITEMS = [item for _g, items in CHECK_GROUPS for item in items]
 
 DEFAULT_OPTIONS = {k: True for k, _ in CHECK_ITEMS}
+# 易混词要靠上下文判断，最容易误报——默认关，让人自己开
+DEFAULT_OPTIONS['w_易混词'] = False
 
 # 旧版本的检查项键 → 新键（QSettings 里可能存着旧键，做兼容映射）
 _LEGACY_OPTION_MAP = {
@@ -507,6 +519,8 @@ def check_compliance(doc, preset, options=None, detect_types=None):
     if any(opts.get(a) for a in _PARA_ATTRS):
         _check_paragraphs(doc, preset, opts, typed, add)
 
+    _run_wording(doc, opts, typed, findings)
+
     if opts.get('structure'):
         types = {}
         for _i, _p, ptype in typed:
@@ -741,6 +755,7 @@ def apply_compliance_fixes(input_path, output_path, preset, fix_keys):
     sanitize_document(doc)
 
     para_keys = [k for k in fix_keys if k.startswith('para:')]
+    word_keys = [k for k in fix_keys if k.startswith('wording:')]
     doc_keys = [k for k in fix_keys if k in _DOC_FIXERS]
 
     # 段落修正依赖类型识别；页边距等页面改动不影响识别结果，
@@ -773,6 +788,16 @@ def apply_compliance_fixes(input_path, output_path, preset, fix_keys):
             continue
         if desc:
             applied.append(desc)
+
+    if word_keys:
+        try:
+            from .wording import apply_wording_fixes
+            wt = {ai: pt for ai, (_i, _p, pt) in enumerate(_detect_types(doc, preset))}
+            n = apply_wording_fixes(doc, word_keys, wt)
+            if n:
+                applied.append('用语：修正 {} 处'.format(n))
+        except Exception as e:
+            applied.append('用语：修正失败（{}）'.format(e))
 
     doc.save(output_path)
     return applied
@@ -873,3 +898,26 @@ def format_compliance_report(filename, findings, preset_name=''):
         mark = {'warn': '✗', 'ok': '✓', 'info': '·'}.get(f['level'], '·')
         lines.append('  {} 【{}】{}'.format(mark, f['item'], f['detail']))
     return '\n'.join(lines)
+
+
+def _run_wording(doc, opts, typed, findings):
+    """用语检查：勾选项 w_<组名> → wording 的分组开关。
+
+    结果直接并进 findings，与其他检查项同一套清单/定位/修正 UI。
+    出错只记一条，不能让用语检查拖垮整个合规检查。
+    """
+    groups = {}
+    for key in opts:
+        if key.startswith('w_'):
+            groups[key[2:]] = bool(opts[key])
+    if not any(groups.values()):
+        return
+    try:
+        from .wording import check_wording
+        types = {ai: pt for ai, (_i, _p, pt) in enumerate(typed)}
+        findings.extend(check_wording(doc, groups=groups, detect_types=types))
+    except Exception as exc:
+        logger.warning('用语检查失败：%s', exc)
+        findings.append({'level': 'info', 'item': '用语',
+                         'detail': '用语检查未能完成（{}）'.format(
+                             exc.__class__.__name__)})

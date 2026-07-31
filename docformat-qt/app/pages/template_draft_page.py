@@ -212,6 +212,13 @@ class TemplateDraftPage(QWidget):
         btn_row.addWidget(dir_btn)
         lv.addLayout(btn_row)
 
+        self.skeleton_btn = QPushButton("按文种生成骨架…")
+        self.skeleton_btn.setToolTip(
+            "没有现成模板时，选个文种（请示/报告/通知/函/批复……）直接铺一份初稿：\n"
+            "标题、主送机关、结语、落款都按该文种的规矩配好")
+        self.skeleton_btn.clicked.connect(self._on_skeleton)
+        lv.addWidget(self.skeleton_btn)
+
         hint = QLabel("搜索时自动从已配置目录中匹配模板")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #888; font-size: 11px;")
@@ -582,6 +589,10 @@ class TemplateDraftPage(QWidget):
         dlg.exec_()
 
     # ===== 模板列表 & 搜索 =====
+    def _on_skeleton(self):
+        from app.skeleton_dialog import SkeletonDialog
+        SkeletonDialog(self).exec_()
+
     def _load_template_list(self):
         self._refresh_list_display()
 

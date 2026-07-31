@@ -1699,6 +1699,101 @@ def test_overprint_fonts():
           '填写三号小标宋标题(居中)/小三仿宋意见/TNR 数字 通过')
 
 
+def test_wording():
+    """公类用语检查：正例要报、**反例一条都不许报**"""
+    from scripts import wording as W
+
+    def _check(paras, types=None, groups=None):
+        d = Document()
+        for t in paras:
+            d.add_paragraph(t)
+        return W.check_wording(d, groups=groups, detect_types=types or {})
+
+    # ---- 正例：该报的 ----
+    POS = [
+        (['二○二六年七月二十九日'], {0: 'date'}, '〇'),
+        (['二〇二六年七月二十九日'], {0: 'date'}, '阿拉伯'),   # GB/T 9704 要阿拉伯数字
+        (['某某发〔二〇二六〕5号'], {0: 'docnum'}, '阿拉伯'),
+        (['共有３个单位参加'], {}, '半角'),
+        (['大约有3、4个单位参加'], {}, '概数'),
+        (['关于开展某某工作的通知。'], {0: 'title'}, '标点'),
+        (['各有关单位'], {0: 'recipient'}, '冒号'),
+        (['附件：1、某某表'], {0: 'attachment'}, '圆点'),
+        (['附件：1.某某表。'], {0: 'attachment'}, '末尾'),
+    ]
+    for paras, types, want in POS:
+        got = ' '.join(f['detail'] for f in _check(paras, types))
+        assert want in got, '漏报 {}：期望含「{}」，实得「{}」'.format(paras, want, got)
+
+    # ---- 反例：正确用法一条都不能报。这一组才是这个功能能不能用的关键 ----
+    NEG = [
+        (['2026年7月29日'], {0: 'date'}),
+        (['某某发〔2026〕5号'], {0: 'docnum'}),
+        (['关于开展某某工作的通知'], {0: 'title'}),
+        (['各有关单位：'], {0: 'recipient'}),
+        (['附件：1.某某统计表'], {0: 'attachment'}),
+        (['共有3个单位参加，覆盖率达85%。'], {}),
+        (['联系电话：010-12345678，共3人。'], {}),
+        (['引用原文“其它情况另行通知”，不改。'], {}),      # 引文照录，不许改
+        (['《某某条例》第3、4条另有规定。'], {}),           # 条款枚举不是概数
+        (['已于2026年7月3、4日完成。'], {}),               # 日期不是概数
+    ]
+    for paras, types in NEG:
+        got = _check(paras, types)
+        assert not got, '误报 {} → {}'.format(paras, [f['detail'] for f in got])
+
+    # ---- 文种搭配 ----
+    bad_report = _check(['关于开展某某工作的报告', '各有关单位：', '经研究，请予批准。'])
+    assert any('不得夹带请示' in f['detail'] for f in bad_report), '报告夹带请示应报'
+    bad_qs = _check(['关于开展某某工作的请示', '各有关单位：', '经研究，特此报告。'])
+    assert any('特此报告' in f['detail'] for f in bad_qs), '请示用错结语应报'
+    ok_qs = _check(['关于开展某某工作的请示', '各有关单位：', '经研究。妥否，请批示。'])
+    assert not ok_qs, '规范的请示不该报：{}'.format([f['detail'] for f in ok_qs])
+    assert not _check(['关于开展某某工作的说明', '正文内容', '结束']), \
+        '认不出文种就该整块跳过，宁可不报'
+    # 通知不写"特此通知"很常见，不算错
+    assert not _check(['关于开展某某工作的通知', '各有关单位：', '现通知如下。']), \
+        '通知缺"特此通知"不该报'
+
+    # ---- 易混词默认关 ----
+    assert not _check(['其它情况另行通知']), '易混词应默认关闭'
+    assert _check(['其它情况另行通知'], groups={'易混词': True}), '打开后应报'
+
+    # ---- 自动修正 ----
+    d = Document()
+    d.add_paragraph('二○二六年，其它情况见附件，共有３人。')
+    n = W.apply_wording_fixes(
+        d, ['wording:ling_char', 'wording:qi_ta', 'wording:fullwidth_digit'])
+    assert n == 3 and d.paragraphs[0].text == '二〇二六年，其他情况见附件，共有3人。', \
+        '修正结果不对：{} / {}'.format(n, d.paragraphs[0].text)
+    # 引文里的不能动
+    d2 = Document()
+    d2.add_paragraph('原文是“其它情况”，照录。')
+    W.apply_wording_fixes(d2, ['wording:qi_ta'])
+    assert '其它' in d2.paragraphs[0].text, '引号内的引文不该被改'
+
+    # ---- 文种骨架（与检查共用同一张文种表）----
+    sk = W.build_skeleton('请示', issuer='某某局', recipient='某某厅', subject='开展某某试点')
+    kinds = [k for k, _t in sk]
+    assert kinds[0] == 'title' and 'signature' in kinds and 'date' in kinds, kinds
+    assert sk[0][1].endswith('的请示'), sk[0][1]
+    assert any('妥否，请批示' in t for _k, t in sk), '骨架应带该文种的规范结语'
+    # 生成出来的骨架，自己查自己必须零问题
+    d3 = Document()
+    for _k, t in sk:
+        d3.add_paragraph(t)
+    assert not W.check_wording(d3), \
+        '自己生成的骨架不该被自己报错：{}'.format(
+            [f['detail'] for f in W.check_wording(d3)])
+    try:
+        W.build_skeleton('不存在的文种')
+        raise AssertionError('未知文种应报错')
+    except ValueError:
+        pass
+    print('[16] 公文用语检查：{} 条规则，正例全中、{} 条反例零误报 + '
+          '文种搭配 + 自动修正 + 文种骨架 通过'.format(len(W.RULES), len(NEG)))
+
+
 def test_layout_fixes():
     """用户实测反馈的五处版式问题：空行/页码/落款/括号"""
     from scripts.formatter import format_document
@@ -1984,4 +2079,5 @@ if __name__ == '__main__':
     test_overprint_fonts()
     test_scan_align()
     test_layout_fixes()
+    test_wording()
     print('\n全部冒烟测试通过 ✓')
