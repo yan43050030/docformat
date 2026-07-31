@@ -2079,3 +2079,73 @@ def _apply_y_offsets(doc, offsets_y):
             notes.append('「{}」和它同一行，纵向只能一起挪'.format('、'.join(names[1:])))
         done.update(names)
     return notes
+
+
+# ---------------- 套头库 ----------------
+
+def letterhead_dir():
+    """套头纸库：几套红头纸集中放一处，不必每次去翻文件夹"""
+    from app.template_common import config_dir
+    d = os.path.join(config_dir(), 'letterheads')
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def list_letterheads():
+    """返回 [(显示名, 路径)]，按名字排"""
+    d = letterhead_dir()
+    try:
+        names = sorted(n for n in os.listdir(d) if n.lower().endswith('.pdf'))
+    except OSError:
+        return []
+    return [(os.path.splitext(n)[0], os.path.join(d, n)) for n in names]
+
+
+def import_letterhead(src, name=None):
+    """把一份套头 PDF 收进库里，返回库中的路径。同名自动加序号。"""
+    import shutil
+    if not os.path.isfile(src):
+        raise ValueError('找不到这份 PDF：{}'.format(src))
+    base = safe_stem(name or os.path.splitext(os.path.basename(src))[0])
+    dst = os.path.join(letterhead_dir(), base + '.pdf')
+    n = 1
+    while os.path.exists(dst):
+        n += 1
+        dst = os.path.join(letterhead_dir(), '{}({}).pdf'.format(base, n))
+    shutil.copyfile(src, dst)
+    logger.info('套头入库：%s', os.path.basename(dst))
+    return dst
+
+
+def safe_stem(text):
+    import re as _re
+    return (_re.sub(r'[\\/:*?"<>|\r\n\t]', '_', str(text or '')).strip(' .')
+            or '套头')[:60]
+
+
+def match_letterhead(template_path, candidates=None):
+    """在库里找和这个模板最对得上的一张套头，返回 [(路径, 偏差cm, 配上几条线)]。
+
+    判据就是「自动对位」那一套：谁的红线跟模板的框线配得又多又准，谁就是
+    这个模板配套的纸。偏差大的排后面——那多半是别的表单的纸。
+    量不出来的（PyMuPDF 缺失、PDF 读不了）直接跳过，不算失败。
+    """
+    from . import scan_align
+    ok, _why = scan_align.available()
+    if not ok:
+        return []
+    out = []
+    for name_path in (candidates or [p for _n, p in list_letterheads()]):
+        path = name_path[1] if isinstance(name_path, (tuple, list)) else name_path
+        try:
+            res = scan_align.align(path, template_path)
+        except Exception:
+            continue
+        pairs = len(res.get('h_pairs') or []) + len(res.get('v_pairs') or [])
+        if not pairs:
+            continue
+        dx, dy = res.get('dx') or 0.0, res.get('dy') or 0.0
+        out.append((path, round((dx * dx + dy * dy) ** 0.5, 2), pairs))
+    # 先看配上的线多不多，再看偏差小不小
+    out.sort(key=lambda z: (-z[2], z[1]))
+    return out

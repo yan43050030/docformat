@@ -1764,6 +1764,94 @@ def test_y_offsets():
           '存盘互不干扰 + 打印预检 通过')
 
 
+def test_batch_and_library():
+    """批量套打（xlsx/csv 自读）+ 套头库（入库/自动认出配套的）"""
+    import zipfile
+    from scripts import batch_fill as B
+    from scripts import overprint as op
+    tpl = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       'templates', '套打', '文件送审单.docx')
+
+    # ---- CSV：国内表格多是 GBK 存的，按 UTF-8 硬读会满屏乱码 ----
+    csv_path = os.path.join(OUT_DIR, 'batch.csv')
+    rows = [['标题', '承办部门', '经办人', '年', '月', '日', '序号'],
+            ['关于甲事项的请示', '综合调查室', '张某某', '2026', '7', '29', '1'],
+            ['关于乙事项的请示', '办公室', '李某某', '2026', '7', '30', '2']]
+    with open(csv_path, 'wb') as f:
+        f.write('\n'.join(','.join(r) for r in rows).encode('gbk'))
+    header, data = B.read_table(csv_path)
+    assert header[0] == '标题' and len(data) == 2, 'GBK 的 CSV 没读对：{}'.format(header)
+    assert data[0]['承办部门'] == '综合调查室', data[0]
+
+    # ---- xlsx：自己解 zip+xml，不引第三方库；空列要靠列标补位 ----
+    xp = os.path.join(OUT_DIR, 'batch.xlsx')
+    ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    with zipfile.ZipFile(xp, 'w') as z:
+        z.writestr('xl/sharedStrings.xml',
+                   '<sst xmlns="{}"><si><t>标题</t></si><si><t>承办部门</t></si>'
+                   '<si><t>关于丙事项的请示</t></si><si><t>档案室</t></si></sst>'.format(ns))
+        z.writestr('xl/worksheets/sheet1.xml',
+                   '<worksheet xmlns="{}"><sheetData>'
+                   '<row r="1"><c r="A1" t="s"><v>0</v></c>'
+                   '<c r="C1" t="s"><v>1</v></c></row>'
+                   '<row r="2"><c r="A2" t="s"><v>2</v></c>'
+                   '<c r="C2" t="s"><v>3</v></c></row>'
+                   '</sheetData></worksheet>'.format(ns))
+    h2, d2 = B.read_table(xp)
+    assert h2 == ['标题', '', '承办部门'], 'B 列是空的，应按列标补位：{}'.format(h2)
+    assert d2[0]['承办部门'] == '档案室', d2[0]
+
+    # ---- 对表头：多余的列忽略、缺的字段留空，都不算错 ----
+    matched, extra, missing = B.plan_batch(tpl, header)
+    assert '标题' in matched and extra == ['序号'], (matched, extra)
+    assert '拟办意见' in missing, missing
+
+    # ---- 批量生成：重名不互相覆盖，单行失败不拖垮整批 ----
+    out_dir = os.path.join(OUT_DIR, 'batch_out')
+    made, failed = B.batch_fill(tpl, data + [dict(data[0])], out_dir,
+                                name_field='标题', prefix='送审单_')
+    assert len(made) == 3 and not failed, (len(made), failed)
+    names = sorted(os.path.basename(p) for p, _n in made)
+    assert '送审单_关于甲事项的请示.docx' in names, names
+    assert any('(2)' in n for n in names), '重名应自动加序号：{}'.format(names)
+    assert B.safe_name('a/b:c*d') == 'a_b_c_d', B.safe_name('a/b:c*d')
+
+    # ---- 套头库 ----
+    from scripts import scan_align
+    from scripts.exporter import export_pdf
+    ok, _why = scan_align.available()
+    if not ok:
+        print('[18] 批量套打通过；套头库缺 PyMuPDF — 跳过自动认')
+        return
+    lib_before = {p for _n, p in op.list_letterheads()}
+    made_pdfs = []
+    try:
+        for tag, shift in (('本单位送审单', (0, 0)), ('别的表单', (1.5, -2.0))):
+            d = Document(tpl)
+            scan_align._blacken_borders(d)
+            op.apply_shift(d, *shift)
+            dx = os.path.join(OUT_DIR, tag + '.docx')
+            pdf = os.path.join(OUT_DIR, tag + '.pdf')
+            d.save(dx)
+            good, _info = export_pdf(dx, pdf)
+            if not good:
+                print('[18] 批量套打通过；本机转不了 PDF — 跳过套头库自动认')
+                return
+            made_pdfs.append(op.import_letterhead(pdf, tag))
+        hits = op.match_letterhead(tpl)
+        assert hits, '库里应能认出配套的套头'
+        best, off, pairs = hits[0]
+        assert '本单位送审单' in os.path.basename(best), \
+            '认错了：{}'.format([(os.path.basename(p), o, n) for p, o, n in hits])
+        assert off < 0.1 and pairs >= 6, (off, pairs)
+    finally:
+        for p in made_pdfs:
+            if os.path.exists(p) and p not in lib_before:
+                os.remove(p)
+    print('[18] 批量套打：GBK的CSV/自解xlsx/多余列忽略/重名不覆盖 + '
+          '套头库入库与自动认出配套的（{} 条线，偏差 {:.2f}cm）通过'.format(pairs, off))
+
+
 def test_wording():
     """公类用语检查：正例要报、**反例一条都不许报**"""
     from scripts import wording as W
@@ -2220,4 +2308,5 @@ if __name__ == '__main__':
     test_layout_fixes()
     test_wording()
     test_y_offsets()
+    test_batch_and_library()
     print('\n全部冒烟测试通过 ✓')

@@ -268,6 +268,14 @@ class OverprintDialog(QDialog):
             "自带模板随软件安装、不可直接改，会先复制一份到你的模板目录再打开。")
         self.edit_btn.clicked.connect(self._edit_template)
         row.addWidget(self.edit_btn)
+        batch_btn = QPushButton("批量套打…")
+        batch_btn.setToolTip("从 Excel/CSV 读一批数据，一次生成一叠套打件")
+        batch_btn.clicked.connect(self._batch)
+        row.addWidget(batch_btn)
+        lib_btn = QPushButton("套头库…")
+        lib_btn.setToolTip("几套红头纸集中管一处；还能自动认出哪张纸配这个模板")
+        lib_btn.clicked.connect(self._letterhead_lib)
+        row.addWidget(lib_btn)
         open_dir = QPushButton("模板目录")
         open_dir.setCursor(Qt.PointingHandCursor)
         open_dir.setToolTip("打开存放套打模板的文件夹")
@@ -903,6 +911,95 @@ class OverprintDialog(QDialog):
         if missing:
             msg += "；未识别：{}（请手工补填）".format('、'.join(missing))
         self.status.setText(msg)
+
+    # ---------- 批量 / 套头库 ----------
+    def _batch(self):
+        if not self._template_path:
+            return
+        from app.batch_dialog import BatchDialog
+        BatchDialog(self._template_path, self).exec_()
+
+    def _letterhead_lib(self):
+        """套头库：入库、绑定、自动认。
+
+        自动认用的就是「按扫描件自动对位」那套——谁的红线跟模板的框线配得
+        又多又准，谁就是配这个模板的纸。
+        """
+        if not self._template_path:
+            return
+        items = overprint.list_letterheads()
+        cur = overprint.load_letterhead(self._template_path)
+        lines = ['套头库：{}'.format(overprint.letterhead_dir()), '']
+        if items:
+            for name, path in items:
+                lines.append('  {}{}'.format(name,
+                                             '（当前模板已绑定）' if path == cur else ''))
+        else:
+            lines.append('  （空的，先「入库」放几张进来）')
+        box = QMessageBox(self)
+        box.setWindowTitle('套头库')
+        box.setText('\n'.join(lines))
+        b_add = box.addButton('入库…', QMessageBox.ActionRole)
+        b_match = box.addButton('自动认出配套的', QMessageBox.ActionRole)
+        b_bind = box.addButton('选一张绑定…', QMessageBox.ActionRole)
+        box.addButton('关闭', QMessageBox.RejectRole)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is b_add:
+            path, _ = QFileDialog.getOpenFileName(
+                self, '选择套头纸 PDF', '', 'PDF 文件 (*.pdf)')
+            if path:
+                try:
+                    overprint.import_letterhead(path)
+                except Exception as exc:
+                    QMessageBox.warning(self, '入库失败', str(exc))
+                    return
+                self.status.setText('已入库：{}'.format(os.path.basename(path)))
+        elif clicked is b_match:
+            self._match_letterhead()
+        elif clicked is b_bind:
+            self._bind_letterhead()
+
+    def _match_letterhead(self):
+        if not overprint.list_letterheads():
+            QMessageBox.information(self, '库是空的', '先用「入库」放几张套头纸进来。')
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            hits = overprint.match_letterhead(self._template_path)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not hits:
+            QMessageBox.information(
+                self, '认不出来',
+                '库里没有能和这个模板对上的套头纸。\n'
+                '（也可能是本机缺 PyMuPDF，量不了线——那就手动绑定。）')
+            return
+        best, off, pairs = hits[0]
+        ret = QMessageBox.question(
+            self, '认出来了',
+            '最像的是「{}」：配上 {} 条线，偏差 {:.2f}cm。\n\n绑定给当前模板吗？'
+            .format(os.path.basename(best), pairs, off),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if ret == QMessageBox.Yes:
+            overprint.save_letterhead(self._template_path, best)
+            self._bg_cache.pop(best, None)
+            self.status.setText('已绑定套头：{}'.format(os.path.basename(best)))
+
+    def _bind_letterhead(self):
+        items = overprint.list_letterheads()
+        if not items:
+            QMessageBox.information(self, '库是空的', '先用「入库」放几张套头纸进来。')
+            return
+        from PyQt5.QtWidgets import QInputDialog
+        names = [n for n, _p in items]
+        name, ok = QInputDialog.getItem(self, '选一张绑定', '套头纸：', names, 0, False)
+        if not ok:
+            return
+        path = dict((n, p) for n, p in items)[name]
+        overprint.save_letterhead(self._template_path, path)
+        self._bg_cache.pop(path, None)
+        self.status.setText('已绑定套头：{}'.format(name))
 
     # ---------- 模板目录 / 修改模板 ----------
     def _open_template_dir(self):
