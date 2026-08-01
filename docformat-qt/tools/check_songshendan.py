@@ -17,8 +17,13 @@ TOL = 0.15          # 允许误差（cm）：尺子读数本身就有 ~1mm 量�
 # 它们对不上不是模板算错了，是"量的到底是哪条线"这件事本身没定死——
 # 硬把模板迁就过去，反而会把已经对准的地方弄歪。
 UNSETTLED = {
+    '落款 下边线距下':
+        '量的是字面底边，到行盒底边的距离随字体而变；本机没装方正楷体，'
+        '渲染用的是替代字体。这一项不参与校准——追它会把落款和年月日'
+        '所在的整行拽偏',
     '文件送审单 下边线距上':
-        '量的是字面底边，随字体而变；本机没装方正大标宋，渲染用的是替代字体',
+        '用户复量确认就是 4.50；量的是字面底边、随字体而变，'
+        '本机没装方正大标宋，渲染用的是替代字体，所以对不上是本机的事',
 }
 
 
@@ -87,8 +92,10 @@ def check(pdf_path, spec, W=21.0, H=29.6):
 
     s = find(sps, '紧急程度')
     cmp('紧急程度：左边线距左', s['x0'] if s else None, spec['urgent_left'])
+    cmp('紧急程度 上边线距上', s['y0'] if s else None, spec['urgent_top'])
     s = find(sps, '密级')
     cmp('密级：右边线距右', (W - s['x1']) if s else None, spec['sec_right'])
+    cmp('密级：左边线距左', s['x0'] if s else None, W - 6.3)
 
     s = find(sps, '标  题') or find(sps, '标')
     cmp('标题 上边线距上', s['y0'] if s else None, spec['title_text_top'])
@@ -99,6 +106,9 @@ def check(pdf_path, spec, W=21.0, H=29.6):
     cmp('领导批示 左边线距左', s['x0'] if s else None, spec['lead_left'])
     cmp('领导批示 右边线距左', s['x1'] if s else None, spec['lead_right'])
 
+    s = find(sps, '{{拟办意见}}') or find(sps, '拟同意')
+    if s:
+        cmp('拟办意见正文首行左边线', s['x0'], spec['opinion_body_left'])
     s = find(sps, '拟办意见')
     cmp('拟办意见 上边线距下', (H - s['y0']) if s else None,
         H - spec['opinion_text_top'])

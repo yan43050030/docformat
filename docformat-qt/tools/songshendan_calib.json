@@ -1,10 +1,10 @@
 {
-  "dept": -0.199,
-  "handler": -0.2,
+  "dept": -0.068,
+  "handler": -0.069,
   "head1": 0.103,
   "head2": 0.025,
-  "lead": -0.199,
-  "opinion": -0.198,
-  "sign": -0.92,
-  "title": -0.198
+  "lead": -0.068,
+  "opinion": -0.069,
+  "title": -0.068,
+  "urgent": -0.177
 }

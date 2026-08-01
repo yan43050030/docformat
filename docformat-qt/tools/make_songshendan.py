@@ -42,15 +42,23 @@ SPEC = {
 
     # ---- 紧急程度 / 密级 ----
     'urgent_left': 2.5,      # 「紧急程度：」左边线
+    'urgent_top': 5.2,       # 「紧急程度」上边线距纸上边（实测）
     'sec_right': 5.1,        # 「密级：」右边线距纸右侧
     'rule_after_urgent': 5.7,  # 该行下面的红线距纸上边
 
     # ---- 表格区（红线的位置就是表格行线）----
     'rule_after_title': 8.0,
     'title_text_top': 6.6, 'title_left': 2.4,
+    # 标题栏那条竖线：实测 4.7。原先是拿「紧急程度：」冒号右边线（4.6）
+    # 代替的——用户说"基本一致"，实际差 1mm，"基本"确实只是基本
+    'title_vline': 4.7,
     'lead_text_top': 8.5, 'lead_left': 2.4, 'lead_right': 4.5,
     'rule_before_opinion': H - 9.5,   # 距纸下面 9.5
     'opinion_text_top': H - 9.0,      # 距纸下面 9.0
+    # 拟办意见正文首行的左边线：实测 3.3，正好落在栏目名「意」字上。
+    # "空两个字"说的是**栏目名**的两个字（2×0.42），不是正文小三的两个字
+    # （2×0.529=1.06，那样会排到 3.46、越过「见」字）
+    'opinion_body_left': 3.3,
     'rule_after_opinion': H - 4.9,    # 距纸下面 4.9
     'dept_text_top': H - 4.0,         # 承办部门 距纸下面 4.0
     'handler_text_top': H - 4.5,      # 经办人   距纸下面 4.5
@@ -318,8 +326,8 @@ def build(path, top_margin_cm=None, calib=None):
     lp = LABEL_PT
     p = doc.add_paragraph()
     _exact_line(p, lp * 1.4,
-                before_pt=(S['rule_after_urgent'] - 0.55 - S['head2_bottom'])
-                * PT_PER_CM + cal('urgent') * PT_PER_CM)
+                before_pt=(S['urgent_top'] - S['head2_bottom']) * PT_PER_CM
+                + cal('urgent') * PT_PER_CM)
     # 「密级：」用户量的是**右边线**（冒号的右沿），填的字紧接其后。
     # 这里给栏目名和填写位各一个左制表位：填写位钉在实测的右边线上，
     # 栏目名往左退它自己的宽度。栏目名全是全角字，宽度 = 字数 × 字号，
@@ -347,7 +355,7 @@ def build(path, top_margin_cm=None, calib=None):
     # 三列网格：标题栏的竖线和承办部门栏的竖线不在同一处，两条竖线各占
     # 一个网格线，用 gridSpan 合并出各行实际的分栏。
     #   ├ 2.10 ── 标题竖线 ── 承办部门竖线 ── 18.90 ┤
-    title_vline = S['urgent_left'] + _lw('紧急程度：')
+    title_vline = S['title_vline']
     dept_vline = W - S['vline_from_right']
     edges = [body_left, title_vline, dept_vline, W - S['rule_side']]
     widths = [edges[i + 1] - edges[i] for i in range(3)]
@@ -456,7 +464,8 @@ def build(path, top_margin_cm=None, calib=None):
     # 起算点是栏目名的左边线（不是格子左沿），这样"空两格"是相对
     # 「拟办意见：」那一列说的，看着才齐。
     p2.paragraph_format.left_indent = Cm(S['lead_left'] - body_left)
-    p2.paragraph_format.first_line_indent = Cm(2 * F_OPINION[2] / PT_PER_CM)
+    p2.paragraph_format.first_line_indent = Cm(S['opinion_body_left']
+                                               - S['lead_left'])
     r = p2.add_run('{{拟办意见}}'); _font(r, F_OPINION)
 
     # 承办部门（纵向合并两行）/ 经办人 / 文字校核

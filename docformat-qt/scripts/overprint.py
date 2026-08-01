@@ -2071,9 +2071,14 @@ def _apply_y_offsets(doc, offsets_y):
             continue
         new_sb = sb + (want - cur)
         if new_sb < 0:
+            # 挪不动就**原地不动**，不要退而求其次挪到"最多能到的地方"：
+            # 那等于把一个已经对好的位置换成另一个位置，套打上更糟。
+            # 如实报出能到的极限，让人自己决定。
             notes.append('「{}」想印在距纸上边 {:.2f}cm，但那里已经被上一行占了，'
-                         '最多只能到 {:.2f}cm'.format(names[0], want, cur - sb))
-            new_sb = 0.0
+                         '最多只能到 {:.2f}cm——这次没挪，位置保持原样'
+                         .format(names[0], want, cur - sb))
+            done.update(names)
+            continue
         para.paragraph_format.space_before = Cm(new_sb)
         if len(names) > 1:
             notes.append('「{}」和它同一行，纵向只能一起挪'.format('、'.join(names[1:])))
