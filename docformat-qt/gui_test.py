@@ -433,8 +433,18 @@ print('[18b] 清单与预览同屏 + 合规模式预览按钮可用 ✓')
 # ---------- 16. 处理模式卡片布局 + 目录合并为单一入口 ----------
 from app.pages.home_page import MODES as _MODES
 from app.worker import MODE_TOC as _MTOC, MODE_TOC_AUTO as _MTA, MODE_TOC_MANUAL as _MTM
-assert len(_MODES) == 6, '模式应为 6 个（目录已合并）: {}'.format(len(_MODES))
-assert len(_MODES) % 2 == 0, '模式数应为偶数，两列网格才无空位'
+assert len(_MODES) == 7, '模式应为 7 个（用语检查已独立成模式）: {}'.format(len(_MODES))
+assert 'wording' in [m for m, _l, _d in _MODES], '用语检查应是独立模式，不再挂在合规检查里'
+# 奇数个模式时最后一张横跨两列，网格里不该留空格子
+_grid = home._mode_grid
+_last = [home._mode_cards[m] for m, _l, _d in _MODES][-1]
+for _i in range(_grid.count()):
+    _it = _grid.itemAt(_i)
+    if _it.widget() is _last:
+        assert _grid.getItemPosition(_i)[3] == 2, '落单的最后一张卡片应横跨两列'
+        break
+else:
+    raise AssertionError('最后一张模式卡片不在网格里')
 assert _MTOC in home._mode_cards, '缺少统一的「生成目录」入口'
 assert _MTA not in home._mode_cards and _MTM not in home._mode_cards, \
     '目录的两个子模式不应各占一张卡片'
@@ -482,7 +492,7 @@ finally:
     _td.TocOptionsDialog = _orig_td
     home.suffix_edit.setText('_gui')
 assert os.path.exists(os.path.join(SMOKE, 'sample_tocgui.docx')), '目录未产出'
-print('[19] 模式卡片 6 张等高无空位 + 目录合并为单一入口 ✓')
+print('[19] 模式卡片 7 张等高无空位（末张跨两列）+ 目录合并为单一入口 ✓')
 
 # ---------- 17. 转换与工具行（不占模式网格，点击即执行）----------
 from app.pages.home_page import TOOLS as _TOOLS
@@ -494,7 +504,7 @@ for _tid, _lbl, _tip in _TOOLS:
 # 工具不应混进模式网格
 assert _MPDF not in home._mode_cards and _MDOCX not in home._mode_cards, \
     '工具不应占用模式卡片'
-assert len(_MODES) == 6, '加工具后模式数不应变化'
+assert len(_MODES) == 7, '加工具后模式数不应变化'
 # 转 docx：输入已是 docx 应跳过而不是报错
 home.files = []
 home.add_files([SAMPLE])
@@ -913,6 +923,70 @@ finally:
     _ted._sess.dirty = False
     _ted.reject()
 print('[27] 套打模板可视化编辑：白字可选 + 拖动/撤销/填坐标 + 存回可填 ✓')
+
+
+# ---------- 28. 用语检查独立成模式 + 套打升为一级页面 ----------
+from app.compliance_dialog import (ComplianceOptionsDialog as _COD,
+                                   WordingOptionsDialog as _WOD)
+from scripts import compliance as _cmp
+
+_lay = _COD(None).get_options()
+_wor = _WOD(None).get_options()
+assert not [k for k, v in _lay.items() if v and k.startswith('w_')], \
+    '版式面板不该再管用语项'
+assert [k for k, v in _wor.items() if v and k.startswith('w_')], \
+    '用语面板应勾着用语项'
+assert not [k for k, v in _wor.items() if v and not k.startswith('w_')], \
+    '用语面板不该顺手勾上版式项'
+
+# 用语模式：卡片在、预览按钮文案对、结果窗口是用语那一套
+from app.worker import MODE_WORDING as _MW
+assert _MW in home._mode_cards, '首页应有公文用语检查卡片'
+home.set_mode(_MW)
+assert home.preview_btn.text() == '预览检查结果', home.preview_btn.text()
+
+_wsrc = os.path.join(SMOKE, 'gui_wording.docx')
+from docx import Document as _Doc
+_wd = _Doc()
+for _t in ('关于开展检查的请示。', '省安委会',
+           '我委迫不急待地组织排查，按步就班推进。', '特此报告。'):
+    _wd.add_paragraph(_t)
+_wd.save(_wsrc)
+from app.worker import ProcessWorker as _PW
+_ww = _PW([_wsrc], _MW, 'official_gbk', None, '_w')
+_ww.compliance_options = _cmp.only(_cmp.WORDING_KEYS)
+_ww.run()
+_wres = _ww._compliance_results[0]
+assert _wres['kind'] == 'wording'
+assert not _wres['preview'], '用语模式不该再去算版式预览'
+from app.compliance_report_dialog import ComplianceReportDialog as _CRD
+_wdlg = _CRD([_wres])
+try:
+    assert _wdlg.windowTitle() == '公文用语检查结果', _wdlg.windowTitle()
+    for _cb in _wdlg._boxes[0].values():
+        _cb.setChecked(True)
+    _wdlg._render_preview()
+    _a = _wdlg.pv_after.toPlainText()
+    assert '迫不及待' in _a and '迫不急待' not in _a, '改后侧没显示改正结果'
+    assert '按部就班' in _a, '第二处错词没改'
+    assert '处会改' in _wdlg.pv_note.text(), _wdlg.pv_note.text()
+finally:
+    _wdlg.reject()
+
+# 套打：侧边栏一级页面，首页那个按钮改成"送你过去"
+from app.main_window import NAV_ITEMS as _NAV
+assert ('套打填写', 2) in _NAV, '套打应是侧边栏一级入口：{}'.format(_NAV)
+_mw2 = MainWindow()
+assert _mw2.stack.count() == len(_NAV), '页数与导航项对不上'
+_mw2._switch_page(0)
+_mw2.home_page._run_overprint()
+assert _mw2.stack.currentWidget() is _mw2.overprint_page, '首页入口没把人送到套打页'
+_panel = _mw2.overprint_page.panel
+assert _panel.embedded, '页面里的套打面板应是嵌入形态'
+_texts = [b.text() for b in _panel.findChildren(type(_panel.btn_print))]
+assert '取消' not in _texts, '长在页面里就不该有"取消"'
+assert '打印…' in _texts, '缺少直接打印入口'
+print('[28] 用语检查独立成模式（面板/结果窗口/改后预览）+ 套打升为一级页面 ✓')
 
 
 print('\nGUI 自动化测试全部通过 ✓')

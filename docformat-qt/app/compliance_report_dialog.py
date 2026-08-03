@@ -23,6 +23,47 @@ _ALIGN_CSS = {'left': 'left', 'center': 'center', 'right': 'right',
               'justify': 'justify', 'distribute': 'justify'}
 
 
+def _esc(s):
+    return (s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
+
+
+def _render_wording_html(entries, side):
+    """用语预览：只列会被改的段落，把词标出来。
+
+    左右两侧的标记位置不同——原文里标的是**错词**，改后标的是**新词**，
+    两者长度可能不一样（"3个"→"三个"），所以各按各自的坐标标。
+    """
+    html = ['<html><body style="font-family:SimSun;font-size:11pt;'
+            'line-height:1.7;margin:10px">']
+    for e in entries:
+        text = e['before'] if side == 'before' else e['after']
+        # marks 里 (起, 止) 是改后文本的坐标；原文侧要按错词自己的长度倒推
+        spans = []
+        if side == 'after':
+            spans = [(a, b) for a, b, _o, _n in e['marks']]
+        else:
+            shift = 0
+            for a, b, old, new in e['marks']:
+                s0 = a - shift
+                spans.append((s0, s0 + len(old)))
+                shift += len(new) - len(old)
+        color = '#FFD9D9' if side == 'before' else '#D6F5DC'
+        out, cur = [], 0
+        for a, b in spans:
+            a, b = max(0, a), min(len(text), b)
+            if a < cur:
+                continue
+            out.append(_esc(text[cur:a]))
+            out.append('<span style="background:{}">{}</span>'.format(
+                color, _esc(text[a:b])))
+            cur = b
+        out.append(_esc(text[cur:]))
+        html.append('<p><a name="p{}"></a><span style="color:#999">第{}段　</span>{}</p>'
+                    .format(e['index'], e['index'] + 1, ''.join(out)))
+    html.append('</body></html>')
+    return ''.join(html)
+
+
 def _render_preview_html(entries, fix_keys, side):
     """渲染合规预览。side='before' 用实际格式，'after' 按已认可项修正后的格式。
 
@@ -104,7 +145,9 @@ class ComplianceReportDialog(QDialog):
 
     def __init__(self, results, parent=None):
         super(ComplianceReportDialog, self).__init__(parent)
-        self.setWindowTitle("公文合规检查结果")
+        self._wording = bool(results) and all(
+            r.get('kind') == 'wording' for r in results)
+        self.setWindowTitle("公文用语检查结果" if self._wording else "公文合规检查结果")
         self.resize(780, 660)
         self._results = results
         self._boxes = {}          # {result_index: {fix_key: QCheckBox}}
@@ -114,9 +157,15 @@ class ComplianceReportDialog(QDialog):
         root.setContentsMargins(16, 14, 16, 12)
         root.setSpacing(8)
 
-        tip = QLabel("上方勾选你认可、希望自动修正的偏差，下方即时显示改哪儿、改成什么样；"
-                     "未勾选的保持不动。点问题条目可跳到对应段落。"
-                     "修正结果另存为新文件，原文件不改。")
+        tip = QLabel(
+            "上方勾选你认可、希望改掉的问题，下方即时显示改哪个词、改成什么；"
+            "未勾选的一个字都不动。点问题条目可跳到对应段落。"
+            "改动一律写成 <b>Word 修订</b>，在 Word/WPS 里能逐条看、逐条接受或拒绝，"
+            "结果另存为新文件，原文件不改。"
+            if self._wording else
+            "上方勾选你认可、希望自动修正的偏差，下方即时显示改哪儿、改成什么样；"
+            "未勾选的保持不动。点问题条目可跳到对应段落。"
+            "修正结果另存为新文件，原文件不改。")
         tip.setProperty("muted", "true")
         tip.setWordWrap(True)
         root.addWidget(tip)
@@ -184,9 +233,11 @@ class ComplianceReportDialog(QDialog):
         v.addLayout(bar)
 
         head = QHBoxLayout()
-        hl = QLabel("现状（黄底=存在偏差）")
+        hl = QLabel("原文（红底=有问题的词）" if self._wording
+                    else "现状（黄底=存在偏差）")
         hl.setProperty("sectionTitle", "true")
-        hr = QLabel("修正后（黄底=本次会被改）")
+        hr = QLabel("改后（绿底=改成的词）" if self._wording
+                    else "修正后（黄底=本次会被改）")
         hr.setProperty("sectionTitle", "true")
         head.addWidget(hl, 1)
         head.addWidget(hr, 1)
@@ -236,6 +287,9 @@ class ComplianceReportDialog(QDialog):
         if ri is None:
             return
         res = self._results[ri]
+        if self._wording:
+            self._render_wording_preview(ri, res)
+            return
         entries = res.get('preview') or []
         if not entries:
             empty = ('<html><body style="font-family:SimSun;margin:14px;color:#888">'
@@ -257,6 +311,35 @@ class ComplianceReportDialog(QDialog):
         doc_keys = [k for k in keys if not k.startswith('para:')]
         extra = '；另有 {} 项页面/内容级修正（不在此预览）'.format(len(doc_keys)) if doc_keys else ''
         self.pv_note.setText('{} 段有偏差，本次将修正 {} 段{}'.format(n_bad, n_fix, extra))
+
+    def _render_wording_preview(self, ri, res):
+        """用语检查的预览：左边原文标出错词，右边改后标出新词。
+
+        只列**会被改的段落**——全文照抄一遍，真正改动的两三个词反而淹了。
+        """
+        keys = [k for k, cb in self._boxes.get(ri, {}).items() if cb.isChecked()]
+        path = res.get('fix_input')
+        entries = []
+        if path and keys:
+            try:
+                from scripts.compliance import wording_preview
+                entries = wording_preview(path, res.get('preset') or {}, keys)
+            except Exception as exc:
+                self.pv_note.setText('预览失败：{}'.format(exc))
+        if not entries:
+            why = ('勾选上面的问题，这里显示会改哪个词' if path
+                   else '此文件非 .docx，无法预览改动')
+            empty = ('<html><body style="font-family:SimSun;margin:14px;'
+                     'color:#888">{}</body></html>'.format(why))
+            self.pv_before.setHtml(empty)
+            self.pv_after.setHtml(empty)
+            self.pv_note.setText('')
+            return
+        self.pv_before.setHtml(_render_wording_html(entries, 'before'))
+        self.pv_after.setHtml(_render_wording_html(entries, 'after'))
+        n = sum(len(e['marks']) for e in entries)
+        self.pv_note.setText('{} 段共 {} 处会改（以修订方式写入）'.format(
+            len(entries), n))
 
     # ---------- 构建 ----------
     def _build_file_block(self, ri, res):

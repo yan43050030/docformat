@@ -33,7 +33,12 @@ def _typo_label():
 
 
 # ---------------- 检查项定义 ----------------
-# 供 UI 生成勾选面板；分组便于展示
+# 供 UI 生成勾选面板；分组便于展示。
+# 版式与用语分成两组，是因为它们在界面上已经是**两件事**：
+# 「公文合规检查」查的是版式对不对（字体字号行距边距），
+# 「公文用语检查」查的是文字本身对不对（错别字、数字用法、文种搭配）。
+# 引擎仍是同一套——check_compliance 按传进来的勾选项决定查哪些，
+# 两个入口只是给它不同的选项集，不必也不该维护两条检查链路。
 CHECK_GROUPS = [
     ('页面', [
         ('margins', '页边距'),
@@ -55,6 +60,9 @@ CHECK_GROUPS = [
         ('numbering', '序号层次是否统一'),
         ('punctuation', '英文 / 不规范标点'),
     ]),
+]
+
+WORDING_GROUPS = [
     ('用语（只查有明文规定的，文风不管）', [
         ('w_数字用法', '数字用法（GB/T 15835）'),
         ('w_错别字', _typo_label()),
@@ -64,11 +72,30 @@ CHECK_GROUPS = [
     ]),
 ]
 
-CHECK_ITEMS = [item for _g, items in CHECK_GROUPS for item in items]
+LAYOUT_ITEMS = [item for _g, items in CHECK_GROUPS for item in items]
+WORDING_ITEMS = [item for _g, items in WORDING_GROUPS for item in items]
+CHECK_ITEMS = LAYOUT_ITEMS + WORDING_ITEMS
+
+LAYOUT_KEYS = [k for k, _ in LAYOUT_ITEMS]
+WORDING_KEYS = [k for k, _ in WORDING_ITEMS]
 
 DEFAULT_OPTIONS = {k: True for k, _ in CHECK_ITEMS}
 # 易混词要靠上下文判断，最容易误报——默认关，让人自己开
 DEFAULT_OPTIONS['w_易混词'] = False
+
+
+def only(keys, chosen=None):
+    """做一份"只开 keys 这几项"的勾选表。
+
+    两个入口各自只管自己那一摊：版式检查不该顺手报错别字，用语检查也
+    不该跳出来说页边距不对——用户是带着一个明确目的点进来的。
+    chosen 给了就按它取值，没给按默认。
+    """
+    src = chosen if chosen is not None else DEFAULT_OPTIONS
+    out = {k: False for k in DEFAULT_OPTIONS}
+    for k in keys:
+        out[k] = bool(src.get(k, DEFAULT_OPTIONS.get(k, True)))
+    return out
 
 # 旧版本的检查项键 → 新键（QSettings 里可能存着旧键，做兼容映射）
 _LEGACY_OPTION_MAP = {
@@ -524,8 +551,12 @@ def check_compliance(doc, preset, options=None, detect_types=None):
     if opts.get('page_number'):
         _check_page_number(doc, preset, add)
 
-    # --- 段落级 + 结构完整性（共用一次类型识别）---
-    need_typed = any(opts.get(a) for a in _PARA_ATTRS) or opts.get('structure')
+    # --- 段落级 + 结构完整性 + 用语（共用一次类型识别）---
+    # 用语也要识别类型：文种搭配、标题标点、附件说明格式这些规则都得先
+    # 知道"这段是标题还是正文"。单独跑用语检查时段落级检查是关掉的，
+    # 若不在这里一并要求识别，那几条规则会**悄悄查不出东西**。
+    need_typed = (any(opts.get(a) for a in _PARA_ATTRS) or opts.get('structure')
+                  or any(opts.get(k) for k in WORDING_KEYS))
     typed = _detect_types(doc, preset) if need_typed else []
 
     if any(opts.get(a) for a in _PARA_ATTRS):
@@ -882,6 +913,23 @@ _ATTR_FIELDS = {
     'line_spacing': ('line_spacing',),
     'spacing': ('space_before', 'space_after'),
 }
+
+
+def wording_preview(path, preset, fix_keys):
+    """用语检查的"改前 / 改后"：认可了这些规则，文字会变成什么样。
+
+    版式检查的预览给的是"这段字该长什么样"，用语检查要看的是**字本身**
+    变没变——同一个预览面板，两种模式给它不同的料。
+    走的是 apply_wording_fixes 同一套匹配，所以预览里看到几处、
+    落笔就是几处。
+    """
+    from docx import Document
+    from .paragraph import sanitize_document
+    from .wording import preview_wording
+    doc = Document(path)
+    sanitize_document(doc)
+    types = {ai: pt for ai, (_i, _p, pt) in enumerate(_detect_types(doc, preset))}
+    return preview_wording(doc, fix_keys, types)
 
 
 def preview_spec_after(entry, fix_keys):

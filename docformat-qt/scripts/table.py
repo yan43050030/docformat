@@ -69,6 +69,64 @@ def _set_table_borders(table, size_pt=0.5, color="000000", style="single"):
         borders.append(elem)
 
 
+def _set_three_line_borders(table, top_pt=1.5, mid_pt=0.75, header_rows=1):
+    """三线表：只留顶线、栏目线、底线，没有竖线，也没有其他横线。
+
+    公文和科技文献里的正式表格多是这个样子（GB/T 7713 一类的规矩）：
+    顶线和底线粗、栏目线细，中间一根竖线都不画。满格线的表格在公文里
+    反而显得像报表。
+
+    header_rows 是表头占几行——栏目线画在表头下面那一道。
+    """
+    tbl = table._tbl
+    tbl_pr = tbl.tblPr
+    if tbl_pr is None:
+        tbl_pr = OxmlElement('w:tblPr')
+        tbl.insert(0, tbl_pr)
+    borders = tbl_pr.find(qn('w:tblBorders'))
+    if borders is None:
+        borders = OxmlElement('w:tblBorders')
+        tbl_pr.append(borders)
+    else:
+        for child in list(borders):
+            borders.remove(child)
+
+    def edge(tag, pt):
+        e = OxmlElement('w:' + tag)
+        if pt:
+            e.set(qn('w:val'), 'single')
+            e.set(qn('w:sz'), str(max(1, int(pt * 8))))
+            e.set(qn('w:space'), '0')
+            e.set(qn('w:color'), '000000')
+        else:
+            e.set(qn('w:val'), 'none')
+        borders.append(e)
+
+    edge('top', top_pt)
+    edge('bottom', top_pt)
+    edge('left', 0)
+    edge('right', 0)
+    edge('insideH', 0)      # 中间横线一概不画，栏目线单独补
+    edge('insideV', 0)
+
+    # 栏目线：画在表头最后一行的**下边**。表级边框做不到"只画一道"，
+    # 得落到单元格上
+    n = max(0, min(int(header_rows or 1), len(table.rows) - 1))
+    if n:
+        for cell in table.rows[n - 1].cells:
+            tc_pr = cell._tc.get_or_add_tcPr()
+            for old in tc_pr.findall(qn('w:tcBorders')):
+                tc_pr.remove(old)
+            tb = OxmlElement('w:tcBorders')
+            b = OxmlElement('w:bottom')
+            b.set(qn('w:val'), 'single')
+            b.set(qn('w:sz'), str(max(1, int(mid_pt * 8))))
+            b.set(qn('w:space'), '0')
+            b.set(qn('w:color'), '000000')
+            tb.append(b)
+            tc_pr.append(tb)
+
+
 def _set_table_cell_margins(table, top_cm=0.0, bottom_cm=0.0, left_cm=0.05, right_cm=0.05):
     tbl = table._tbl
     tbl_pr = tbl.tblPr
@@ -221,20 +279,38 @@ def _set_cell_borders(cell, size_pt=0.5, color="000000", style="single"):
         borders.append(elem)
 
 
-def _set_header_row_repeat(table, repeat=True):
-    """设置表格首行为标题行重复（跨页时重复表头）"""
+def _set_header_row_repeat(table, repeat=True, rows=1):
+    """跨页时重复表头（续表自动带上栏目名）。
+
+    rows 是表头占几行——两行表头只标第一行，翻页后第二行就丢了，
+    读者看着光秃秃的数字对不上是哪一栏。
+    """
     if not table.rows:
         return
-    first_row = table.rows[0]
-    tr_pr = first_row._tr.get_or_add_trPr()
-    tbl_header = tr_pr.find(qn('w:tblHeader'))
-    if repeat:
-        if tbl_header is None:
-            tbl_header = OxmlElement('w:tblHeader')
-            tr_pr.append(tbl_header)
-    else:
-        if tbl_header is not None:
+    n = max(1, min(int(rows or 1), len(table.rows)))
+    for row in table.rows[:n] if repeat else table.rows:
+        tr_pr = row._tr.get_or_add_trPr()
+        tbl_header = tr_pr.find(qn('w:tblHeader'))
+        if repeat:
+            if tbl_header is None:
+                tr_pr.append(OxmlElement('w:tblHeader'))
+        elif tbl_header is not None:
             tr_pr.remove(tbl_header)
+
+
+def _set_rows_unbreakable(table, on=True):
+    """禁止单元格内容跨页断开。
+
+    一行数据被页边切成两半，上半页三个字、下半页两个字，是表格跨页时
+    最常见也最难看的毛病。宁可整行推到下一页。
+    """
+    for row in table.rows:
+        tr_pr = row._tr.get_or_add_trPr()
+        el = tr_pr.find(qn('w:cantSplit'))
+        if on and el is None:
+            tr_pr.append(OxmlElement('w:cantSplit'))
+        elif not on and el is not None:
+            tr_pr.remove(el)
 
 
 def _set_cell_shading(cell, color="D9E2F3", fill="auto"):

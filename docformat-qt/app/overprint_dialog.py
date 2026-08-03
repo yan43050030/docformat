@@ -211,8 +211,16 @@ class OffsetDialog(QDialog):
 
 
 class OverprintDialog(QDialog):
-    def __init__(self, parent=None):
+    """套打填写。
+
+    embedded=True 时它被塞进侧边栏的「套打」页里长住，不再是弹窗——
+    没有"取消"可点（关掉谁？），生成完也不该把自己关掉。除此之外
+    两种形态是同一个界面，不分叉两套代码。
+    """
+
+    def __init__(self, parent=None, embedded=False):
         super(OverprintDialog, self).__init__(parent)
+        self.embedded = embedded
         self.setWindowTitle("套打填写 — 打到预印红头纸上")
         self.resize(1120, 720)
         self._editors = {}
@@ -416,13 +424,20 @@ class OverprintDialog(QDialog):
 
         btns = QHBoxLayout()
         btns.addStretch(1)
-        cancel = QPushButton("取消")
-        cancel.clicked.connect(self.reject)
+        if not self.embedded:
+            cancel = QPushButton("取消")
+            cancel.clicked.connect(self.reject)
+            btns.addWidget(cancel)
+        self.btn_print = QPushButton("打印…")
+        self.btn_print.setCursor(Qt.PointingHandCursor)
+        self.btn_print.setToolTip(
+            "生成后直接送打印机；也可以先打一张「对位测试页」核对位置")
+        self.btn_print.clicked.connect(self._print)
+        btns.addWidget(self.btn_print)
         ok = QPushButton("生成套打文件")
         ok.setProperty("primary", "true")
         ok.setCursor(Qt.PointingHandCursor)
         ok.clicked.connect(self._generate)
-        btns.addWidget(cancel)
         btns.addWidget(ok)
         root.addLayout(btns)
 
@@ -1136,6 +1151,87 @@ class OverprintDialog(QDialog):
         self._reload_templates(select=dest)
 
     # ---------- 生成 ----------
+    def _print(self):
+        """直接打印：本次内容，或一张对位测试页。
+
+        套打是"打一张、量一下、微调、再打"的活。以前每轮都要生成 docx →
+        打开 Word → 打印，三步里有两步跟排版没关系。
+        """
+        if not self._template_path:
+            QMessageBox.information(self, "提示", "请先选择套打模板")
+            return
+        from scripts import printing
+        ok, why = printing.available()
+        if not ok:
+            QMessageBox.information(self, "本机不能直接打印", why + "。\n"
+                                    "可以先「生成套打文件」，再用 Word/WPS 打印。")
+            return
+
+        box = QMessageBox(self)
+        box.setWindowTitle("打印")
+        box.setText("打印什么？")
+        box.setInformativeText(
+            "· <b>对位测试页</b>：打在<b>普通白纸</b>上，每栏标着它会印到"
+            "距纸左边多少厘米，预印的栏目名也用浅灰显出来。和真实预印纸"
+            "对光一叠，哪一栏偏了、偏多少一眼看得见——白纸比预印纸便宜。<br>"
+            "· <b>本次内容</b>：把上面填的内容打到<b>预印红头纸</b>上。")
+        b_test = box.addButton("对位测试页（白纸）", QMessageBox.AcceptRole)
+        b_real = box.addButton("本次内容（预印纸）", QMessageBox.AcceptRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked not in (b_test, b_real):
+            return
+        test = clicked is b_test
+
+        values = self._values()
+        if not test and not any(values.values()):
+            QMessageBox.information(self, "提示", "请至少填写一个字段")
+            return
+        if not test and not self._preflight_ok(values):
+            return
+
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix='docformat_print_')
+        doc_path = os.path.join(tmp, '对位测试页.docx' if test else '套打件.docx')
+        try:
+            if test:
+                overprint.build_align_sheet(
+                    self._template_path, doc_path, offsets=self._offsets,
+                    offsets_y=self._offsets_y, shift=self._shift)
+            else:
+                overprint.fill_form(
+                    self._template_path, values, doc_path,
+                    title_shape=self._title_shape(),
+                    title_lines=self._title_lines(),
+                    offsets=self._offsets, offsets_y=self._offsets_y,
+                    shift=self._shift)
+        except Exception as e:
+            QMessageBox.warning(self, "生成失败", str(e))
+            return
+
+        from PyQt5.QtPrintSupport import QPrintDialog
+        printer = printing.make_printer()
+        dlg = QPrintDialog(printer, self)
+        dlg.setWindowTitle("打印 — {}".format(
+            '对位测试页（放普通白纸）' if test else '套打件（放预印红头纸）'))
+        if dlg.exec_() != QPrintDialog.Accepted:
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            pages = printing.print_file(doc_path, printer)
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "打印失败", str(e))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.status.setText(
+            "已送打印机（{} 页，按 100% 实际大小）。{}".format(
+                pages,
+                "把它覆到预印纸上对光看，浅灰栏目名应与红字重合。" if test
+                else "若整体偏了，用「打印位置微调」里的整体平移补。"))
+
     def _generate(self):
         if not self._template_path:
             return
@@ -1195,7 +1291,11 @@ class OverprintDialog(QDialog):
             msg += "\n\n注意：\n" + "\n".join('· ' + x for x in notes)
         msg += "\n\n打印时请用预印红头纸，并确认打印机「按实际大小/100%」不缩放。"
         QMessageBox.information(self, "生成完成", msg)
-        self.accept()
+        # 长在页面里时不关自己——用户多半接着填下一份
+        if not self.embedded:
+            self.accept()
+        else:
+            self.status.setText("已生成：{}".format(out))
 
 
 # ---------------- 版面预览 ----------------

@@ -414,6 +414,79 @@ def _tracked_replace(para, run, pieces):
     parent.remove(r)
 
 
+def _fixable_rules(fix_keys):
+    ids = {k.split(':', 1)[1] for k in (fix_keys or []) if k.startswith('wording:')}
+    return [r for r in list(RULES) + list(load_user_rules())
+            if r['id'] in ids and r.get('fix')]
+
+
+def _spans_in(text, rules, ptype):
+    """这段文字里要改哪几处：[(起, 止, 新文)]，按位置升序。
+
+    预览和真正下笔共用这一个函数。两边各写一套匹配，迟早会出现
+    "预览说改三处、实际改了两处"——那比不给预览还糟。
+    """
+    if not text:
+        return []
+    # 遮蔽是按整段算的，run 里再算一次代价太高；这里只保护
+    # run 内可见的引号/书名号，够用
+    if re.search(r'[“”《》]', text):
+        return []
+    spans = []
+    for r in rules:
+        if r['scope'] and ptype not in r['scope']:
+            continue
+        for m in re.finditer(r['pattern'], text):
+            if any(not (m.end() <= a or m.start() >= b) for a, b, _t in spans):
+                continue        # 与已认领的区间重叠，跳过
+            spans.append((m.start(), m.end(), r['fix'](m)))
+    spans.sort()
+    return spans
+
+
+def preview_wording(doc, fix_keys, detect_types=None, max_paras=400):
+    """认可了这些规则之后，哪几段会变成什么样。
+
+    返回 [{'index': 段号, 'before': 原文, 'after': 改后,
+           'marks': [(起, 止, 新词)]}]，只给真的会动的段落。
+    marks 的坐标是相对**整段**的，界面照它把错词标出来。
+    """
+    rules = _fixable_rules(fix_keys)
+    if not rules:
+        return []
+    out = []
+    ai = -1
+    for para in doc.paragraphs:
+        if not para.text.strip():
+            continue
+        ai += 1
+        if ai >= max_paras:
+            break
+        ptype = (detect_types or {}).get(ai)
+        before, after, marks = [], [], []
+        grown = 0       # 改后文本已经写了多少字，标记的坐标按它算
+        for run in para.runs:
+            text = run.text or ''
+            before.append(text)
+            cur = 0
+            for a, b, t in _spans_in(text, rules, ptype):
+                head = text[cur:a]
+                after.append(head)
+                grown += len(head)
+                marks.append((grown, grown + len(t), text[a:b], t))
+                after.append(t)
+                grown += len(t)
+                cur = b
+            tail = text[cur:]
+            after.append(tail)
+            grown += len(tail)
+        b_txt, a_txt = ''.join(before), ''.join(after)
+        if b_txt != a_txt:
+            out.append({'index': ai, 'before': b_txt, 'after': a_txt,
+                        'marks': marks})
+    return out
+
+
 def apply_wording_fixes(doc, fix_keys, detect_types=None, revision=True):
     """按 fix_key（wording:规则id）替换文字，返回改动处数。
 
@@ -422,9 +495,7 @@ def apply_wording_fixes(doc, fix_keys, detect_types=None, revision=True):
     用语对错终究要人拍板，默默改掉是不负责任的。
     只有给了 fix 的规则才动手——那些是"改了一定对"的。
     """
-    ids = {k.split(':', 1)[1] for k in (fix_keys or []) if k.startswith('wording:')}
-    rules = [r for r in list(RULES) + list(load_user_rules())
-             if r['id'] in ids and r.get('fix')]
+    rules = _fixable_rules(fix_keys)
     if not rules:
         return 0
 
@@ -437,24 +508,9 @@ def apply_wording_fixes(doc, fix_keys, detect_types=None, revision=True):
         ptype = (detect_types or {}).get(ai)
         for run in list(para.runs):
             text = run.text
-            if not text:
-                continue
-            # 遮蔽是按整段算的，run 里再算一次代价太高；这里只保护
-            # run 内可见的引号/书名号，够用
-            if re.search(r'[“”《》]', text):
-                continue
-            spans = []          # [(起, 止, 新文)]
-            for r in rules:
-                if r['scope'] and ptype not in r['scope']:
-                    continue
-                for m in re.finditer(r['pattern'], text):
-                    if any(not (m.end() <= a or m.start() >= b)
-                           for a, b, _t in spans):
-                        continue        # 与已认领的区间重叠，跳过
-                    spans.append((m.start(), m.end(), r['fix'](m)))
+            spans = _spans_in(text, rules, ptype)
             if not spans:
                 continue
-            spans.sort()
             n += len(spans)
             if not revision:
                 out, cur = [], 0

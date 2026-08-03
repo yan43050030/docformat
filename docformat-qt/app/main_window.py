@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""主窗口：侧边栏导航 + 六页堆叠 + 底部状态栏"""
+"""主窗口：侧边栏导航 + 七页堆叠 + 底部状态栏"""
 import os
 
 from PyQt5.QtCore import QSize, Qt, QTimer, QUrl
@@ -15,14 +15,15 @@ from app.presets import PresetManager
 from app.theme import build_qss, current_theme_id
 from app.pages.home_page import HomePage
 from app.pages.presets_page import PresetsPage
+from app.pages.overprint_page import OverprintPage
 from app.pages.theme_page import ThemePage
 from app.pages.log_page import LogPage
 from app.pages.template_draft_page import TemplateDraftPage
 from app.pages.template_maker_page import TemplateMakerPage
 
 from app.version import VERSION      # 单独放，好让 --version 不必导入 Qt
-NAV_ITEMS = [('格式处理', 0), ('版式方案', 1), ('文书起草', 2), ('文书模板制作', 3),
-             ('主题', 4), ('日志', 5)]
+NAV_ITEMS = [('格式处理', 0), ('版式方案', 1), ('套打填写', 2), ('文书起草', 3),
+             ('文书模板制作', 4), ('主题', 5), ('日志', 6)]
 
 
 class MainWindow(QMainWindow):
@@ -106,11 +107,13 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.home_page = HomePage(self.mgr)
         self.presets_page = PresetsPage(self.mgr)
+        self.overprint_page = OverprintPage()
         self.template_draft_page = TemplateDraftPage(self.mgr)
         self.template_maker_page = TemplateMakerPage()
         self.theme_page = ThemePage()
         self.log_page = LogPage()
-        for page in [self.home_page, self.presets_page,
+        self.home_page.navigate.connect(self._switch_page)
+        for page in [self.home_page, self.presets_page, self.overprint_page,
                      self.template_draft_page, self.template_maker_page,
                      self.theme_page, self.log_page]:
             self.stack.addWidget(page)

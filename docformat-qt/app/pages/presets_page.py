@@ -534,18 +534,35 @@ class PresetsPage(QWidget):
         self.tb_optimize = QCheckBox("启用表格优化（边框/列宽/行高标准化）")
         self.tb_auto_col = QCheckBox("按内容智能分配列宽")
         self.tb_blank_after = QCheckBox("表格后保留空行")
+        self.tb_three_line = QCheckBox("三线表（只留顶线、栏目线、底线，不画竖线）")
+        self.tb_three_line.setToolTip(
+            "公文和科技文献里的正式表格多是这个样子：顶线底线粗、栏目线细，\n"
+            "中间一根竖线都不画。满格线的表格看着像报表。")
+        self.tb_header_repeat = QCheckBox("跨页时重复表头（续表带上栏目名）")
+        self.tb_header_repeat.setToolTip(
+            "表格跨页时，第二页自动重复表头那几行，\n"
+            "读者不必翻回上一页去对是哪一栏。")
         g.addWidget(self.tb_optimize, 0, 0, 1, 2)
         g.addWidget(self.tb_auto_col, 1, 0, 1, 2)
         g.addWidget(self.tb_blank_after, 2, 0, 1, 2)
-        g.addWidget(QLabel("边框粗细 (pt)"), 3, 0)
+        g.addWidget(self.tb_three_line, 3, 0, 1, 2)
+        g.addWidget(self.tb_header_repeat, 4, 0, 1, 2)
+        g.addWidget(QLabel("边框粗细 (pt)"), 5, 0)
         self.tb_border = _spin(0.25, 3, 0.25, 2)
-        g.addWidget(self.tb_border, 4, 0)
-        g.addWidget(QLabel("行高 (cm)"), 3, 1)
+        g.addWidget(self.tb_border, 6, 0)
+        g.addWidget(QLabel("行高 (cm)"), 5, 1)
         self.tb_row_h = _spin(0.3, 3, 0.1)
-        g.addWidget(self.tb_row_h, 4, 1)
-        for wdg in [self.tb_optimize, self.tb_auto_col, self.tb_blank_after]:
+        g.addWidget(self.tb_row_h, 6, 1)
+        g.addWidget(QLabel("表头占几行"), 7, 0)
+        self.tb_header_rows = _spin(1, 4, 1, 0)
+        self.tb_header_rows.setToolTip(
+            "两行表头只标第一行的话，翻页后第二行就丢了，\n"
+            "光秃秃的数字对不上是哪一栏。三线表的栏目线也按它画。")
+        g.addWidget(self.tb_header_rows, 8, 0)
+        for wdg in [self.tb_optimize, self.tb_auto_col, self.tb_blank_after,
+                    self.tb_three_line, self.tb_header_repeat]:
             wdg.stateChanged.connect(self._save_from_widgets)
-        for wdg in [self.tb_border, self.tb_row_h]:
+        for wdg in [self.tb_border, self.tb_row_h, self.tb_header_rows]:
             wdg.valueChanged.connect(self._save_from_widgets)
         sec.set_body_layout(g)
         self._sections.append(sec)
@@ -766,6 +783,9 @@ class PresetsPage(QWidget):
         self.tb_blank_after.setChecked(bool(tb.get('after_table_blank_line', True)))
         self.tb_border.setValue(float(tb.get('border_size_pt', 0.5)))
         self.tb_row_h.setValue(float(tb.get('row_height_cm', 0.7)))
+        self.tb_three_line.setChecked(bool(tb.get('three_line', False)))
+        self.tb_header_repeat.setChecked(bool(tb.get('header_repeat', False)))
+        self.tb_header_rows.setValue(int(tb.get('header_rows', 1) or 1))
 
         self.adv_first_bold.setChecked(bool(p.get('first_line_bold', False)))
         self.adv_bold_serial.setChecked(bool(p.get('bold_serial', True)))
@@ -879,6 +899,9 @@ class PresetsPage(QWidget):
             'after_table_blank_line': self.tb_blank_after.isChecked(),
             'border_size_pt': self.tb_border.value(),
             'row_height_cm': self.tb_row_h.value(),
+            'three_line': self.tb_three_line.isChecked(),
+            'header_repeat': self.tb_header_repeat.isChecked(),
+            'header_rows': int(self.tb_header_rows.value()),
         }
         p['first_line_bold'] = self.adv_first_bold.isChecked()
         p['bold_serial'] = self.adv_bold_serial.isChecked()

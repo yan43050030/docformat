@@ -16,7 +16,8 @@ from app.widgets.file_list import FileList
 from app.worker import (MODE_AI_PASTE, MODE_FULL,
                         MODE_PUNCTUATION, MODE_TOC_AUTO, MODE_TOC_MANUAL,
                         MODE_COMPLIANCE, MODE_CLEAN, MODE_TOC,
-                        MODE_PDF, MODE_TO_DOCX, AiPasteWorker, ProcessWorker)
+                        MODE_PDF, MODE_TO_DOCX, MODE_WORDING,
+                        AiPasteWorker, ProcessWorker)
 
 # 转换与工具：与上面 6 个"排版加工"模式性质不同——不改排版内容，
 # 只做格式转换或对照。放在下方一行轻量按钮里，点了就对当前文件执行，
@@ -25,13 +26,14 @@ TOOLS = [
     (MODE_PDF, '导出 PDF', '用 Word/WPS 或 LibreOffice 导出，目录域会先更新为最终页码'),
     (MODE_TO_DOCX, '转为 docx', '把 .doc/.wps 老文档批量转成 .docx，不做排版改动'),
     ('compare', '版本比对', '选两个版本，输出改动对照件；有 Word/WPS 时用原生修订痕迹'),
-    ('overprint', '套打填写', '填内容打到预印红头纸上，位置与预印栏位严格对齐'),
+    ('overprint', '套打填写', '转到「套打填写」页：填内容打到预印红头纸上'),
 ]
 
 # 说明文字长度保持相近，卡片换行行数一致、高度整齐
 MODES = [
     (MODE_FULL, '智能一键处理', '标点修复 + 排版规范 + 样式清洗，一步到位'),
-    (MODE_COMPLIANCE, '公文合规检查', '逐段对照预设核对，勾选认可的问题精准修正'),
+    (MODE_COMPLIANCE, '公文合规检查', '查版式：逐段对照预设核对，认可的问题精准修正'),
+    (MODE_WORDING, '公文用语检查', '查文字：错别字、数字用法、文种搭配，改动走修订'),
     (MODE_CLEAN, '格式清洗', '清掉看不见的脏格式，专治排版怪问题'),
     (MODE_PUNCTUATION, '标点修复', '仅修复中英文标点混用，保留原有段落格式'),
     (MODE_TOC, '生成目录', '按标题层级生成目录，可选自动域或静态页'),
@@ -84,6 +86,8 @@ class ModeCard(QFrame):
 
 class HomePage(QWidget):
     logMessage = pyqtSignal(str, str)
+    # 请主窗口切到某一页（套打自己有一页，首页只留个去那儿的入口）
+    navigate = pyqtSignal(int)
     presetChanged = pyqtSignal(str)
     filesChanged = pyqtSignal(int)
 
@@ -196,14 +200,18 @@ class HomePage(QWidget):
         from PyQt5.QtWidgets import QGridLayout
         self._mode = MODE_FULL
         self._mode_cards = {}
-        mode_grid = QGridLayout()
+        mode_grid = self._mode_grid = QGridLayout()
         mode_grid.setHorizontalSpacing(10)
         mode_grid.setVerticalSpacing(10)
         for i, (mid, label, desc) in enumerate(MODES):
             card = ModeCard(mid, label, desc)
             card.clicked.connect(self.set_mode)
             self._mode_cards[mid] = card
-            mode_grid.addWidget(card, i // 2, i % 2)
+            # 模式数是奇数时，最后一张横跨两列——宁可让它宽一点，
+            # 也不留一个空格子在那儿，看着像少做了个功能
+            last_alone = (i == len(MODES) - 1 and len(MODES) % 2 == 1)
+            mode_grid.addWidget(card, i // 2, 0 if last_alone else i % 2,
+                                1, 2 if last_alone else 1)
         # 两列等宽、各行等高，卡片排布规整
         for _c in (0, 1):
             mode_grid.setColumnStretch(_c, 1)
@@ -498,14 +506,16 @@ class HomePage(QWidget):
             # 预览 = "看看会怎样，不改文件"：
             # 智能一键 → 排版前后对比；合规检查 → 检查结果 + 修正对比
             self.preview_btn.setEnabled(
-                bool(self.files) and mode in (MODE_FULL, MODE_COMPLIANCE))
+                bool(self.files)
+                and mode in (MODE_FULL, MODE_COMPLIANCE, MODE_WORDING))
             self.preview_btn.setText(
-                "预览检查结果" if mode == MODE_COMPLIANCE else "预览对比")
+                "预览检查结果" if mode in (MODE_COMPLIANCE, MODE_WORDING)
+                else "预览对比")
 
     def open_preview(self):
         if not self.files:
             return
-        if self.current_mode() == MODE_COMPLIANCE:
+        if self.current_mode() in (MODE_COMPLIANCE, MODE_WORDING):
             self._preview_compliance()
             return
         from app.preview_dialog import PreviewDialog
@@ -614,12 +624,16 @@ class HomePage(QWidget):
                 return
             clean_items = dlg.get_items()
 
-        # 公文合规检查：先弹可配置的检查项面板
+        # 合规 / 用语：先弹各自的检查项面板。两者共用一套引擎，
+        # 只是把不同的勾选项交给它——面板不同，是因为用户点进来的目的不同
         compliance_options = None
-        if mode == MODE_COMPLIANCE:
-            from app.compliance_dialog import ComplianceOptionsDialog
-            dlg = ComplianceOptionsDialog(self)
-            if dlg.exec_() != ComplianceOptionsDialog.Accepted:
+        if mode in (MODE_COMPLIANCE, MODE_WORDING):
+            from app.compliance_dialog import (ComplianceOptionsDialog,
+                                               WordingOptionsDialog)
+            cls = (WordingOptionsDialog if mode == MODE_WORDING
+                   else ComplianceOptionsDialog)
+            dlg = cls(self)
+            if dlg.exec_() != cls.Accepted:
                 return
             compliance_options = dlg.get_options()
 
@@ -690,17 +704,13 @@ class HomePage(QWidget):
         self.worker.start()
 
     def _run_overprint(self):
-        """套打填写：选模板 → 填字段 → 生成"""
-        from app.overprint_dialog import OverprintDialog
-        dlg = OverprintDialog(self)
-        if dlg.exec_() == OverprintDialog.Accepted:
-            out = getattr(dlg, 'result_path', None)
-            if out:
-                self._outputs = [out]
-                self.open_out_btn.setVisible(True)
-                self.status_label.setText('套打文件已生成：{}'.format(os.path.basename(out)))
-                self.logMessage.emit('success', '套打文件已生成：{}'.format(out))
-                self._auto_open_outputs()
+        """套打已经是侧边栏里的一整页，这里只负责把人送过去。
+
+        留着这个按钮是因为老用户习惯在首页找它；真正的界面只此一份，
+        不再在首页复制一遍。
+        """
+        from app.pages.overprint_page import NAV_INDEX
+        self.navigate.emit(NAV_INDEX)
 
     def _run_compare(self):
         """版本比对：另选两个文件，输出改动对照件"""

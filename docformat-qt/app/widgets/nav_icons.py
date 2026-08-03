@@ -40,6 +40,11 @@ def _pixmap(kind, color, size=18):
         p.drawRoundedRect(QRectF(s*0.18, s*0.15, s*0.5, s*0.66), 2, 2)
         p.drawLine(QPointF(s*0.72, s*0.55), QPointF(s*0.72, s*0.85))
         p.drawLine(QPointF(s*0.57, s*0.7), QPointF(s*0.87, s*0.7))
+    elif kind == 'overprint':   # 两张纸错开叠放 + 对位十字（套打）
+        p.drawRoundedRect(QRectF(s*0.12, s*0.22, s*0.5, s*0.62), 2, 2)
+        p.drawRoundedRect(QRectF(s*0.36, s*0.1, s*0.5, s*0.62), 2, 2)
+        p.drawLine(QPointF(s*0.48, s*0.41), QPointF(s*0.74, s*0.41))
+        p.drawLine(QPointF(s*0.61, s*0.28), QPointF(s*0.61, s*0.54))
     elif kind == 'theme':       # 半填充圆（主题）
         p.drawEllipse(QRectF(s*0.18, s*0.18, s*0.64, s*0.64))
         p.setBrush(QColor(color))
@@ -71,4 +76,5 @@ def make_pixmap(kind, color, size=44):
     return _pixmap(kind, color, size)
 
 
-NAV_ICON_KINDS = ['doc', 'layout', 'pencil', 'maker', 'theme', 'log']
+NAV_ICON_KINDS = ['doc', 'layout', 'overprint', 'pencil', 'maker',
+                  'theme', 'log']

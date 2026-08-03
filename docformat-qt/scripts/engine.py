@@ -55,6 +55,7 @@ from .table import (
     _insert_paragraph_after_paragraph, _insert_paragraph_before_paragraph,
     _split_heading_by_punct,
     _set_header_row_repeat, _set_cell_shading, _set_cell_vertical_alignment,
+    _set_three_line_borders, _set_rows_unbreakable,
     _find_nested_tables,
 )
 from .signature import _apply_gb_signature_layout
@@ -120,6 +121,23 @@ def _ensure_structural_blank_lines(doc, line_spacing_pt=28, rules=None, type_ove
         structural_blank_ids.add(id(blank_para._p))
 
     return structural_blank_ids
+
+
+def _drop_blank_before(para):
+    """把这一段前面那个结构性空行去掉。
+
+    附件另起页之后，原先为"隔开附件"插的空行就落到新一页的顶端，
+    变成一整页从第二行才开始——纸上看着就是排歪了。
+    """
+    prev = para._p.getprevious()
+    if prev is None or prev.tag != qn('w:p'):
+        return
+    prev_para = Paragraph(prev, para._parent)
+    if prev_para.text.strip():
+        return
+    if not _is_structural_blank(prev_para):
+        return
+    prev.getparent().remove(prev)
 
 
 def _drop_space_before_blank_lines(doc):
@@ -442,6 +460,15 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
                 stats[para_type] = stats.get(para_type, 0) + 1
                 typed_entries.append((para, para_type))
 
+            # 附件另面编排（GB/T 9704-2012）：附件标识行另起一页。
+            # 用"段前分页"而不是插一个分页符，是因为分页符是段落里的一个
+            # run，后面再动这段的文字（清洗、修订）容易把它一起弄丢；
+            # 段前分页是段落属性，跟着段落走。
+            if para_type == 'attachment_label' and \
+                    preset.get('attachment_new_page', True):
+                para.paragraph_format.page_break_before = True
+                _drop_blank_before(para)
+
             prev_para_type = para_type
 
             preview = text[:35] + '...' if len(text) > 35 else text
@@ -524,8 +551,15 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
         'short_text_len': 4,
         'smart_align': False,
         'header_repeat': False,
+        'header_rows': 1,          # 表头占几行（续表重复、栏目线都按它算）
         'header_shading_color': None,
         'cell_valign': None,
+        # 三线表：只留顶线、栏目线、底线，不画竖线。公文和科技文献里的
+        # 正式表格多是这个样子，满格线反而像报表
+        'three_line': False,
+        'three_line_top_pt': 1.5,
+        'three_line_mid_pt': 0.75,
+        'rows_unbreakable': True,  # 一行数据不许被页边切成两半
     }
     table_cfg = {**table_defaults, **table_fmt}
 
@@ -556,9 +590,17 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
             table.autofit = not table_cfg.get('auto_col_width', True)
             _set_table_width_percent(table, table_cfg.get('width_percent', 100))
             _set_table_indent(table, 0)
-            _set_table_borders(table, size_pt=table_cfg.get('border_size_pt', 0.5),
-                               color=table_cfg.get('border_color', '000000'),
-                               style=table_cfg.get('border_style', 'single'))
+            if table_cfg.get('three_line'):
+                _set_three_line_borders(
+                    table,
+                    top_pt=table_cfg.get('three_line_top_pt', 1.5),
+                    mid_pt=table_cfg.get('three_line_mid_pt', 0.75),
+                    header_rows=table_cfg.get('header_rows', 1))
+            else:
+                _set_table_borders(
+                    table, size_pt=table_cfg.get('border_size_pt', 0.5),
+                    color=table_cfg.get('border_color', '000000'),
+                    style=table_cfg.get('border_style', 'single'))
             _set_table_cell_margins(
                 table,
                 top_cm=table_cfg.get('cell_margin_top_cm', 0.0),
@@ -620,9 +662,12 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
                     serial_col_idx = c_idx
                     break
 
-        # 标题行重复
+        # 标题行重复：跨页时续表自动带上栏目名
         if table_cfg.get('header_repeat', False) and table.rows:
-            _set_header_row_repeat(table, True)
+            _set_header_row_repeat(table, True,
+                                   rows=table_cfg.get('header_rows', 1))
+        if table_cfg.get('rows_unbreakable', True):
+            _set_rows_unbreakable(table, True)
 
         for row_idx, row in enumerate(table.rows):
             if table_cfg.get('row_height_cm'):
@@ -630,7 +675,9 @@ def format_document(input_path, output_path, preset_name='official', progress_ca
                 row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
 
             for col_idx, cell in enumerate(tuple(row.cells)):
-                if table_cfg.get('optimize', True):
+                # 三线表的线已经由 _set_three_line_borders 画定，这里
+                # 再逐格补一遍就把刚去掉的竖线和横线全加回来了
+                if table_cfg.get('optimize', True) and not table_cfg.get('three_line'):
                     _set_cell_borders(cell, size_pt=table_cfg.get('border_size_pt', 0.5),
                                       color=table_cfg.get('border_color', '000000'),
                                       style=table_cfg.get('border_style', 'single'))

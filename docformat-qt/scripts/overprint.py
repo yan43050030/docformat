@@ -1229,6 +1229,56 @@ def fill_form(template_path, values, output_path, autofit=True, log=None,
     return used, notes
 
 
+def build_align_sheet(template_path, output_path, offsets=None, offsets_y=None,
+                      shift=None):
+    """做一张"对位测试页"：打在**白纸**上，覆到预印纸上对光看，一眼知道差多少。
+
+    做法很省事——把模板拿它自己的坐标填一遍：每个填写位印上 `▸4.60`，
+    数字就是这一栏当前会印到距纸左边多少厘米。同时把预印的白字改成浅灰，
+    让纸上本该有的栏目名也显出来。
+
+    于是这张纸上有两样东西：
+      · 浅灰的栏目名 —— 应该和预印纸上的红字重合；
+      · 每个填写位的箭头和厘米数 —— 应该正落在该栏的空格起点。
+    两张纸对光一叠，哪一栏偏了、偏多少，看得清清楚楚，不用尺子量。
+
+    白纸打样比直接往预印纸上试打便宜得多：预印纸是有限的，白纸不是。
+    """
+    from docx import Document
+    from docx.shared import RGBColor
+    doc = Document(template_path)
+    if offsets is None:
+        offsets = load_offsets(template_path)
+    if offsets_y is None:
+        offsets_y = load_offsets_y(template_path)
+
+    # 先算这一版各栏会落在哪儿，再拿这些数字当填充内容
+    plan = plan_fill(template_path, {}, offsets=offsets, offsets_y=offsets_y)
+    pos = plan.get('field_pos') or {}
+    values = {}
+    for name in scan_fields(template_path):
+        x = pos.get(name)
+        values[name] = ('▸%.2f' % x) if x is not None else '▸?'
+
+    used, notes = 0, []
+    _u, notes, _r, _fp, _adj = _fill_doc(
+        doc, values, autofit=False, one_page=False,
+        offsets=offsets, offsets_y=offsets_y)
+    used = _u
+    if shift is None:
+        shift = load_shift(template_path)
+    apply_shift(doc, shift[0], shift[1])
+
+    # 预印白字改成浅灰：白纸上要看得见，才能和红字比对
+    grey = RGBColor(0xA0, 0xA0, 0xA0)
+    for para, _cell in _iter_paragraphs(doc):
+        for run in para.runs:
+            if _run_is_white(run):
+                run.font.color.rgb = grey
+    doc.save(output_path)
+    return used, notes
+
+
 def _table_borders(table):
     """读表格边框设置，预览照此画线——模板左右外框为 none，
     若四边都画会凭空多出竖线，和真实版面对不上。"""

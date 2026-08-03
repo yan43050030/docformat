@@ -13,6 +13,7 @@ from docx.shared import Cm
 OUT_DIR = os.path.join(os.path.dirname(__file__), '_smoke')
 os.makedirs(OUT_DIR, exist_ok=True)
 SRC = os.path.join(OUT_DIR, 'sample.docx')
+_QAPP = None      # 打印测试要用的 QApplication，得留着不让它被回收
 
 
 def make_sample():
@@ -1764,6 +1765,221 @@ def test_y_offsets():
           '存盘互不干扰 + 打印预检 通过')
 
 
+def test_tables_and_attachment():
+    """三线表 / 续表表头 / 整行不断页 / 附件另面编排"""
+    import copy as _copy
+    from docx.oxml.ns import qn as _qn
+    from scripts.data_model import PRESETS
+    from scripts.formatter import format_document as _fmt
+
+    src = os.path.join(OUT_DIR, 'tbl_in.docx')
+    d = Document()
+    d.add_paragraph('关于某项工作的通知')
+    d.add_paragraph('各部门：')
+    t = d.add_table(rows=5, cols=3)
+    for i, row in enumerate(t.rows):
+        for j, c in enumerate(row.cells):
+            c.text = ('项目', '数量', '备注')[j] if i < 2 else '{}-{}'.format(i, j)
+    d.add_paragraph('特此通知。')
+    d.add_paragraph('某某公司办公室')
+    d.add_paragraph('2026年7月17日')
+    d.add_paragraph('附件1')
+    d.add_paragraph('这是附件的正文内容。')
+    d.save(src)
+
+    def tbl_info(path):
+        doc = Document(path)
+        tb = doc.tables[0]
+        b = tb._tbl.tblPr.find(_qn('w:tblBorders'))
+        edges = {e.tag.split('}')[-1]: e.get(_qn('w:val')) for e in b}
+        hdr = []
+        split = []
+        for r in tb.rows:
+            pr = r._tr.find(_qn('w:trPr'))
+            hdr.append(pr is not None and pr.find(_qn('w:tblHeader')) is not None)
+            split.append(pr is not None and pr.find(_qn('w:cantSplit')) is not None)
+        return edges, hdr, split
+
+    # --- 默认：满格线，不重复表头 ---
+    plain = os.path.join(OUT_DIR, 'tbl_plain.docx')
+    _fmt(src, plain, preset_name='custom',
+         custom_settings=_copy.deepcopy(PRESETS['official_gbk']))
+    edges, hdr, split = tbl_info(plain)
+    assert edges['insideV'] == 'single', '默认应画竖线：{}'.format(edges)
+    assert not any(hdr), '默认不重复表头'
+    assert all(split), '一行数据不该被页边切成两半'
+
+    # --- 三线表：只剩顶线、底线，没有竖线和中间横线 ---
+    pre = _copy.deepcopy(PRESETS['official_gbk'])
+    pre['table'] = {'three_line': True, 'header_repeat': True, 'header_rows': 2}
+    three = os.path.join(OUT_DIR, 'tbl_three.docx')
+    _fmt(src, three, preset_name='custom', custom_settings=pre)
+    edges, hdr, split = tbl_info(three)
+    assert edges['top'] == 'single' and edges['bottom'] == 'single', edges
+    for side in ('left', 'right', 'insideH', 'insideV'):
+        assert edges[side] == 'none', '三线表不该有 {} 线：{}'.format(side, edges)
+    # 栏目线画在表头最后一行的下边——两行表头就是第 2 行
+    tb = Document(three).tables[0]
+    for ri, want in ((0, False), (1, True)):
+        tcp = tb.rows[ri].cells[0]._tc.find(_qn('w:tcPr'))
+        tcb = tcp.find(_qn('w:tcBorders')) if tcp is not None else None
+        got = tcb is not None and tcb.find(_qn('w:bottom')) is not None and \
+            tcb.find(_qn('w:bottom')).get(_qn('w:val')) == 'single'
+        assert got == want, '第{}行的栏目线应为 {}'.format(ri + 1, want)
+    assert hdr[:2] == [True, True] and not any(hdr[2:]), \
+        '两行表头都该跨页重复，否则续表少一行栏目名：{}'.format(hdr)
+
+    # --- 附件另面编排 ---
+    def breaks(path):
+        return [p.text for p in Document(path).paragraphs
+                if p.paragraph_format.page_break_before]
+    assert breaks(plain) == ['附件1'], \
+        '附件标识行应另起一页：{}'.format(breaks(plain))
+    # 另起页后不该在新页顶上还留个空行
+    doc = Document(plain)
+    for i, p in enumerate(doc.paragraphs):
+        if p.paragraph_format.page_break_before:
+            assert doc.paragraphs[i - 1].text.strip(), \
+                '另起页的附件前不该再留空行'
+    pre2 = _copy.deepcopy(PRESETS['official_gbk'])
+    pre2['attachment_new_page'] = False
+    off = os.path.join(OUT_DIR, 'tbl_nobreak.docx')
+    _fmt(src, off, preset_name='custom', custom_settings=pre2)
+    assert not breaks(off), '关掉之后不该再分页'
+    print('[22] 表格：三线表（无竖线/栏目线在表头末行）+ 两行表头跨页重复 + '
+          '整行不断页；附件另面编排可开关 通过')
+
+
+def test_print_and_align_sheet():
+    """直接打印：对位测试页 + 100% 不缩放"""
+    from scripts import overprint as op
+    from scripts import printing
+    tpl = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       'templates', '套打', '文件送审单.docx')
+    sheet = os.path.join(OUT_DIR, 'align_sheet.docx')
+    n, _notes = op.build_align_sheet(tpl, sheet)
+    assert n >= 10, '对位测试页应把每个字段都标上：只填了 {}'.format(n)
+
+    doc = Document(sheet)
+    # 每个填写位印的是它自己的落点厘米数，且与预览算出来的一致
+    live = op.plan_fill(tpl, {})['field_pos']
+    text = '\n'.join(p.text for p, _c in op._iter_paragraphs(doc))
+    for name in ('紧急程度', '承办部门', '电话'):
+        assert '▸{:.2f}'.format(live[name]) in text, \
+            '{} 的坐标标记没印上：{:.2f}'.format(name, live[name])
+    # 预印白字要变成浅灰，白纸上才看得见
+    whites = [r for p, _c in op._iter_paragraphs(doc) for r in p.runs
+              if r.text.strip() and r.font.color and r.font.color.rgb
+              and str(r.font.color.rgb) == 'FFFFFF']
+    assert not whites, '对位测试页上不该还有白字，白纸上等于没印'
+
+    ok, why = printing.available()
+    if not ok:
+        print('[23] 直接打印：本机缺 {} — 只验了对位测试页'.format(why))
+        return
+    # 打到"PDF 打印机"上，验证整条渲染链且**一点都不缩放**
+    from PyQt5.QtWidgets import QApplication
+    global _QAPP
+    # 必须留个引用：QApplication 一被回收，QPrinter 就报"没有 QCoreApplication"
+    if QApplication.instance() is None:
+        _QAPP = QApplication([])
+    from PyQt5.QtPrintSupport import QPrinter
+    src_pdf, _t = printing.to_pdf(sheet)
+    out = os.path.join(OUT_DIR, 'printed.pdf')
+    pr = printing.make_printer()
+    pr.setOutputFormat(QPrinter.PdfFormat)
+    pr.setOutputFileName(out)
+    pages = printing.print_file(sheet, pr)
+    assert pages >= 1
+
+    import fitz
+
+    def ink(path, dpi=72):
+        pg = fitz.open(path)[0]
+        pm = pg.get_pixmap(matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0), alpha=False)
+        xs, ys = [], []
+        for y in range(0, pm.height, 2):
+            row = y * pm.stride
+            for x in range(0, pm.width, 2):
+                if pm.samples[row + x * pm.n] < 200:
+                    xs.append(x)
+                    ys.append(y)
+        k = 2.54 / dpi
+        return min(xs) * k, min(ys) * k, max(xs) * k, max(ys) * k
+
+    a, b = ink(src_pdf), ink(out)
+    for i, nm in enumerate(('左', '上', '右', '下')):
+        assert abs(a[i] - b[i]) < 0.12, \
+            '打印把版面挪了：{}沿 {:.2f} → {:.2f}cm'.format(nm, a[i], b[i])
+    scale = (b[2] - b[0]) / (a[2] - a[0])
+    assert abs(scale - 1.0) < 0.01, '打印缩放了 {:.3f}，套打会全废'.format(scale)
+    pg = fitz.open(out)[0]
+    assert abs(pg.rect.width * 2.54 / 72 - 21.0) < 0.1, '打印纸张不是 A4 宽'
+    print('[23] 直接打印：对位测试页标出各栏落点 + 白字转灰 + '
+          '送打印机 100% 不缩放（偏差 <0.12cm）通过')
+
+
+def test_wording_split():
+    """用语检查独立成一摊：两个入口各查各的，引擎仍是同一套"""
+    from scripts import compliance as C
+    from scripts import wording as W
+
+    assert not (set(C.LAYOUT_KEYS) & set(C.WORDING_KEYS)), '两组勾选项不该重叠'
+    assert set(C.LAYOUT_KEYS) | set(C.WORDING_KEYS) == set(C.DEFAULT_OPTIONS), \
+        '拆分后有勾选项无人认领'
+
+    src = os.path.join(OUT_DIR, 'wording_split.docx')
+    d = Document()
+    for t in ('关于开展安全生产检查的请示。', '省安全生产委员会',
+              '为落实上级部署，我委迫不急待地组织排查，共出动3人次，按步就班推进。',
+              '特此报告。', '某某公司办公室', '2026年7月17日'):
+        d.add_paragraph(t)
+    d.save(src)
+    from scripts.data_model import PRESETS
+    preset = PRESETS['official_gbk']
+
+    def items(opts):
+        return sorted({x['item'] for x in
+                       C.check_compliance(Document(src), preset, opts)
+                       if x['level'] == 'warn'})
+
+    lay = items(C.only(C.LAYOUT_KEYS))
+    wor = items(C.only(C.WORDING_KEYS))
+    assert lay and not any(i.startswith('用语') for i in lay), \
+        '版式检查不该报用语问题：{}'.format(lay)
+    assert wor and all(i.startswith('用语') for i in wor), \
+        '用语检查不该报版式问题：{}'.format(wor)
+
+    # 拆开之后结果必须与"全开"时**一模一样**——只是分两次给，不是换了套算法
+    full = items(None)
+    assert sorted(lay + wor) == full, \
+        '拆分改变了检查结果：拆后 {} ≠ 全开 {}'.format(sorted(lay + wor), full)
+
+    # 用语规则里有几条要靠段落类型（文种搭配/标题标点）。单独跑用语时
+    # 段落级检查是关掉的，若不一并要求识别类型，这几条会悄悄查不出东西
+    assert any('文种搭配' in i for i in wor), \
+        '单独跑用语时文种搭配规则失效了：{}'.format(wor)
+
+    # 预览 = 实际：预览说改哪几处，落笔就是哪几处
+    pv = C.wording_preview(src, preset, ['wording:typo'])
+    assert pv and sum(len(e['marks']) for e in pv) == 2, \
+        '预览标记数不对：{}'.format(pv)
+    doc = Document(src)
+    W.apply_wording_fixes(doc, ['wording:typo'], revision=False)
+    real = [p.text for p in doc.paragraphs if p.text.strip()]
+    for e in pv:
+        assert real[e['index']] == e['after'], \
+            '预览({})与实际({})不一致'.format(e['after'], real[e['index']])
+    # 标记坐标要能在改后文本里精确切出那个词
+    for e in pv:
+        for a, b, old, new in e['marks']:
+            assert e['after'][a:b] == new, '标记坐标切错：{}'.format(
+                e['after'][a:b])
+            assert old in e['before'], '原词不在原文里：{}'.format(old)
+    print('[21] 用语检查独立：两入口各查各的、合并结果与全开一致、'
+          '文种搭配不失效、预览与落笔一致 通过')
+
+
 def test_align():
     """对齐：两端对齐是第一个模板的默认，分散对齐全链路可用"""
     from docx.enum.text import WD_ALIGN_PARAGRAPH as WA
@@ -2440,6 +2656,9 @@ if __name__ == '__main__':
     test_wording()
     test_y_offsets()
     test_batch_and_library()
+    test_tables_and_attachment()
+    test_print_and_align_sheet()
+    test_wording_split()
     test_align()
     test_template_visual_edit()
     print('\n全部冒烟测试通过 ✓')

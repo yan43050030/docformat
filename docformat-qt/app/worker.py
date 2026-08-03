@@ -15,7 +15,8 @@ MODE_AI_PASTE = 'ai_paste'
 MODE_TOC = 'toc'                 # 首页统一入口，形式在对话框里选
 MODE_TOC_AUTO = 'toc_auto'       # 实际执行用（Word 目录域）
 MODE_TOC_MANUAL = 'toc_manual'   # 实际执行用（静态目录页）
-MODE_COMPLIANCE = 'compliance'
+MODE_COMPLIANCE = 'compliance'   # 版式合规
+MODE_WORDING = 'wording'         # 公文用语（错别字/数字用法/文种搭配）
 MODE_CLEAN = 'clean'
 MODE_PDF = 'pdf'            # 导出 PDF
 MODE_TO_DOCX = 'to_docx'    # 批量转 docx
@@ -374,7 +375,7 @@ class ProcessWorker(QThread):
                             base, os.path.basename(out)))
                         self._log('info', '  · ' + cleaner.format_clean_summary(stat))
                         self.fileFinished.emit(path, out)
-                    elif self.mode == MODE_COMPLIANCE:
+                    elif self.mode in (MODE_COMPLIANCE, MODE_WORDING):
                         reports.append(self._check_compliance(work, base, path))
                         self.fileFinished.emit(path, '')
                     elif self.mode == MODE_PUNCTUATION:
@@ -417,7 +418,7 @@ class ProcessWorker(QThread):
                     _cleanup_dir(_an_dir)
                 self.progressChanged.emit(int((i + 1) * 100 / n) if n else 100)
 
-            if self.mode == MODE_COMPLIANCE:
+            if self.mode in (MODE_COMPLIANCE, MODE_WORDING):
                 if self._compliance_results:
                     self.complianceReady.emit(self._compliance_results)
                 elif reports:
@@ -514,16 +515,23 @@ class ProcessWorker(QThread):
             from scripts.data_model import PRESETS
             preset = PRESETS.get(self.preset_name, PRESETS['official_gbk'])
         findings = compliance.check_compliance(doc, preset, self.compliance_options)
-        try:
-            preview_model = compliance.build_preview_model(doc, preset)
-        except Exception:
-            preview_model = []
-        self._log('info', '合规检查完成: {}'.format(display_name))
+        kind = 'wording' if self.mode == MODE_WORDING else 'layout'
+        # 版式检查预览"这段字该长什么样"，用语检查预览"字本身变成什么样"，
+        # 两者要的料不同——按模式只算需要的那一份，另一份白算还费时间
+        preview_model = []
+        if kind == 'layout':
+            try:
+                preview_model = compliance.build_preview_model(doc, preset)
+            except Exception:
+                preview_model = []
+        self._log('info', '{}完成: {}'.format(
+            '用语检查' if kind == 'wording' else '合规检查', display_name))
         # 自动修正只支持 .docx 原文件（.doc/.wps 需先另存为 docx）
         fix_input = orig_path if orig_path.lower().endswith('.docx') else None
         self._compliance_results.append({
             'file': orig_path,
             'display': display_name,
+            'kind': kind,
             'findings': findings,
             'preset': preset,
             'preset_name': preset.get('name', ''),
