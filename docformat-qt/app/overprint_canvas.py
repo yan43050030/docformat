@@ -31,6 +31,9 @@ class OverprintCanvas(QWidget):
     fieldMoved = pyqtSignal(str, float)      # 字段名, 新的距纸左边 cm
     sheetMoved = pyqtSignal(float, float)    # 整张纸 dx, dy（cm）
     fieldPicked = pyqtSignal(str)            # 选中了哪个字段（'' = 没选）
+    # 模板编辑模式：连预印白字也能点能拖，横竖都能挪
+    refPicked = pyqtSignal(object)           # 选中的 run 地址，None = 没选
+    refMoved = pyqtSignal(object, float, float)   # 地址, dx, dy（cm）
 
     def __init__(self, parent=None):
         super(OverprintCanvas, self).__init__(parent)
@@ -44,12 +47,34 @@ class OverprintCanvas(QWidget):
         self._drag = None            # 正在拖的
         self._sheet = (0.0, 0.0)     # 整体平移（cm）
         self._sheet_drag = None
+        self._edit = False           # 模板编辑模式
+        self._sel = None             # 编辑模式下选中的 ref
         self.setCursor(Qt.ArrowCursor)
+
+    def set_edit(self, on):
+        """编辑模式：预印白字也纳入可选可拖的范围，且纵向也能挪。
+
+        填写模式下只有黑字能拖——白字是纸上印死的，用户挪不动它。
+        编辑模式做的正是"改这张纸"，白字自然要能动。
+        """
+        self._edit = bool(on)
+        self._sel = None
+        self.update()
+
+    def select(self, ref):
+        self._sel = tuple(ref) if ref is not None else None
+        self.update()
+
+    def selected(self):
+        return self._sel
 
     # ---------- 数据 ----------
     def set_plan(self, plan, shift=(0.0, 0.0)):
         self._plan = plan
         self._sheet = (float(shift[0] or 0), float(shift[1] or 0))
+        # 命中判断用的矩形在这里就算好，不等第一次重绘：点中一个字是否
+        # 有反应，不该取决于窗口有没有先画过一遍
+        _draw, self._items = self._layout()
         self.update()
 
     def set_background(self, pixmap):
@@ -138,10 +163,18 @@ class OverprintCanvas(QWidget):
                     draw.append({'x': x + dx, 'y': top + dy, 'text': txt,
                                  'pt': s.get('pt') or 14,
                                  'white': bool(s.get('white')),
+                                 'ref': s.get('ref'),
                                  'line_cm': line_cm})
                     # 居中排的内容（标题）不给拖：它的位置由格子决定，
                     # 拖出来的横坐标存回去也不会生效，白让人试
-                    if s.get('field') and movable:
+                    if self._edit:
+                        if s.get('ref') is not None:
+                            items.append({'field': s.get('field') or txt,
+                                          'ref': tuple(s['ref']),
+                                          'rect': QRectF(x + dx, top + dy,
+                                                         max(w, 0.15), line_cm),
+                                          'x_cm': x + dx, 'y_cm': top + dy})
+                    elif s.get('field') and movable:
                         items.append({'field': s['field'],
                                       'rect': QRectF(x + dx, top + dy, w, line_cm),
                                       'x_cm': x + dx})
@@ -245,13 +278,17 @@ class OverprintCanvas(QWidget):
             qp.drawText(int(x), int(y + (d['line_cm'] * s + fm.ascent()
                                          - fm.descent()) / 2.0), d['text'])
 
-        # 可拖的黑字：鼠标扫过时描一个框，提示"这个能拖"
+        # 可拖的字：鼠标扫过时描一个框，提示"这个能拖"；
+        # 编辑模式下选中的那个用实线框住，一直显示
         for it in self._items:
-            if it is not self._hot and it is not self._drag:
+            sel = self._edit and self._sel is not None and \
+                it.get('ref') == self._sel
+            if not sel and it is not self._hot and it is not self._drag:
                 continue
             r = it['rect']
             x, y = px(r.left(), r.top())
-            qp.setPen(QPen(PICK, 1, Qt.DashLine))
+            qp.setPen(QPen(PICK, 2 if sel else 1,
+                           Qt.SolidLine if sel else Qt.DashLine))
             qp.setBrush(QBrush(Qt.NoBrush))
             qp.drawRect(QRectF(x - 2, y - 1, r.width() * s + 4, r.height() * s + 2))
         qp.end()
@@ -271,9 +308,12 @@ class OverprintCanvas(QWidget):
 
     def mouseMoveEvent(self, e):
         if self._drag is not None:
-            cx, _cy = self._cm_at(e.pos())
+            cx, cy = self._cm_at(e.pos())
             new_x = max(0.0, round(cx - self._drag['grab'], 2))
             self._drag['rect'].moveLeft(new_x)
+            if self._edit:
+                self._drag['rect'].moveTop(
+                    max(0.0, round(cy - self._drag['grab_y'], 2)))
             self.update()
             return
         if self._sheet_drag is not None:
@@ -285,9 +325,14 @@ class OverprintCanvas(QWidget):
         hot = self._hit(e.pos())
         if hot is not self._hot:
             self._hot = hot
-            self.setCursor(Qt.SizeHorCursor if hot else Qt.OpenHandCursor)
-            self.setToolTip('拖动可改「{}」的横向位置'.format(hot['field'])
-                            if hot else '在空白处拖动可整体平移这张纸')
+            if self._edit:
+                self.setCursor(Qt.SizeAllCursor if hot else Qt.ArrowCursor)
+                self.setToolTip('拖动可挪「{}」的位置（横竖都能挪）'.format(
+                    hot['field']) if hot else '点中纸上的字即可编辑')
+            else:
+                self.setCursor(Qt.SizeHorCursor if hot else Qt.OpenHandCursor)
+                self.setToolTip('拖动可改「{}」的横向位置'.format(hot['field'])
+                                if hot else '在空白处拖动可整体平移这张纸')
             self.update()
 
     def mousePressEvent(self, e):
@@ -297,9 +342,21 @@ class OverprintCanvas(QWidget):
         cx, cy = self._cm_at(e.pos())
         if hit is not None:
             hit['grab'] = cx - hit['rect'].left()
+            hit['grab_y'] = cy - hit['rect'].top()
+            hit['from'] = (hit['rect'].left(), hit['rect'].top())
             self._drag = hit
-            self.fieldPicked.emit(hit['field'])
+            if self._edit:
+                self._sel = hit.get('ref')
+                self.refPicked.emit(self._sel)
+            else:
+                self.fieldPicked.emit(hit['field'])
             self.setCursor(Qt.ClosedHandCursor)
+        elif self._edit:
+            # 编辑模式下空白处是"取消选中"，不做整纸平移——那是填写时
+            # 补打印机走纸偏差用的，改模板本身没这回事
+            self._sel = None
+            self.refPicked.emit(None)
+            self.update()
         else:
             self._sheet_drag = (cx, cy, self._sheet[0], self._sheet[1])
             self.fieldPicked.emit('')
@@ -307,13 +364,20 @@ class OverprintCanvas(QWidget):
 
     def mouseReleaseEvent(self, e):
         if self._drag is not None:
-            field = self._drag['field']
-            x_cm = round(self._drag['rect'].left(), 2)
+            d = self._drag
             self._drag = None
             self.setCursor(Qt.ArrowCursor)
-            # 拖出来的是"含整体平移之后"的位置，存回去要减掉平移量，
-            # 否则整体一挪、逐字段的位置也跟着叠一遍
-            self.fieldMoved.emit(field, round(x_cm - self._sheet[0], 2))
+            if self._edit:
+                x0, y0 = d['from']
+                dx = round(d['rect'].left() - x0, 2)
+                dy = round(d['rect'].top() - y0, 2)
+                if abs(dx) > 0.005 or abs(dy) > 0.005:
+                    self.refMoved.emit(d.get('ref'), dx, dy)
+            else:
+                # 拖出来的是"含整体平移之后"的位置，存回去要减掉平移量，
+                # 否则整体一挪、逐字段的位置也跟着叠一遍
+                self.fieldMoved.emit(
+                    d['field'], round(d['rect'].left() - self._sheet[0], 2))
         elif self._sheet_drag is not None:
             self._sheet_drag = None
             self.setCursor(Qt.ArrowCursor)

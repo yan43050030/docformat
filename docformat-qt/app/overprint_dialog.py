@@ -261,10 +261,18 @@ class OverprintDialog(QDialog):
         add_btn.setToolTip("导入自己的套打模板 docx（含 {{字段名}} 占位符）")
         add_btn.clicked.connect(self._import_template)
         row.addWidget(add_btn)
-        self.edit_btn = QPushButton("修改模板…")
+        self.vedit_btn = QPushButton("可视化编辑…")
+        self.vedit_btn.setCursor(Qt.PointingHandCursor)
+        self.vedit_btn.setToolTip(
+            "在纸上点中一个字就地改：内容、字体、字号、位置都能改，\n"
+            "位置可以拖，也可以按尺子量的厘米数直接填。\n"
+            "自带模板随软件安装、不可直接改，会先复制一份到你的模板目录。")
+        self.vedit_btn.clicked.connect(self._visual_edit_template)
+        row.addWidget(self.vedit_btn)
+        self.edit_btn = QPushButton("用 Word 改…")
         self.edit_btn.setCursor(Qt.PointingHandCursor)
         self.edit_btn.setToolTip(
-            "在 Word/WPS 里打开模板修改，比如把白色的单位名改成你的真实单位名。\n"
+            "在 Word/WPS 里打开模板修改，改可视化编辑管不到的地方（表格线、行高）。\n"
             "自带模板随软件安装、不可直接改，会先复制一份到你的模板目录再打开。")
         self.edit_btn.clicked.connect(self._edit_template)
         row.addWidget(self.edit_btn)
@@ -1014,16 +1022,17 @@ class OverprintDialog(QDialog):
         QDesktopServices.openUrl(QUrl.fromLocalFile(d))
         self.status.setText("套打模板目录：{}".format(d))
 
-    def _edit_template(self):
-        """在 Word/WPS 里打开模板修改。
+    def _writable_template(self):
+        """拿到一份**可以改**的模板路径。
 
-        自带模板随软件安装（打包后在只读的临时目录里），不能直接改，
-        先复制一份到用户模板目录，之后修改的就是这份副本。
+        自带模板随软件安装（打包后在只读的临时目录里），改了也会被更新
+        覆盖，所以先复制一份到用户模板目录，之后动的都是这份副本。
+        返回 None 表示用户放弃或复制失败。
         """
         path = self._template_path
         if not path or not os.path.exists(path):
             QMessageBox.information(self, "提示", "请先选择套打模板")
-            return
+            return None
         bundled = os.path.normpath(overprint.bundled_overprint_dir())
         is_bundled = os.path.normpath(os.path.dirname(path)) == bundled
         if is_bundled:
@@ -1035,7 +1044,7 @@ class OverprintDialog(QDialog):
                     os.path.splitext(os.path.basename(path))[0]),
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
             if ret != QMessageBox.Yes:
-                return
+                return None
             import shutil
             d = overprint.user_overprint_dir()
             os.makedirs(d, exist_ok=True)
@@ -1049,9 +1058,27 @@ class OverprintDialog(QDialog):
                 shutil.copyfile(path, dest)
             except Exception as e:
                 QMessageBox.warning(self, "复制失败", str(e))
-                return
+                return None
             self._reload_templates(select=dest)
             path = dest
+        return path
+
+    def _visual_edit_template(self):
+        """在画布上直接改模板：点中纸上的字就能改内容、字体、位置。"""
+        path = self._writable_template()
+        if not path:
+            return
+        from app.template_edit_dialog import TemplateEditDialog
+        dlg = TemplateEditDialog(path, parent=self)
+        if dlg.exec_() and dlg.saved_path:
+            self._reload_templates(select=dlg.saved_path)
+            self._load_fields()
+
+    def _edit_template(self):
+        """在 Word/WPS 里打开模板修改（改不动的地方还得靠专业软件）。"""
+        path = self._writable_template()
+        if not path:
+            return
 
         from PyQt5.QtCore import QUrl
         from PyQt5.QtGui import QDesktopServices

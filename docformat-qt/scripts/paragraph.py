@@ -285,6 +285,8 @@ def format_paragraph(para, fmt, para_type, line_spacing_pt=28, first_line_bold=F
         'left': WD_ALIGN_PARAGRAPH.LEFT,
         'right': WD_ALIGN_PARAGRAPH.RIGHT,
         'justify': WD_ALIGN_PARAGRAPH.JUSTIFY,
+        # 分散对齐：整行字均匀撑满版心，末行也撑满（两端对齐的末行是左对齐）
+        'distribute': WD_ALIGN_PARAGRAPH.DISTRIBUTE,
     }
     pf.alignment = align_map.get(fmt.get('align', 'justify'), WD_ALIGN_PARAGRAPH.JUSTIFY)
 

@@ -20,7 +20,7 @@ from scripts.compliance import (ALIGN_LABELS, TYPE_LABELS, fix_label,
 from app.preview_dialog import _segment_font_html
 
 _ALIGN_CSS = {'left': 'left', 'center': 'center', 'right': 'right',
-              'justify': 'justify'}
+              'justify': 'justify', 'distribute': 'justify'}
 
 
 def _render_preview_html(entries, fix_keys, side):

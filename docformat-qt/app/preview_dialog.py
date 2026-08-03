@@ -32,7 +32,8 @@ TYPE_MENU_ORDER = ['title', 'docnum', 'security', 'recipient',
                    'body', 'roster', 'attachment_label', 'attachment', 'closing', 'signature', 'date']
 MAX_PARAS = 500
 
-ALIGN_CSS = {'left': 'left', 'center': 'center', 'right': 'right', 'justify': 'justify'}
+ALIGN_CSS = {'left': 'left', 'center': 'center', 'right': 'right',
+             'justify': 'justify', 'distribute': 'justify'}
 
 # 预览字体回退链：本机未安装方正字体时退到同族常见字体，
 # 保证标题黑体/楷体/仿宋/加粗等样式差异在预览里肉眼可见

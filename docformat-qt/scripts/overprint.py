@@ -1010,12 +1010,16 @@ _STRUCT_TAGS = ('w:drawing', 'w:pict', 'w:object', 'w:br', 'w:tab',
                 'w:fldChar', 'w:instrText', 'w:sym', 'w:cr')
 
 
-def strip_empty_runs(doc):
+def strip_empty_runs(doc, keep_field_marks=False):
     """删除既无文字、也不承载结构的空 run，返回删除个数。
 
     把模板里的示例文字换成占位符时，多余的 run 会被清空却留在原地。
     这些空壳在 Word 里通常不显示，但在部分版本/WPS 下可能带出多余标记，
     且会让文件越积越乱，填充时统一清掉。
+
+    keep_field_marks 只在**预览**时开：用户没填的栏位留个空壳，它标着
+    自己是哪一栏、排在哪儿，微调对话框的"取当前"才有准数可取。
+    真正要保存的文件仍旧一个空壳都不留。
     """
     n = 0
     for para, _cell in _iter_paragraphs(doc):
@@ -1023,6 +1027,8 @@ def strip_empty_runs(doc):
             if run.text:
                 continue
             if any(run._r.find(qn(t)) is not None for t in _STRUCT_TAGS):
+                continue
+            if keep_field_marks and run._r.get('docfmt-field'):
                 continue
             parent = run._r.getparent()
             if parent is not None:
@@ -1033,7 +1039,8 @@ def strip_empty_runs(doc):
 
 def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
               one_page=True, title_shape='trapezoid_down',
-              title_lines=None, offsets=None, offsets_y=None):
+              title_lines=None, offsets=None, offsets_y=None,
+              keep_field_marks=False):
     """在内存 Document 上完成填充→自适应→锁高，返回 (已填数, 提示, 单元格报告)。
 
     预览与实际输出共用这一条路径，保证"预览看到的字号"就是"打印出来的字号"，
@@ -1170,7 +1177,7 @@ def _fill_doc(doc, values, autofit=True, log=None, lock_heights=False,
             if log:
                 log('warning', '套打：有一行超出版心宽度，可能折行')
 
-    stripped = strip_empty_runs(doc)
+    stripped = strip_empty_runs(doc, keep_field_marks=keep_field_marks)
     if stripped and log:
         log('info', '清理模板残留空标记 {} 处'.format(stripped))
 
@@ -1315,6 +1322,10 @@ def wrap_segs(segs, usable_cm):
             out.append(seg)
             used += pad
             continue
+        if seg.get('mark'):
+            # 零宽记号（没填内容的栏位）：没有字可折，原样留着
+            out.append(seg)
+            continue
         char_cm = (seg.get('pt') or 14) / PT_PER_CM
         trk = seg.get('track') or 0.0
         buf = ''
@@ -1342,26 +1353,24 @@ def _cell_content_cm(cell, grid_cm):
     return sum(paragraph_height_cm(p, grid_cm) for p in cell.paragraphs)
 
 
-def plan_fill(template_path, values, autofit=True,
-              title_shape='trapezoid_down', title_lines=None, offsets=None,
-              offsets_y=None):
-    """只算不存：返回预览所需的版面数据，与 fill_form 走同一条填充路径。
+def _run_is_white(run):
+    c = run.font.color.rgb if run.font.color and run.font.color.rgb else None
+    return str(c) == 'FFFFFF'
 
-    blocks 按文档真实顺序给出（段落与表格交替）——套打单里成文日期在
-    表格**之后**，若先渲染全部段落再渲染表格，日期会跑到表格上面去，
-    预览与实际版面不符。
+
+def layout_doc(doc, reports=None, with_refs=False):
+    """把一份**已经填好（或原样未填）的** Document 摊成版面数据。
+
+    plan_fill 和模板可视化编辑共用这一份排版逻辑：前者传填充后的文档，
+    后者传原始模板。两边算出来的坐标必须是同一套，否则"编辑时看到的位置"
+    和"打印出来的位置"对不上，编辑器就没意义了。
+
+    with_refs=True 时每个文字片段带上 'ref'——(段落序号, run 序号)，
+    编辑器靠它把画布上点中的字找回到文档里的那个 run。
     """
-    from docx import Document
     from docx.table import Table
     from docx.text.paragraph import Paragraph
-    doc = Document(template_path)
-    if offsets is None:
-        offsets = load_offsets(template_path)
-    if offsets_y is None:
-        offsets_y = load_offsets_y(template_path)
-    _used, notes, reports, field_pos, adjustable = _fill_doc(
-        doc, values, autofit=autofit, log=None, title_shape=title_shape,
-        title_lines=title_lines, offsets=offsets, offsets_y=offsets_y)
+    reports = reports or []
 
     sec = doc.sections[0]
     page = {
@@ -1372,9 +1381,19 @@ def plan_fill(template_path, values, autofit=True,
     content_w = page['width_cm'] - page['left_cm'] - page['right_cm']
     grid_cm = _grid_line_cm(doc)
 
-    def _is_white(run):
-        c = run.font.color.rgb if run.font.color and run.font.color.rgb else None
-        return str(c) == 'FFFFFF'
+    # 段落序号：按"文档里出现的顺序"编号（含表格单元格里的），
+    # 编辑器的地址就是这个序号 + run 序号。
+    # 不能拿 id(元素) 当键——lxml 代理回收后 id 会复用，不同段落会撞号；
+    # 存住代理对象本身、按身份比较，这也是这份列表要一直留着的原因。
+    _pel = [pp._p for pp, _c in _iter_paragraphs(doc)] if with_refs else []
+
+    def pindex(el):
+        for i, x in enumerate(_pel):
+            if x is el:
+                return i
+        return None
+
+    _is_white = _run_is_white
 
     def _segs_of(para):
         # 制表位（cm，相对左边距）；定位到位的字段靠它顶过去，
@@ -1402,8 +1421,17 @@ def plan_fill(template_path, values, autofit=True,
         ind = (pf.left_indent.cm if pf.left_indent is not None else 0.0)
         first = (pf.first_line_indent.cm if pf.first_line_indent is not None else 0.0)
         indent = max(0.0, ind + first)
-        for r in para.runs:
+        ref_p = pindex(para._p) if with_refs else None
+        for ri, r in enumerate(para.runs):
             if not r.text:
+                fld0 = r._r.get('docfmt-field')
+                if fld0:
+                    # 这一栏用户还没填。它没有字、画不出来，但"该印在哪儿"
+                    # 是确定的——留一个零宽的记号，微调对话框的"取当前"
+                    # 才有准数可取，不然只能退回按字宽估的老账
+                    toks.append({'text': '', 'white': False,
+                                 'pt': r.font.size.pt if r.font.size else 14,
+                                 'field': fld0, 'mark': True})
                 continue
             white = _is_white(r)
             pt = r.font.size.pt if r.font.size else 14
@@ -1425,6 +1453,8 @@ def plan_fill(template_path, values, autofit=True,
                             t['track'] = trk
                         if fld:
                             t['field'] = fld
+                        if ref_p is not None:
+                            t['ref'] = (ref_p, ri)
                         toks.append(t)
 
         out = []
@@ -1493,6 +1523,8 @@ def plan_fill(template_path, values, autofit=True,
             y = top + h
             blocks.append({'kind': 'para',
                            'segs': segs,
+                           'ref_p': pindex(para._p),
+                           'space_before_cm': sb,
                            'top_cm': top, 'height_cm': h, 'line_cm': line_cm,
                            'align': {1: 'center', 2: 'right'}.get(
                                int(al) if al is not None else 0, 'left')})
@@ -1561,8 +1593,116 @@ def plan_fill(template_path, values, autofit=True,
     paras = [b for b in blocks if b['kind'] == 'para']
     rows_flat = [r for b in blocks if b['kind'] == 'table' for r in b['rows']]
     return {'page': page, 'content_w_cm': content_w, 'grid_cm': grid_cm,
-            'blocks': blocks, 'paras': paras, 'rows': rows_flat, 'notes': notes,
-            'field_pos': field_pos, 'adjustable': adjustable}
+            'blocks': blocks, 'paras': paras, 'rows': rows_flat}
+
+
+def iter_seg_positions(plan, with_y=False, left_only=False):
+    """把版面摊成 (片段, 距纸左边cm[, 距纸上边cm])。
+
+    这是"字到底画在纸上哪儿"的唯一算法：预览画布、模板编辑器、字段落点
+    都从这里取，谁也不许自己再估一套——估出来的和画出来的对不上，
+    用户按"取当前"就会把位置带偏（实测电话一栏差过 2.55cm）。
+
+    left_only=True 时跳过居中/右对齐的行：那里的左沿随内容长短来回变，
+    根本不是一个"能定下来的位置"，拿它当落点会误导人。
+    """
+    pg = plan['page']
+    left, right = pg['left_cm'], pg['right_cm']
+    content_w = pg['width_cm'] - left - right
+
+    def lines_of(segs):
+        out, cur = [], []
+        for s in segs:
+            if s.get('text') == '\n':
+                out.append(cur)
+                cur = []
+            else:
+                cur.append(s)
+        out.append(cur)
+        return out
+
+    def w_of(s):
+        return _seg_width_cm(s, 14 / PT_PER_CM)
+
+    def emit(line, x, top, line_cm):
+        for s in line:
+            if s.get('pad_cm') is None and (s.get('text', '').strip()
+                                            or s.get('mark')):
+                yield ((s, x, top) if with_y else (s, x))
+            x += w_of(s)
+
+    for b in plan['blocks']:
+        if b['kind'] == 'para':
+            line_cm = b.get('line_cm') or 0.5
+            for i, line in enumerate(lines_of(b.get('segs') or [])):
+                lw = sum(w_of(s) for s in line)
+                if b.get('align') == 'center':
+                    x = left + (content_w - lw) / 2.0
+                elif b.get('align') == 'right':
+                    x = left + content_w - lw
+                else:
+                    x = left
+                if left_only and b.get('align') in ('center', 'right'):
+                    continue
+                for item in emit(line, x, b['top_cm'] + i * line_cm, line_cm):
+                    yield item
+        else:
+            for r in b['rows']:
+                cx = left
+                for c in r['cells']:
+                    cw = c.get('width_cm') or 0
+                    pt = c.get('font_pt') or 14
+                    line_cm = pt / PT_PER_CM * 1.15
+                    centered = bool(c.get('is_title'))
+                    for i, line in enumerate(lines_of(c.get('segs') or [])):
+                        lw = sum(w_of(s) for s in line)
+                        x = cx + ((cw - lw) / 2.0 if centered and lw < cw else 0.0)
+                        if not (left_only and centered):
+                            for item in emit(line, x, r['top_cm'] + i * line_cm,
+                                             line_cm):
+                                yield item
+                    cx += cw
+
+
+def field_positions(plan):
+    """{字段名: 距纸左边 cm}，按版面实际画出来的位置算"""
+    out = {}
+    for seg, x in iter_seg_positions(plan, left_only=True):
+        if seg.get('field') and seg['field'] not in out:
+            out[seg['field']] = round(x, 3)
+    return out
+
+
+def plan_fill(template_path, values, autofit=True,
+              title_shape='trapezoid_down', title_lines=None, offsets=None,
+              offsets_y=None):
+    """只算不存：返回预览所需的版面数据，与 fill_form 走同一条填充路径。
+
+    blocks 按文档真实顺序给出（段落与表格交替）——套打单里成文日期在
+    表格**之后**，若先渲染全部段落再渲染表格，日期会跑到表格上面去，
+    预览与实际版面不符。
+    """
+    from docx import Document
+    doc = Document(template_path)
+    if offsets is None:
+        offsets = load_offsets(template_path)
+    if offsets_y is None:
+        offsets_y = load_offsets_y(template_path)
+    _used, notes, reports, field_pos, adjustable = _fill_doc(
+        doc, values, autofit=autofit, log=None, title_shape=title_shape,
+        title_lines=title_lines, offsets=offsets, offsets_y=offsets_y,
+        keep_field_marks=True)
+    plan = layout_doc(doc, reports=reports)
+    # 落点以**画布算出来的**为准：_fill_doc 里那份是按字符宽度累加估的，
+    # 完全没算制表位，电话一栏实测差 2.55cm。用户拿"取当前"填进微调框、
+    # 一保存就把本来对准的位置带偏了。估不出来的（在表格里折了行等）
+    # 才退回那份估算值。
+    drawn = field_positions(plan)
+    merged = dict(field_pos)
+    merged.update(drawn)
+    plan.update({'notes': notes, 'field_pos': merged,
+                 'adjustable': adjustable})
+    return plan
 
 
 # ---------------- 模板发现 ----------------

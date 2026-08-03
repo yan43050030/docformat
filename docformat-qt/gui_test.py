@@ -754,7 +754,7 @@ from scripts import overprint as _op2
 _od5 = _OD()
 try:
     _btns = [b.text() for b in _od5.findChildren(type(_od5.edit_btn))]
-    for _need in ('修改模板…', '模板目录', '添加模板…'):
+    for _need in ('可视化编辑…', '用 Word 改…', '模板目录', '添加模板…'):
         assert _need in _btns, '缺少按钮 {}：{}'.format(_need, _btns)
     # 自带模板不可直接改：应能复制一份到用户目录
     _cur = _od5._template_path
@@ -845,5 +845,74 @@ from app.worker import friendly_error
 msg, _ = friendly_error(Exception('Package not found at xxx'))
 assert 'Word 文档' in msg, '错误白话化失败: {}'.format(msg)
 print('[14] v3.0 快捷键/习惯记忆/同步滚动/帮助引导/错误白话化 ✓')
+
+# ---------- 27. 套打模板可视化编辑：点中、拖动、改属性、存回 ----------
+from PyQt5.QtCore import QPoint as _QP
+from PyQt5.QtGui import QMouseEvent as _QME
+from app.template_edit_dialog import TemplateEditDialog as _TED
+from scripts import overprint as _ovp3
+import shutil as _sh7, tempfile as _tf7
+
+_tw = os.path.join(_tf7.mkdtemp(), '送审单.docx')
+_sh7.copyfile(_ovp3.list_templates()[0][1], _tw)
+_ted = _TED(_tw)
+try:
+    _ted.canvas.resize(620, 870)
+    # 预印白字也要能选中——编辑模板改的正是它们；填写时它们是不给动的
+    _items = _ted.canvas._items
+    assert len(_items) > 20, '画布上可选元素太少：{}'.format(len(_items))
+    _tgt = [i for i in _items if '文件送审单' in i['field']][0]
+
+    def _pt(it, dx_cm=0.2):
+        _r, _s = it['rect'], _ted.canvas._scale()
+        _pr = _ted.canvas._page_rect()
+        return _QP(int(_pr.left() + (_r.left() + dx_cm) * _s),
+                   int(_pr.top() + (_r.top() + _r.height() / 2) * _s))
+
+    def _click(p):
+        _ted.canvas.mousePressEvent(_QME(_QME.MouseButtonPress, p, Qt.LeftButton,
+                                         Qt.LeftButton, Qt.NoModifier))
+        _ted.canvas.mouseReleaseEvent(_QME(_QME.MouseButtonRelease, p, Qt.LeftButton,
+                                           Qt.NoButton, Qt.NoModifier))
+
+    _p0 = _pt(_tgt)
+    _click(_p0)
+    assert _ted.ed_text.text() == '文件送审单', '点中后属性没跟上：{}'.format(
+        _ted.ed_text.text())
+    assert abs(_ted.sp_x.value() - 7.70) < 0.02, '横坐标不对：{}'.format(_ted.sp_x.value())
+    assert _ted.cb_kind.currentData() is True, '预印内容应显示为"预印"'
+    _x0 = _ted.sp_x.value()
+
+    # 拖 1cm：改的是制表位，位置要真的跟着走
+    _s7 = _ted.canvas._scale()
+    _p1 = _QP(_p0.x() + int(1.0 * _s7), _p0.y())
+    _ted.canvas.mousePressEvent(_QME(_QME.MouseButtonPress, _p0, Qt.LeftButton,
+                                     Qt.LeftButton, Qt.NoModifier))
+    _ted.canvas.mouseMoveEvent(_QME(_QME.MouseMove, _p1, Qt.NoButton,
+                                    Qt.LeftButton, Qt.NoModifier))
+    _ted.canvas.mouseReleaseEvent(_QME(_QME.MouseButtonRelease, _p1, Qt.LeftButton,
+                                       Qt.NoButton, Qt.NoModifier))
+    assert abs(_ted.sp_x.value() - (_x0 + 1.0)) < 0.03, \
+        '拖 1cm 后应到 {:.2f}，实际 {:.2f}'.format(_x0 + 1.0, _ted.sp_x.value())
+
+    # 撤销回到原位
+    _ted._undo()
+    _click(_pt(_tgt))
+    assert abs(_ted.sp_x.value() - _x0) < 0.02, '撤销没回到原位'
+
+    # 直接填坐标 + 改字号，存回去还能正常填充
+    _ted.sp_x.setValue(8.00); _ted._apply_x()
+    assert abs(_ted.sp_x.value() - 8.00) < 0.02
+    _ted._sess.save(_tw)
+    _f7 = os.path.join(_tf7.mkdtemp(), 'out.docx')
+    _ovp3.fill_form(_tw, {'标题': '关于某事的请示'}, _f7, one_page=False)
+    assert os.path.exists(_f7), '改过的模板填不出来'
+    assert abs(_ovp3.plan_fill(_tw, {})['field_pos']['电话'] - 15.50) < 0.02, \
+        '改了文件头，电话栏的落点不该跟着变'
+finally:
+    _ted._sess.dirty = False
+    _ted.reject()
+print('[27] 套打模板可视化编辑：白字可选 + 拖动/撤销/填坐标 + 存回可填 ✓')
+
 
 print('\nGUI 自动化测试全部通过 ✓')

@@ -100,13 +100,14 @@ TYPE_LABELS = {
 }
 
 ALIGN_LABELS = {'left': '左对齐', 'center': '居中', 'right': '右对齐',
-                'justify': '两端对齐'}
+                'justify': '两端对齐', 'distribute': '分散对齐'}
 
 _ALIGN_MAP = {
     'center': WD_ALIGN_PARAGRAPH.CENTER,
     'left': WD_ALIGN_PARAGRAPH.LEFT,
     'right': WD_ALIGN_PARAGRAPH.RIGHT,
     'justify': WD_ALIGN_PARAGRAPH.JUSTIFY,
+    'distribute': WD_ALIGN_PARAGRAPH.DISTRIBUTE,
 }
 
 # 排版引擎 format_paragraph 的默认行距（fmt 未指定 line_spacing 时用它）

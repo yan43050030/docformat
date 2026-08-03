@@ -116,7 +116,8 @@ EN_FONTS = ['Times New Roman', 'Arial', 'Calibri', 'Cambria', 'Georgia']
 FONT_SIZES = [('初号 42', 42), ('小初 36', 36), ('一号 26', 26), ('小一 24', 24),
               ('二号 22', 22), ('小二 18', 18), ('三号 16', 16), ('小三 15', 15),
               ('四号 14', 14), ('小四 12', 12), ('五号 10.5', 10.5), ('小五 9', 9)]
-ALIGNS = [('左对齐', 'left'), ('居中', 'center'), ('右对齐', 'right'), ('两端对齐', 'justify')]
+ALIGNS = [('两端对齐', 'justify'), ('左对齐', 'left'), ('居中', 'center'),
+          ('右对齐', 'right'), ('分散对齐', 'distribute')]
 PN_STYLES = [('两侧横线 — 1 —', 'dash'), ('纯数字 1', 'plain'),
              ('第 1 页', 'page_text'), ('1 / 10', 'page_total')]
 PN_POSITIONS = [('外侧（单右双左）', 'outside'), ('居中', 'center'),

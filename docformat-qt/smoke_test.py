@@ -1764,6 +1764,137 @@ def test_y_offsets():
           '存盘互不干扰 + 打印预检 通过')
 
 
+def test_align():
+    """对齐：两端对齐是第一个模板的默认，分散对齐全链路可用"""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH as WA
+    from scripts.data_model import PRESETS
+    from scripts import compliance as C
+    from app.pages.presets_page import ALIGNS
+
+    first = list(PRESETS)[0]
+    assert PRESETS[first]['body'].get('align') == 'justify', \
+        '第一个排版模板（{}）的正文默认应为两端对齐'.format(first)
+    # 下拉里两端对齐排第一，用户不用翻
+    assert ALIGNS[0][1] == 'justify', '两端对齐应排在对齐下拉的第一个'
+    assert 'distribute' in [v for _t, v in ALIGNS], '对齐下拉里少了分散对齐'
+    assert C.ALIGN_LABELS['distribute'] == '分散对齐'
+    assert C._ALIGN_MAP['distribute'] == WA.DISTRIBUTE
+
+    # 排版：两种对齐都要真的写进 docx，且检查侧照同一预设核对不报错
+    import copy as _copy
+    from scripts.formatter import format_document as _fmt
+    src = os.path.join(OUT_DIR, 'align_in.docx')
+    d = Document()
+    d.add_paragraph('关于开展某项工作的通知')
+    d.add_paragraph('为贯彻落实上级要求，现将有关事项通知如下。' * 3)
+    d.add_paragraph('请各部门认真组织学习并抓好落实。' * 3)
+    d.save(src)
+    for key, want in (('justify', WA.JUSTIFY), ('distribute', WA.DISTRIBUTE)):
+        preset = _copy.deepcopy(PRESETS[first])
+        preset['body'] = dict(preset['body'], align=key)
+        out = os.path.join(OUT_DIR, 'align_%s.docx' % key)
+        _fmt(src, out, preset_name='custom', custom_settings=preset)
+        got = [p.paragraph_format.alignment for p in Document(out).paragraphs
+               if len(p.text) > 20]
+        assert got and all(a == want for a in got), \
+            '{} 没写进 docx：{}'.format(key, got)
+        bad = [x for x in C.check_compliance(Document(out), preset)
+               if x['level'] == 'warn' and x.get('fix_key') == 'para:body:align']
+        assert not bad, '{} 排完又被判对齐不符：{}'.format(
+            key, [x['detail'] for x in bad])
+    print('[19] 对齐：首个模板默认两端对齐 + 分散对齐写入/检查全通 通过')
+
+
+def test_template_visual_edit():
+    """套打模板可视化编辑：改内容/字体/位置/增删，存回去还能正常填"""
+    from scripts import overprint as op
+    from scripts.tpl_edit import EditSession
+    tpl = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       'templates', '套打', '文件送审单.docx')
+    work = os.path.join(OUT_DIR, 'tpledit.docx')
+    shutil.copy(tpl, work)
+    s = EditSession(work)
+
+    # 版面读得出来，且与填充预览是同一套坐标——编辑时看到的位置
+    # 必须就是打印出来的位置，不然编辑器没意义。
+    # 落点还要经得起尺子：数字来自用户量真实预印纸（见 make_songshendan.SPEC）。
+    # 这里同时守着一个曾经的坑：field_pos 原来是按字宽累加估的、完全没算
+    # 制表位，电话一栏差 2.55cm，用户在微调框点"取当前"再保存就会把
+    # 本来对准的位置带偏。
+    pos = s.positions()
+    ruler = {'紧急程度': (4.60, (2, 2)), '密级': (15.90, (2, 5)),
+             '承办部门': (4.50, (9, 2)), '电话': (15.50, (10, 5))}
+    for vals in ({}, {'紧急程度': '特急', '承办部门': '办公室',
+                      '电话': '12345678', '密级': '秘密'}):
+        live = op.plan_fill(tpl, vals)['field_pos']
+        for name, (want, ref) in ruler.items():
+            assert abs(live[name] - want) < 0.02, \
+                '{} 落点 {:.2f} 与尺子量的 {:.2f} 对不上（填了{}值）'.format(
+                    name, live[name], want, '' if vals else '空')
+            assert abs(pos[ref][0] - live[name]) < 0.02, \
+                '{} 编辑器算的位置({:.2f})与填充预览({:.2f})对不上'.format(
+                    name, pos[ref][0], live[name])
+
+    # 横向：挪的是制表位，栏目名和它后面的填写位一起动
+    lab0, fld0 = pos[(2, 1)][0], pos[(2, 2)][0]
+    s.nudge_x((2, 1), 0.5)
+    p1 = s.positions()
+    assert abs(p1[(2, 1)][0] - (lab0 + 0.5)) < 0.02, '横向没挪到位'
+    assert abs(p1[(2, 2)][0] - (fld0 + 0.5)) < 0.02, '同一制表位后面的字段应一起动'
+
+    # 纵向：段前距不能为负，往上顶到头要如实返回实际挪了多少
+    got = s.nudge_y(1, -99)
+    assert got > -99 and abs(got) < 5, '上挪受阻应返回真实位移，得到 {}'.format(got)
+    s.undo()
+
+    # 宽度：栏目名收着排，宽度由尺子量的数反解字距
+    s.set_width((6, 1), 2.50)
+    assert abs(s.info((6, 1))['width_cm'] - 2.50) < 0.02, '总宽没排到指定值'
+
+    # 内容与字体
+    s.set_text((0, 1), '某某市某某局')
+    s.set_style((0, 1), font_cn='方正小标宋_GBK', pt=16.0, bold=False)
+    d = s.info((0, 1))
+    assert (d['text'], d['font_cn'], d['pt'], d['bold']) == \
+        ('某某市某某局', '方正小标宋_GBK', 16.0, False), d
+    assert d['white'], '预印内容改完还得是白字，否则会被打印出来'
+
+    # 预印 ↔ 填写位互转
+    s.set_style((0, 1), white=False)
+    assert not s.info((0, 1))['white']
+    s.undo()
+    assert s.info((0, 1))['white'], '撤销没还原'
+
+    # 增删：加一个填写位，存盘后 scan_fields 认得
+    ref = s.add_field(6, '批示人', x_cm=12.0)
+    assert abs(s.positions()[ref][0] - 12.0) < 0.02, '新增没钉到指定厘米数'
+    out = os.path.join(OUT_DIR, 'tpledit_out.docx')
+    s.save(out)
+    fields = op.scan_fields(out)
+    assert '批示人' in fields, '新增字段没进模板：{}'.format(fields)
+    assert '紧急程度' in fields and '拟办意见' in fields, '原有字段被弄丢了'
+
+    # 删掉它——连同只为它服务的制表符，否则后面的字会串位
+    before = s.positions()[(10, 5)][0]
+    s.delete(ref)
+    assert abs(s.positions()[(10, 5)][0] - before) < 0.01, '删除把别处带偏了'
+    out2 = os.path.join(OUT_DIR, 'tpledit_out2.docx')
+    s.save(out2)
+    assert '批示人' not in op.scan_fields(out2)
+
+    # 改过的模板照样能正常填充、几何不塌
+    filled = os.path.join(OUT_DIR, 'tpledit_filled.docx')
+    op.fill_form(out2, {'标题': '关于某事的请示', '紧急程度': '特急',
+                        '承办部门': '办公室'}, filled, one_page=False)
+    txt = '\n'.join(p.text for p in __import__('docx').Document(filled).paragraphs)
+    assert '{{' not in txt, '填完还剩占位符'
+    plan = op.plan_fill(out2, {'标题': '关于某事的请示'})
+    assert abs(plan['field_pos']['承办部门'] - live['承办部门']) < 0.02, \
+        '编辑无关栏目后，承办部门的落点不该变'
+    print('[20] 套打模板可视化编辑：坐标与填充一致 + 横纵挪动/宽度反解/'
+          '字体内容/增删存回 + 改后仍可正常填充 通过')
+
+
 def test_batch_and_library():
     """批量套打（xlsx/csv 自读）+ 套头库（入库/自动认出配套的）"""
     import zipfile
@@ -2309,4 +2440,6 @@ if __name__ == '__main__':
     test_wording()
     test_y_offsets()
     test_batch_and_library()
+    test_align()
+    test_template_visual_edit()
     print('\n全部冒烟测试通过 ✓')
