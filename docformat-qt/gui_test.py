@@ -497,7 +497,7 @@ print('[19] 模式卡片 7 张等高无空位（末张跨两列）+ 目录合并
 # ---------- 17. 转换与工具行（不占模式网格，点击即执行）----------
 from app.pages.home_page import TOOLS as _TOOLS
 from app.worker import MODE_PDF as _MPDF, MODE_TO_DOCX as _MDOCX
-assert len(_TOOLS) == 4, '工具应有 4 个: {}'.format(len(_TOOLS))
+assert len(_TOOLS) == 5, '工具应有 5 个: {}'.format(len(_TOOLS))
 for _tid, _lbl, _tip in _TOOLS:
     assert _tid in home._tool_buttons, '缺少工具按钮 {}'.format(_tid)
     assert home._tool_buttons[_tid].toolTip(), '工具按钮应有说明: {}'.format(_tid)
@@ -1037,6 +1037,75 @@ try:
 finally:
     _sdlg.reject()
 print('[29] 密级标注：检查项默认开 + 插入密级由人选定并原样落笔 ✓')
+
+
+# ---------- 30. 归档命名对话框 ----------
+import io as _io3
+from app.archive_dialog import ArchiveDialog as _AD
+from scripts import archive as _AR
+
+_awork = os.path.join(SMOKE, 'gui_arch')
+if os.path.isdir(_awork):
+    import shutil as _sh9
+    _sh9.rmtree(_awork)
+os.makedirs(_awork)
+_asrcs = []
+for _i, (_no, _ti) in enumerate([('某安委发〔2026〕12号', '关于开展安全生产检查的通知'),
+                                 ('某安委发〔2026〕13号', '关于报送材料的请示')]):
+    _ad = _Doc2()
+    for _t in ('秘密★1年', _no, _ti, '各部门：', '正文。', '特此通知。',
+               '某某办公室', '2026年7月17日'):
+        _ad.add_paragraph(_t)
+    _ap = os.path.join(_awork, 'draft%d.docx' % _i)
+    _ad.save(_ap)
+    _asrcs.append(_ap)
+
+_adlg = _AD(_asrcs, home.mgr.get(home.mgr.active_key))
+try:
+    assert _adlg.table.rowCount() == 2
+    # 识别到的东西要摆出来给人核对，不能闷头改名
+    assert '某安委发〔2026〕12号' in _adlg.table.item(0, 1).text()
+    # 命名式会记住上次用的，这里显式指定，免得测试受历史设置影响
+    _adlg.pat_edit.setText(_AR.DEFAULT_PATTERN)
+    assert _adlg.table.item(0, 2).text() == \
+        '20260717-某安委发〔2026〕12号-关于开展安全生产检查的通知.docx', \
+        _adlg.table.item(0, 2).text()
+    # 换命名式只重算名字，不重新读文档
+    _adlg.pat_edit.setText('{年}{月}-{文种}-{标题}')
+    assert _adlg.table.item(1, 2).text() == '202607-请示-关于报送材料的请示.docx'
+    assert _adlg.pat_combo.currentText() == '年月-文种-标题', '下拉应跟着高亮'
+    # 逐行可改
+    _adlg.table.item(0, 2).setText('我自己起的名字')
+    _aout = os.path.join(_awork, '归档')
+    _aled = os.path.join(_awork, '台账.csv')
+    _adlg.dir_edit.setText(_aout)
+    _adlg.led_edit.setText(_aled)
+    _adlg.led_check.setChecked(True)
+    # 归档完会弹一个"完成"提示；离屏跑测试时它会一直挂着，先接管掉
+    from PyQt5.QtWidgets import QMessageBox as _QMB
+    _orig_info = _QMB.information
+    _QMB.information = staticmethod(lambda *_a, **_k: _QMB.Ok)
+    try:
+        _adlg._run()
+    finally:
+        _QMB.information = _orig_info
+    assert sorted(os.listdir(_aout)) == \
+        ['202607-请示-关于报送材料的请示.docx', '我自己起的名字.docx'], \
+        os.listdir(_aout)
+    assert all(os.path.exists(_p) for _p in _asrcs), '默认复制，原件不该没了'
+    assert len(_adlg.outputs) == 2
+    _atext = _io3.open(_aled, encoding='utf-8-sig').read()
+    assert '我自己起的名字.docx' in _atext, '台账要记归档后的实际文件名'
+    assert '秘密★1年' in _atext
+finally:
+    _adlg.reject()
+
+# 首页工具行里有入口，且没选文件时给提示而不是崩
+from app.pages.home_page import TOOLS as _TOOLS2
+assert 'archive' in [_t for _t, _l, _d in _TOOLS2], '首页应有归档命名入口'
+assert 'archive' in home._tool_buttons
+print('[30] 归档命名：识别摆出来核对 + 命名式即时重算 + 逐行可改 + '
+      '复制不动原件 + 台账记实际文件名 ✓')
 
 
 print('\nGUI 自动化测试全部通过 ✓')

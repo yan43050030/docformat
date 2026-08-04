@@ -1765,6 +1765,143 @@ def test_y_offsets():
           '存盘互不干扰 + 打印预检 通过')
 
 
+def test_attachment_consistency():
+    """正文说的附件与实际附上的附件对不对得上"""
+    from scripts import attachment_check as A
+    from scripts import compliance as C
+    from scripts.data_model import PRESETS
+
+    # 说明行的几种写法都要认得
+    assert A.parse_desc(['附件：1.实施方案  2.任务分工表']) == \
+        [(1, '实施方案'), (2, '任务分工表')]
+    assert A.parse_desc(['附件：', '1.实施方案', '2.任务分工表']) == \
+        [(1, '实施方案'), (2, '任务分工表')]
+    assert A.parse_desc(['附件：实施方案']) == [(None, '实施方案')]
+    assert A.parse_desc(['附件1：实施方案', '附件2：任务分工表']) == \
+        [(1, '实施方案'), (2, '任务分工表')]
+    assert A.parse_labels(['附件1', '附件2']) == [1, 2]
+    assert A.parse_labels(['附件一', '附件二']) == [1, 2]     # 中文序号
+    assert A.parse_labels(['附件']) == [None]
+    assert A.parse_labels(['附件：说明']) == [], '带冒号的是说明行，不是标识'
+
+    def warns(desc, labels):
+        return sorted(x['item'] for x in A.check(desc, labels)
+                      if x['level'] == 'warn')
+
+    assert warns(['附件：1.甲  2.乙'], ['附件1', '附件2']) == []
+    assert warns(['附件：1.甲  2.乙'], ['附件1']) == ['附件·个数对不上']
+    assert warns([], ['附件1', '附件2']) == ['附件·正文未说明']
+    # 附件常是单独的文件，正文有说明、本文档没标识是正常的，不能算差错
+    assert warns(['附件：1.甲  2.乙'], []) == [], '不该冤枉"附件是单独文件"的情形'
+    assert [x['level'] for x in A.check(['附件：1.甲  2.乙'], [])] == ['info']
+    assert warns([], []) == []
+    assert warns(['附件：1.甲  3.乙'], ['附件1', '附件3']) == \
+        ['附件·序号不连续', '附件·序号不连续']
+    assert warns(['附件：1.甲  1.乙'], ['附件1', '附件2']) == ['附件·序号重复']
+    # GB/T 9704：只有一个附件时不编号
+    assert warns(['附件：1.甲'], ['附件1']) == ['附件·单个不编号']
+    assert warns(['附件：甲'], ['附件']) == []
+    # 个数已经对不上时，不再追着编号说事——那只是往报告里添噪音
+    assert warns(['附件：1.甲  2.乙'], ['附件1']) == ['附件·个数对不上']
+
+    # 走合规检查完整链路
+    src = os.path.join(OUT_DIR, 'att_in.docx')
+    d = Document()
+    for t in ('关于开展某项工作的通知', '各部门：', '为落实上级要求，现通知如下。' * 3,
+              '特此通知。', '附件：1.实施方案  2.任务分工表',
+              '某某公司办公室', '2026年7月17日', '附件1', '附件正文。'):
+        d.add_paragraph(t)
+    d.save(src)
+    preset = PRESETS['official_gbk']
+    got = [x for x in C.check_compliance(Document(src), preset,
+                                         C.only(C.ATTACHMENT_KEYS))
+           if x['level'] == 'warn']
+    assert [x['item'] for x in got] == ['附件·个数对不上'], \
+        '合规检查里没接上附件核对：{}'.format([x['item'] for x in got])
+    assert '2 个附件' in got[0]['detail']
+    # 分组开关
+    off = C.only(C.ATTACHMENT_KEYS, {k: False for k in C.ATTACHMENT_KEYS})
+    assert not [x for x in C.check_compliance(Document(src), preset, off)
+                if x['item'].startswith('附件·')]
+    print('[25] 附件一致性：说明四种写法/标识中文序号 + 个数·序号·单个不编号 + '
+          '"附件是单独文件"不误报 通过')
+
+
+def test_archive():
+    """归档命名与登记表：抽字段 → 生成文件名 → 复制归档 → 追加台账"""
+    import io as _io
+    from scripts import archive as A
+    from scripts.data_model import PRESETS
+
+    def mk(path, no, title, date='2026年7月17日', sec='秘密★1年'):
+        d = Document()
+        for t in ([sec] if sec else []) + [no, title, '各部门：', '正文。',
+                                           '特此通知。', '某某办公室', date]:
+            d.add_paragraph(t)
+        d.save(path)
+        return path
+
+    work = os.path.join(OUT_DIR, 'arch')
+    if os.path.isdir(work):
+        shutil.rmtree(work)
+    os.makedirs(work)
+    a = mk(os.path.join(work, 'draft1.docx'), '某安委发〔2026〕12号',
+           '关于开展安全生产检查的通知')
+    b = mk(os.path.join(work, 'draft2.docx'), '某安委发〔2026〕13号',
+           '关于报送材料的请示')
+
+    meta = A.extract_meta(a, PRESETS['official_gbk'])
+    assert meta['文号'] == '某安委发〔2026〕12号'
+    assert meta['标题'] == '关于开展安全生产检查的通知'
+    assert meta['文种'] == '通知'
+    assert (meta['成文日期'], meta['年'], meta['月'], meta['日']) == \
+        ('20260717', '2026', '07', '17')
+    assert meta['密级'] == '秘密★1年' and meta['密级词'] == '秘密'
+    assert meta['发文机关'] == '某某办公室'
+    assert meta['原文件名'] == 'draft1'
+
+    # 命名式：取不到的字段留空后，不能留下「20260717--标题」这种空档
+    assert A.render_name('{成文日期}-{文号}-{标题}', meta) == \
+        '20260717-某安委发〔2026〕12号-关于开展安全生产检查的通知.docx'
+    bare = dict(meta, 文号='', 成文日期='')
+    assert A.render_name('{成文日期}-{文号}-{标题}', bare) == \
+        '关于开展安全生产检查的通知.docx', A.render_name('{成文日期}-{文号}-{标题}', bare)
+    # 文件名里不能出现的字符要去掉
+    assert '/' not in A.render_name('{标题}', dict(meta, 标题='关于A/B的通知'))
+    assert len(os.path.splitext(A.render_name('{标题}', dict(meta, 标题='长' * 300)))[0]) \
+        <= A.MAX_STEM
+
+    # 归档：默认复制，原件不动；重名自动加 (2)
+    items = A.plan([a, b, a], '{成文日期}-{文号}-{标题}')
+    out = os.path.join(work, '归档')
+    led = os.path.join(work, '台账.csv')
+    done, failed = A.archive(items, out, ledger_path=led)
+    assert not failed and len(done) == 3
+    assert os.path.exists(a) and os.path.exists(b), '默认应复制，原件不能没了'
+    names = sorted(os.listdir(out))
+    assert len(names) == 3 and any('(2)' in n for n in names), \
+        '重名应自动加 (2)，不能悄悄覆盖：{}'.format(names)
+
+    # 台账：utf-8-sig（Excel 双击不乱码）+ 追加不重复写表头
+    text = _io.open(led, encoding='utf-8-sig').read()
+    assert text.startswith('归档时间,'), text[:40]
+    assert '某安委发〔2026〕12号' in text and '关于报送材料的请示' in text
+    A.archive(A.plan([b], '{标题}'), out, ledger_path=led)
+    lines = _io.open(led, encoding='utf-8-sig').read().strip().splitlines()
+    assert sum(1 for x in lines if x.startswith('归档时间,')) == 1, '表头写了不止一次'
+    assert len(lines) == 5, '台账应追加到 4 行数据：{}'.format(len(lines))
+    with open(led, 'rb') as f:
+        assert f.read(3) == b'\xef\xbb\xbf', 'CSV 要带 BOM，否则 Excel 里中文是乱码'
+
+    # 移动：原件要真的不在了
+    c = mk(os.path.join(work, 'draft3.docx'), '某发〔2026〕1号', '关于某事的函')
+    A.archive(A.plan([c], '{标题}'), out, move=True)
+    assert not os.path.exists(c), '勾了移动就该真移动'
+    assert os.path.exists(os.path.join(out, '关于某事的函.docx'))
+    print('[26] 归档命名：抽文号/标题/文种/日期/密级 + 命名式（空字段收干净、'
+          '非法字符、长度）+ 复制不动原件/重名不覆盖/移动 + 台账追加不重写表头 通过')
+
+
 def test_security_mark():
     """密级标注：查漏标 / 查写法 / 查位置，以及按人选定的密级插进版头"""
     from scripts import compliance as C
@@ -2760,6 +2897,8 @@ if __name__ == '__main__':
     test_wording()
     test_y_offsets()
     test_batch_and_library()
+    test_attachment_consistency()
+    test_archive()
     test_security_mark()
     test_tables_and_attachment()
     test_print_and_align_sheet()

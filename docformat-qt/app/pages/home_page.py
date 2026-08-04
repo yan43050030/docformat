@@ -27,6 +27,7 @@ TOOLS = [
     (MODE_TO_DOCX, '转为 docx', '把 .doc/.wps 老文档批量转成 .docx，不做排版改动'),
     ('compare', '版本比对', '选两个版本，输出改动对照件；有 Word/WPS 时用原生修订痕迹'),
     ('overprint', '套打填写', '转到「套打填写」页：填内容打到预印红头纸上'),
+    ('archive', '归档命名', '按文号/日期/标题批量改名归档，并记一行登记台账'),
 ]
 
 # 说明文字长度保持相近，卡片换行行数一致、高度整齐
@@ -677,6 +678,9 @@ class HomePage(QWidget):
         if tool_id == 'compare':
             self._run_compare()
             return
+        if tool_id == 'archive':
+            self._run_archive()
+            return
         if tool_id == 'overprint':
             self._run_overprint()
             return
@@ -711,6 +715,26 @@ class HomePage(QWidget):
         """
         from app.pages.overprint_page import NAV_INDEX
         self.navigate.emit(NAV_INDEX)
+
+    def _run_archive(self):
+        """归档命名与登记表：文号、标题、日期这些字软件已经认过，不必再抄一遍"""
+        if not self.files:
+            QMessageBox.information(self, "提示", "请先选择要归档的文件")
+            return
+        docs = [f for f in self.files if f.lower().endswith('.docx')]
+        if not docs:
+            QMessageBox.information(
+                self, "提示",
+                "归档命名需要读取文档内容来取文号、标题、日期，\n"
+                "只支持 .docx。.doc/.wps 请先用「转为 docx」转换。")
+            return
+        from app.archive_dialog import ArchiveDialog
+        dlg = ArchiveDialog(docs, self.mgr.get(self.mgr.active_key), self)
+        if dlg.exec_() == ArchiveDialog.Accepted and dlg.outputs:
+            self._outputs = dlg.outputs
+            self.open_out_btn.setVisible(True)
+            self.status_label.setText('已归档 {} 份'.format(len(dlg.outputs)))
+            self.logMessage.emit('success', '已归档 {} 份文件'.format(len(dlg.outputs)))
 
     def _run_compare(self):
         """版本比对：另选两个文件，输出改动对照件"""

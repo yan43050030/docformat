@@ -37,6 +37,12 @@ try:
 except ImportError:                      # 极端情况下不能让整个检查起不来
     _SEC_GROUPS, SECURITY_KEYS = [], []
 
+try:
+    from .attachment_check import (GROUPS as _ATT_GROUPS,
+                                   GROUP_KEYS as ATTACHMENT_KEYS)
+except ImportError:
+    _ATT_GROUPS, ATTACHMENT_KEYS = [], []
+
 
 # ---------------- 检查项定义 ----------------
 # 供 UI 生成勾选面板；分组便于展示。
@@ -65,7 +71,7 @@ CHECK_GROUPS = [
         ('structure', '结构完整性（标题 / 主送机关 / 成文日期）'),
         ('numbering', '序号层次是否统一'),
         ('punctuation', '英文 / 不规范标点'),
-    ]),
+    ] + list(_ATT_GROUPS)),
     # 密级单独成组：漏标密级不是排版问题，是事故，值得在面板上一眼看见。
     # 查的都是文件自己露出来的破绽（有份号却无密级、正文自述保密…），
     # 不做"看着像涉密"的猜测——那是定密工作，不是排版软件该管的
@@ -567,13 +573,16 @@ def check_compliance(doc, preset, options=None, detect_types=None):
     # 知道"这段是标题还是正文"。单独跑用语检查时段落级检查是关掉的，
     # 若不在这里一并要求识别，那几条规则会**悄悄查不出东西**。
     need_typed = (any(opts.get(a) for a in _PARA_ATTRS) or opts.get('structure')
-                  or any(opts.get(k) for k in WORDING_KEYS))
+                  or any(opts.get(k) for k in WORDING_KEYS)
+                  or any(opts.get(k) for k in ATTACHMENT_KEYS))
     typed = _detect_types(doc, preset) if need_typed else []
 
     if any(opts.get(a) for a in _PARA_ATTRS):
         _check_paragraphs(doc, preset, opts, typed, add)
 
     _run_security(doc, preset, opts, findings)
+
+    _run_attachment(opts, typed, findings)
 
     _run_wording(doc, opts, typed, findings)
 
@@ -989,6 +998,21 @@ def format_compliance_report(filename, findings, preset_name=''):
         mark = {'warn': '✗', 'ok': '✓', 'info': '·'}.get(f['level'], '·')
         lines.append('  {} 【{}】{}'.format(mark, f['item'], f['detail']))
     return '\n'.join(lines)
+
+
+def _run_attachment(opts, typed, findings):
+    """正文说的附件与实际附上的附件对不对得上。"""
+    groups = {k: bool(opts.get(k)) for k in ATTACHMENT_KEYS}
+    if not any(groups.values()):
+        return
+    try:
+        from .attachment_check import check_doc
+        findings.extend(check_doc(typed, groups=groups))
+    except Exception as exc:
+        logger.warning('附件一致性检查失败：%s', exc)
+        findings.append({'level': 'info', 'item': '附件',
+                         'detail': '附件一致性检查未能完成（{}）'.format(
+                             exc.__class__.__name__)})
 
 
 def _run_security(doc, preset, opts, findings):
