@@ -32,6 +32,12 @@ def _typo_label():
         return '错别字'
 
 
+try:
+    from .security_mark import GROUPS as _SEC_GROUPS, GROUP_KEYS as SECURITY_KEYS
+except ImportError:                      # 极端情况下不能让整个检查起不来
+    _SEC_GROUPS, SECURITY_KEYS = [], []
+
+
 # ---------------- 检查项定义 ----------------
 # 供 UI 生成勾选面板；分组便于展示。
 # 版式与用语分成两组，是因为它们在界面上已经是**两件事**：
@@ -60,6 +66,10 @@ CHECK_GROUPS = [
         ('numbering', '序号层次是否统一'),
         ('punctuation', '英文 / 不规范标点'),
     ]),
+    # 密级单独成组：漏标密级不是排版问题，是事故，值得在面板上一眼看见。
+    # 查的都是文件自己露出来的破绽（有份号却无密级、正文自述保密…），
+    # 不做"看着像涉密"的猜测——那是定密工作，不是排版软件该管的
+    ('密级标注（涉密件必查）', list(_SEC_GROUPS)),
 ]
 
 WORDING_GROUPS = [
@@ -146,6 +156,7 @@ _ROSTER_ATTRS = {'indent', 'line_spacing'}
 
 # 非段落级的修正说明
 FIX_LABELS = {
+    'security:insert': '插入密级标识（密级和保密期限由你选定）',
     'margins': '把页边距改为预设值',
     'paper': '把纸张改为 A4',
     'grid': '把页面网格改为预设值',
@@ -562,6 +573,8 @@ def check_compliance(doc, preset, options=None, detect_types=None):
     if any(opts.get(a) for a in _PARA_ATTRS):
         _check_paragraphs(doc, preset, opts, typed, add)
 
+    _run_security(doc, preset, opts, findings)
+
     _run_wording(doc, opts, typed, findings)
 
     if opts.get('structure'):
@@ -784,6 +797,12 @@ def fix_label(fix_key):
             _p, ptype, attr = parts
             return '把{}的{}改为预设值'.format(
                 TYPE_LABELS.get(ptype, ptype), ATTR_LABELS.get(attr, attr))
+    if fix_key and fix_key.startswith('security:'):
+        kind, _, arg = fix_key[len('security:'):].partition(':')
+        if kind == 'insert':
+            return ('插入密级标识「{}」'.format(arg) if arg
+                    else FIX_LABELS['security:insert'])
+        return '把密级标识改为「{}」'.format(arg)
     return '修正'
 
 
@@ -799,6 +818,7 @@ def apply_compliance_fixes(input_path, output_path, preset, fix_keys):
 
     para_keys = [k for k in fix_keys if k.startswith('para:')]
     word_keys = [k for k in fix_keys if k.startswith('wording:')]
+    sec_keys = [k for k in fix_keys if k.startswith('security:')]
     doc_keys = [k for k in fix_keys if k in _DOC_FIXERS]
 
     # 段落修正依赖类型识别；页边距等页面改动不影响识别结果，
@@ -831,6 +851,17 @@ def apply_compliance_fixes(input_path, output_path, preset, fix_keys):
             continue
         if desc:
             applied.append(desc)
+
+    # 密级要在段落修正**之前**插：插进去的是新的一段，先排好版，
+    # 后面的段落级修正才会连它一起按预设排
+    for key in sec_keys:
+        try:
+            from .security_mark import fix as _sec_fix
+            desc = _sec_fix(doc, preset, key)
+            if desc:
+                applied.append(desc)
+        except Exception as e:
+            applied.append('密级：修正失败（{}）'.format(e))
 
     if word_keys:
         try:
@@ -958,6 +989,23 @@ def format_compliance_report(filename, findings, preset_name=''):
         mark = {'warn': '✗', 'ok': '✓', 'info': '·'}.get(f['level'], '·')
         lines.append('  {} 【{}】{}'.format(mark, f['item'], f['detail']))
     return '\n'.join(lines)
+
+
+def _run_security(doc, preset, opts, findings):
+    """密级标注检查。出错只记一条，不能拖垮整个合规检查。"""
+    groups = {k: bool(opts.get(k)) for k in SECURITY_KEYS}
+    if not any(groups.values()):
+        return
+    try:
+        from .security_mark import check as _sec_check
+        findings.extend(_sec_check(
+            doc, default_period=(preset or {}).get('security_period', '1年'),
+            groups=groups))
+    except Exception as exc:
+        logger.warning('密级检查失败：%s', exc)
+        findings.append({'level': 'info', 'item': '密级',
+                         'detail': '密级检查未能完成（{}）'.format(
+                             exc.__class__.__name__)})
 
 
 def _run_wording(doc, opts, typed, findings):

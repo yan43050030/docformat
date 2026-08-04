@@ -23,10 +23,6 @@ _ALIGN_CSS = {'left': 'left', 'center': 'center', 'right': 'right',
               'justify': 'justify', 'distribute': 'justify'}
 
 
-def _esc(s):
-    return (s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
-
-
 def _render_wording_html(entries, side):
     """用语预览：只列会被改的段落，把词标出来。
 
@@ -151,6 +147,7 @@ class ComplianceReportDialog(QDialog):
         self.resize(780, 660)
         self._results = results
         self._boxes = {}          # {result_index: {fix_key: QCheckBox}}
+        self._sec_pick = {}       # {result_index: (密级下拉, 期限下拉)}
         self._fixable_total = 0
 
         root = QVBoxLayout(self)
@@ -419,6 +416,10 @@ class ComplianceReportDialog(QDialog):
                 self._fixable_total += 1
                 group_boxes.append(cb)
                 gv.addWidget(cb)
+                if fk == 'security:insert':
+                    # 密级和保密期限必须由人选定——标错密级比不标更麻烦。
+                    # 软件只负责把选定的内容排到版头该在的位置
+                    gv.addWidget(self._security_picker(ri, cb))
             else:
                 row = QLabel('✗ {}{}'.format(text, '　（需手动处理）' if not fk else ''))
                 row.setWordWrap(True)
@@ -431,6 +432,42 @@ class ComplianceReportDialog(QDialog):
                     b.setChecked(target)
             pick.clicked.connect(_pick_all)
         return box
+
+    def _security_picker(self, ri, cb):
+        """插入密级时的密级 / 保密期限选择条。
+
+        这一项不像"把字号改成三号"那样只有一个正确答案——密级定多少级、
+        保多久，是定密责任人的判断，软件不能替他填。所以给的是选择条，
+        选好了才让勾。
+        """
+        from PyQt5.QtWidgets import QComboBox
+        from scripts.security_mark import LEVELS, PERIODS
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(26, 0, 0, 4)
+        h.setSpacing(6)
+        tip = QLabel('定为：')
+        tip.setProperty("muted", "true")
+        h.addWidget(tip)
+        lv = QComboBox()
+        lv.addItems(LEVELS)
+        lv.setCurrentIndex(LEVELS.index('秘密'))
+        h.addWidget(lv)
+        star = QLabel('★')
+        star.setProperty("muted", "true")
+        h.addWidget(star)
+        pd = QComboBox()
+        pd.addItems(PERIODS)
+        pd.setEditable(True)
+        h.addWidget(pd)
+        note = QLabel('密级与保密期限由定密责任人确定，软件只负责排到版头正确位置')
+        note.setProperty("muted", "true")
+        note.setWordWrap(True)
+        h.addWidget(note, 1)
+        row.setEnabled(cb.isChecked())
+        cb.stateChanged.connect(lambda _s, _r=row, _c=cb: _r.setEnabled(_c.isChecked()))
+        self._sec_pick[ri] = (lv, pd)
+        return row
 
     def _build_ok_block(self, oks):
         box = QFrame()
@@ -485,6 +522,14 @@ class ComplianceReportDialog(QDialog):
         out = []
         for ri, res in enumerate(self._results):
             keys = [k for k, cb in self._boxes.get(ri, {}).items() if cb.isChecked()]
+            # 插入密级时把用户选定的密级和期限写进 key 里带下去，
+            # 中途谁也不许替他改
+            if 'security:insert' in keys and ri in self._sec_pick:
+                lv, pd = self._sec_pick[ri]
+                period = pd.currentText().strip()
+                keys = ['security:insert:{}{}'.format(
+                    lv.currentText(), '★' + period if period else '')
+                    if k == 'security:insert' else k for k in keys]
             if keys and res.get('fix_input'):
                 out.append({
                     'fix_input': res['fix_input'],

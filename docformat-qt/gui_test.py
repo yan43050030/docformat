@@ -989,4 +989,54 @@ assert '打印…' in _texts, '缺少直接打印入口'
 print('[28] 用语检查独立成模式（面板/结果窗口/改后预览）+ 套打升为一级页面 ✓')
 
 
+# ---------- 29. 密级标注：检查项在面板里、插入要人选密级 ----------
+_secsrc = os.path.join(SMOKE, 'gui_sec.docx')
+from docx import Document as _Doc2
+_sd = _Doc2()
+for _t in ('000123', '关于某事的通知', '各部门：', '正文内容。'):
+    _sd.add_paragraph(_t)
+_sd.save(_secsrc)
+
+# 合规检查面板里应有"密级标注"这一组，且默认勾上
+_cod = _COD(None)
+assert any('密级' in _g for _g, _items in _cmp.CHECK_GROUPS), \
+    '合规检查面板应有密级标注一组'
+for _k in _cmp.SECURITY_KEYS:
+    assert _k in _cod._checks, '密级检查项 {} 没出现在面板里'.format(_k)
+assert all(_cod.get_options()[_k] for _k in _cmp.SECURITY_KEYS), \
+    '密级检查默认应打开——漏标密级是事故，不该要人自己去翻开关'
+# 用语面板不该混进密级项
+assert not [_k for _k in _cmp.SECURITY_KEYS if _WOD(None).get_options()[_k]], \
+    '用语面板不该管密级'
+
+_secw = _PW([_secsrc], 'compliance', 'official_gbk', None, '_sec')
+_secw.compliance_options = _cmp.only(_cmp.SECURITY_KEYS)
+_secw.run()
+_secres = _secw._compliance_results[0]
+_sdlg = _CRD([_secres])
+try:
+    assert 'security:insert' in _sdlg._boxes[0], '应给出"插入密级"的可修正项'
+    assert 0 in _sdlg._sec_pick, '插入密级必须让人选密级和期限，不能软件替人拍板'
+    _lv, _pd = _sdlg._sec_pick[0]
+    assert _lv.currentText() == '秘密' and _pd.currentText() == '1年'
+    # 没勾选时选择条是灰的，勾上才让选
+    _cb = _sdlg._boxes[0]['security:insert']
+    assert not _lv.parentWidget().isEnabled(), '未勾选时不该能选密级'
+    _cb.setChecked(True)
+    assert _lv.parentWidget().isEnabled()
+    _lv.setCurrentText('机密')
+    _pd.setCurrentText('3年')
+    _keys = _sdlg.selections()[0]['fix_keys']
+    assert _keys == ['security:insert:机密★3年'], \
+        '用户选的密级要原样带到修正里：{}'.format(_keys)
+    _secout = os.path.join(SMOKE, 'gui_sec_fixed.docx')
+    _applied = _cmp.apply_compliance_fixes(_secsrc, _secout,
+                                           _secres['preset'], _keys)
+    _txt = [_p.text for _p in _Doc2(_secout).paragraphs if _p.text.strip()]
+    assert _txt[:2] == ['000123', '机密★3年'], '密级应排在份号之下：{}'.format(_txt)
+finally:
+    _sdlg.reject()
+print('[29] 密级标注：检查项默认开 + 插入密级由人选定并原样落笔 ✓')
+
+
 print('\nGUI 自动化测试全部通过 ✓')

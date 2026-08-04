@@ -1765,6 +1765,110 @@ def test_y_offsets():
           '存盘互不干扰 + 打印预检 通过')
 
 
+def test_security_mark():
+    """密级标注：查漏标 / 查写法 / 查位置，以及按人选定的密级插进版头"""
+    from scripts import compliance as C
+    from scripts import security_mark as S
+    from scripts.data_model import PRESETS
+    preset = PRESETS['official_gbk']
+
+    def mk(name, lines):
+        path = os.path.join(OUT_DIR, 'sec_%s.docx' % name)
+        d = Document()
+        for t in lines:
+            d.add_paragraph(t)
+        d.save(path)
+        return path
+
+    def items(path, groups=None):
+        return sorted(x['item'] for x in
+                      S.check(Document(path), groups=groups)
+                      if x['level'] == 'warn')
+
+    # --- 漏标：只认文件自己露出来的破绽，不做"看着像涉密"的猜测 ---
+    p = mk('copynum', ['000123', '关于某事的通知', '各部门：', '正文。'])
+    assert items(p) == ['密级·漏标'], '有份号无密级应报漏标：{}'.format(items(p))
+    p2 = mk('hint', ['关于某事的通知', '各部门：', '本件为机密件，注意保密。'])
+    assert items(p2) == ['密级·漏标'], '正文自述保密应报漏标'
+    p3 = mk('clean', ['关于某事的通知', '各部门：', '正文内容。'])
+    assert items(p3) == [], '普通文件不该被硬扣一顶涉密帽子：{}'.format(items(p3))
+
+    # --- 写法：缺期限 / 分隔符 / 中文数字 / 密级词写错 ---
+    for name, line, want in (
+            ('noperiod', '秘密', '秘密★1年'),
+            ('star', '机密*3年', '机密★3年'),
+            ('cn', '绝密★十年', '绝密★10年'),
+            ('typo', '机秘★3年', '机密★3年')):
+        path = mk(name, [line, '关于某事的通知', '正文。'])
+        got = [x for x in S.check(Document(path)) if x['level'] == 'warn']
+        assert got, '{} 应被指出不规范'.format(line)
+        assert got[0]['fix_key'].endswith(want), \
+            '{} 应改成 {}，实际 {}'.format(line, want, got[0]['fix_key'])
+    ok = mk('ok', ['秘密★1年', '关于某事的通知', '正文。'])
+    assert items(ok) == [], '规范写法不该报错：{}'.format(items(ok))
+
+    # --- 位置：版头顺序 / 跑到正文里去了 ---
+    p4 = mk('order', ['特急', '秘密★1年', '关于某事的通知'])
+    assert items(p4) == ['密级·位置'], '紧急程度排在密级上面应报位置'
+    p5 = mk('stray', ['关于某事的通知', '各部门：', '正文。', '秘密★1年'])
+    assert '密级·位置' in items(p5), '末尾的密级行应被指出位置不对'
+    # 短文件里正文也在前几段——不能只按段序号卡，否则这一条会漏掉
+    assert not [x for x in S.check(Document(p5))
+                if x['item'] == '密级·写法' and x['level'] == 'ok'], \
+        '跑到正文里的密级不该被当成版头里的正规密级'
+
+    # --- 分组开关各管一摊 ---
+    p6 = mk('mixed', ['000123', '机密*3年', '关于某事的通知', '正文。', '秘密★1年'])
+    assert items(p6, {'sec_format': False}) == ['密级·位置']
+    assert items(p6, {'sec_position': False}) == ['密级·写法不规范']
+    assert items(p6, dict.fromkeys(S.GROUP_KEYS, False)) == []
+
+    # --- 插入：位置按版头顺序来，不是随便插一段 ---
+    for name, lines, want_at in (
+            ('ins_copy', ['000123', '特急', '关于某事的通知'], 1),
+            ('ins_urg', ['特急', '关于某事的通知'], 0),
+            ('ins_bare', ['关于某事的通知', '正文。'], 0)):
+        doc = Document(mk(name, lines))
+        text, added = S.insert(doc, preset, '秘密', '1年')
+        assert added and text == '秘密★1年'
+        got = [q.text for q in doc.paragraphs if q.text.strip()]
+        assert got[want_at] == '秘密★1年', \
+            '{}: 密级应插在第 {} 段，实际 {}'.format(name, want_at + 1, got)
+    # 已有密级就只改字，不插第二个
+    doc = Document(mk('twice', ['秘密★1年', '关于某事的通知']))
+    _t, added = S.insert(doc, preset, '机密', '3年')
+    assert not added
+    assert [q.text for q in doc.paragraphs if q.text.strip()] == \
+        ['机密★3年', '关于某事的通知'], '已有密级时不该再插一行'
+
+    # --- 走合规检查的完整链路：勾选 → 修正 → 复查归零 ---
+    src = mk('flow', ['000123', '关于某事的通知', '各部门：', '正文。'])
+    warns = [x for x in C.check_compliance(Document(src), preset,
+                                           C.only(C.SECURITY_KEYS))
+             if x['level'] == 'warn']
+    assert [x['fix_key'] for x in warns] == ['security:insert']
+    assert '密级' in C.fix_label('security:insert:秘密★1年')
+    out = os.path.join(OUT_DIR, 'sec_fixed.docx')
+    applied = C.apply_compliance_fixes(src, out, preset,
+                                       ['security:insert:秘密★1年'])
+    assert applied and '秘密★1年' in applied[0], applied
+    left = [x for x in C.check_compliance(Document(out), preset,
+                                          C.only(C.SECURITY_KEYS))
+            if x['level'] == 'warn']
+    assert not left, '补标之后应再无密级偏差：{}'.format(
+        [x['detail'] for x in left])
+    # 插进去的那一段要按预设的密级格式排（黑体三号顶格），不是裸段落
+    sec_para = [q for q in Document(out).paragraphs
+                if q.text.strip() == '秘密★1年'][0]
+    spec = preset['security']
+    assert sec_para.runs and sec_para.runs[0].font.size.pt == spec['size'], \
+        '插入的密级没按预设排版'
+    assert (sec_para.paragraph_format.first_line_indent or 0) == 0, \
+        '密级应顶格'
+    print('[24] 密级标注：漏标(份号/正文自述)/写法(期限·分隔符·中文数字·错词)/'
+          '位置(版头顺序·跑进正文) + 按人选定的密级插入版头正确位置 通过')
+
+
 def test_tables_and_attachment():
     """三线表 / 续表表头 / 整行不断页 / 附件另面编排"""
     import copy as _copy
@@ -2656,6 +2760,7 @@ if __name__ == '__main__':
     test_wording()
     test_y_offsets()
     test_batch_and_library()
+    test_security_mark()
     test_tables_and_attachment()
     test_print_and_align_sheet()
     test_wording_split()
